@@ -1,13 +1,12 @@
 use crate::hc164_cols::Hc164Cols;
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, SampleTime};
 use embassy_time::{Duration, Timer};
-use heapless::Vec;
+use heapless::Deque;
 use rmk::{
     event::{Event, KeyboardEvent},
     input_device::InputDevice,
 };
 
-// Constants
 pub const FULL_TRAVEL_UNIT: u16 = 40;
 pub const TRAVEL_SCALE: u16 = 6;
 pub const FULL_TRAVEL_SCALED: u16 = FULL_TRAVEL_UNIT * TRAVEL_SCALE;
@@ -92,7 +91,7 @@ where
     cfg: HallCfg,
     calib: [[KeyCalib; COL]; ROW],
     state: [[KeyState; COL]; ROW],
-    pending: Vec<KeyboardEvent, 32>,
+    pending: Deque<KeyboardEvent, 32>,
 }
 
 impl<'d, ADC, const ROW: usize, const COL: usize> AnalogHallMatrix<'d, ADC, ROW, COL>
@@ -110,7 +109,7 @@ where
         let calib = [[KeyCalib::default(); COL]; ROW];
         let state = [[KeyState::default(); COL]; ROW];
 
-        Self { adc, row_adc, sample_time, cols, cfg, calib, state, pending: Vec::new() }
+        Self { adc, row_adc, sample_time, cols, cfg, calib, state, pending: Deque::new() }
     }
 
     #[inline]
@@ -199,7 +198,11 @@ where
 
                 if now_pressed != st.pressed {
                     st.pressed = now_pressed;
-                    let _ = self.pending.push(KeyboardEvent::key(row as u8, col as u8, now_pressed));
+                    let ev = KeyboardEvent::key(row as u8, col as u8, now_pressed);
+                    if self.pending.push_back(ev).is_err() {
+                        let _ = self.pending.pop_front();
+                        let _ = self.pending.push_back(ev);
+                    }
                 }
             }
 
@@ -219,7 +222,7 @@ where
         }
 
         loop {
-            if let Some(ev) = self.pending.pop() {
+            if let Some(ev) = self.pending.pop_front() {
                 return Event::Key(ev);
             }
 

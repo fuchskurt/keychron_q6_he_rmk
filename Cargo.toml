@@ -17,10 +17,8 @@ cortex-m-rt = "0.7"
 embassy-time = { version = "0.5", features = ["tick-hz-32_768"] }
 embassy-stm32 = { version = "0.5", features = ["stm32f401rc", "memory-x", "time-driver-any", "exti"] }
 embassy-executor = { version = "0.9", features = [ "arch-cortex-m", "executor-thread"] }
-static_cell = "2"
-
-
 heapless = "0.9"
+static_cell = "2"
 
 [build-dependencies]
 xz2 = "0.1.7"
