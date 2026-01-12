@@ -113,26 +113,13 @@ where
         Self { adc, row_adc, sample_time, cols, cfg, calib, state, pending: Vec::new() }
     }
 
-    fn needs_zero_calibration(&self) -> bool {
-        self.calib.first().and_then(|row| row.first()).is_some_and(KeyCalib::is_uncalibrated)
-    }
-
     #[inline]
-    fn read_row_blocking(&mut self, row: usize) -> u16 {
-        self.adc.blocking_read(&mut self.row_adc[row], self.sample_time)
-    }
-
-    #[inline]
-    fn valid_raw(raw: u16) -> bool { (VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw) }
-
-    fn travel_scaled(&self, row: usize, col: usize, raw: u16) -> u16 {
-        let prev = self.state[row][col].travel_scaled;
-        if !Self::valid_raw(raw) {
+    fn travel_scaled_from(cal: &KeyCalib, prev: u16, raw: u16) -> u16 {
+        if !(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw) {
             return prev;
         }
 
-        let KeyCalib { zero, scale_factor, .. } = self.calib[row][col];
-        let offset = (zero as i32) - REF_ZERO_TRAVEL as i32;
+        let offset = (cal.zero as i32) - REF_ZERO_TRAVEL as i32;
         let x = (raw as i32 - offset) as f32;
 
         if x > REF_ZERO_TRAVEL as f32 {
@@ -140,8 +127,17 @@ where
         }
 
         let delta = travel_poly_delta_from_ref(x);
-        let t = delta * scale_factor * (TRAVEL_SCALE as f32);
+        let t = delta * cal.scale_factor * (TRAVEL_SCALE as f32);
         t.clamp(0.0, FULL_TRAVEL_SCALED as f32) as u16
+    }
+
+    fn needs_zero_calibration(&self) -> bool {
+        self.calib.first().and_then(|row| row.first()).is_some_and(KeyCalib::is_uncalibrated)
+    }
+
+    #[inline]
+    fn read_row_blocking(&mut self, row: usize) -> u16 {
+        self.adc.blocking_read(&mut self.row_adc[row], self.sample_time)
     }
 
     async fn calibrate_zero_travel(&mut self) {
@@ -179,16 +175,18 @@ where
 
             for row in 0..ROW {
                 let raw = self.read_row_blocking(row);
-                let (last_raw, prev_travel, was_pressed) = {
+                let (last_raw, prev_travel, was_pressed, cal) = {
                     let st = &self.state[row][col];
-                    (st.last_raw, st.travel_scaled, st.pressed)
+                    let cal = &self.calib[row][col];
+                    (st.last_raw, st.travel_scaled, st.pressed, *cal)
                 };
+
                 if last_raw != 0 && last_raw.abs_diff(raw) < NOISE_GATE {
                     continue;
                 }
-                let new_travel = self.travel_scaled(row, col, raw);
-                let st = &mut self.state[row][col];
+                let new_travel = Self::travel_scaled_from(&cal, prev_travel, raw);
 
+                let st = &mut self.state[row][col];
                 if new_travel == prev_travel {
                     st.last_raw = raw;
                     continue;
@@ -204,6 +202,7 @@ where
                     let _ = self.pending.push(KeyboardEvent::key(row as u8, col as u8, now_pressed));
                 }
             }
+
             self.cols.advance().await;
         }
     }
@@ -233,6 +232,7 @@ where
     }
 }
 
+#[inline]
 const fn compute_scale_factor(zero: u16, full: u16) -> f32 {
     let offset = zero as i32 - REF_ZERO_TRAVEL as i32;
     let x_full = (full as i32 - offset) as f32;
