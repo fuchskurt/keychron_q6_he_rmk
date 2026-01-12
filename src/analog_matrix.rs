@@ -24,8 +24,14 @@ pub const CONST_B1: f32 = -0.48358;
 pub const CONST_C1: f32 = 2.04637e-4;
 pub const CONST_D1: f32 = -2.99368e-8;
 
+const NOISE_GATE: u16 = 5;
+const CALIB_PASSES: usize = 8;
+
 #[inline]
 fn travel_poly(x: f32) -> f32 { CONST_A1 + CONST_B1 * x + CONST_C1 * x * x + CONST_D1 * x * x * x }
+
+#[inline]
+fn clamp_u16(v: f32, lo: f32, hi: f32) -> u16 { v.max(lo).min(hi) as u16 }
 
 #[derive(Clone, Copy)]
 pub struct HallCfg {
@@ -85,8 +91,8 @@ where
         let mut calib =
             [[KeyCalib { zero: 3000, full: 3000u16.saturating_sub(DEFAULT_FULL_RANGE), scale_factor: 1.0 }; COL]; ROW];
 
-        for calib_row in calib.iter_mut() {
-            for cell in calib_row.iter_mut() {
+        for row in calib.iter_mut() {
+            for cell in row.iter_mut() {
                 cell.scale_factor = compute_scale_factor(cell.zero, cell.full);
             }
         }
@@ -97,42 +103,35 @@ where
     }
 
     #[inline]
-    fn read_row_blocking(&mut self, r: usize) -> u16 {
-        let st = self.sample_time;
-        self.adc.blocking_read(&mut self.row_adc[r], st)
+    fn read_row_blocking(&mut self, row: usize) -> u16 {
+        self.adc.blocking_read(&mut self.row_adc[row], self.sample_time)
     }
 
-    fn convert_to_travel_scaled(&self, r: usize, c: usize, raw: u16) -> u16 {
-        if !(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw) {
-            return self.state[r][c].travel_scaled;
+    #[inline]
+    fn valid_raw(raw: u16) -> bool { (VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw) }
+
+    fn travel_scaled(&self, row: usize, col: usize, raw: u16) -> u16 {
+        let prev = self.state[row][col].travel_scaled;
+        if !Self::valid_raw(raw) {
+            return prev;
         }
-
-        let z = self.calib[r][c].zero as i32;
-        let offset = z - REF_ZERO_TRAVEL;
-
+        let KeyCalib { zero, scale_factor, .. } = self.calib[row][col];
+        let offset = zero as i32 - REF_ZERO_TRAVEL;
         let x = (raw as i32 - offset) as f32;
         let refz = REF_ZERO_TRAVEL as f32;
-
         if x > refz {
             return 0;
         }
-
-        let mut t = (travel_poly(x) - travel_poly(refz)) * self.calib[r][c].scale_factor * (TRAVEL_SCALE as f32);
-        if t < 0.0 {
-            t = 0.0;
-        }
-        let max_t = ((FULL_TRAVEL_UNIT + 1) * TRAVEL_SCALE - 1) as f32;
-        if t > max_t {
-            t = max_t;
-        }
-        t as u16
+        let delta = travel_poly(x) - travel_poly(refz);
+        let t = delta * scale_factor * (TRAVEL_SCALE as f32);
+        let max_t = (FULL_TRAVEL_UNIT * TRAVEL_SCALE) as f32;
+        clamp_u16(t, 0.0, max_t)
     }
 
     async fn calibrate_zero_travel(&mut self) {
-        const PASSES: usize = 8;
         let mut acc = [[0u32; COL]; ROW];
 
-        for _ in 0..PASSES {
+        for _ in 0..CALIB_PASSES {
             for col in 0..COL {
                 self.cols.select(col).await;
                 Timer::after(self.cfg.settle_after_col).await;
@@ -147,7 +146,7 @@ where
 
         for (acc_row, calib_row) in acc.iter().zip(self.calib.iter_mut()) {
             for (acc_cell, calib_cell) in acc_row.iter().zip(calib_row.iter_mut()) {
-                let avg = (*acc_cell / PASSES as u32) as u16;
+                let avg = (*acc_cell / CALIB_PASSES as u32) as u16;
                 calib_cell.zero = avg;
                 calib_cell.full = avg.saturating_sub(DEFAULT_FULL_RANGE);
                 calib_cell.scale_factor = compute_scale_factor(calib_cell.zero, calib_cell.full);
@@ -166,27 +165,28 @@ where
             for row in 0..ROW {
                 let raw = self.read_row_blocking(row);
 
-                let last = self.state[row][col].last_raw;
-                if last != 0 && last.abs_diff(raw) < 5 {
+                let last_raw = self.state[row][col].last_raw;
+                let prev_travel = self.state[row][col].travel_scaled;
+                let was_pressed = self.state[row][col].pressed;
+
+                if last_raw != 0 && last_raw.abs_diff(raw) < NOISE_GATE {
                     continue;
                 }
-                self.state[row][col].last_raw = raw;
-                if row == 0 && col == 0 {
-                    defmt::info!("raw[0,0]={}", raw);
-                }
-                let new_travel = self.convert_to_travel_scaled(row, col, raw);
-                if new_travel == self.state[row][col].travel_scaled {
+
+                let new_travel = self.travel_scaled(row, col, raw);
+                if new_travel == prev_travel {
+                    self.state[row][col].last_raw = raw;
                     continue;
                 }
-                self.state[row][col].travel_scaled = new_travel;
 
-                let was = self.state[row][col].pressed;
-                let now = if was { new_travel >= deact } else { new_travel >= act };
+                let now_pressed = if was_pressed { new_travel >= deact } else { new_travel >= act };
+                let st = &mut self.state[row][col];
+                st.last_raw = raw;
+                st.travel_scaled = new_travel;
 
-                if now != was {
-                    self.state[row][col].pressed = now;
-                    let ev = KeyboardEvent::key(row as u8, col as u8, now);
-                    let _ = self.pending.push(ev);
+                if now_pressed != st.pressed {
+                    st.pressed = now_pressed;
+                    let _ = self.pending.push(KeyboardEvent::key(row as u8, col as u8, now_pressed));
                 }
             }
 
@@ -201,6 +201,7 @@ where
     ADC::Regs: BasicAdcRegs<SampleTime = embassy_stm32::adc::SampleTime>,
 {
     async fn read_event(&mut self) -> Event {
+        // One-time calibration on first call
         if self.calib[0][0].zero == 3000 {
             self.calibrate_zero_travel().await;
         }
@@ -215,6 +216,7 @@ where
             if let Some(ev) = self.pending.pop() {
                 return Event::Key(ev);
             }
+
             Timer::after(Duration::from_millis(1)).await;
         }
     }
