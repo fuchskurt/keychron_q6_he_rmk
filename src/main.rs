@@ -13,6 +13,7 @@ use crate::{
     keymap::{COL, ROW},
 };
 use core::panic::PanicInfo;
+use cortex_m::{asm, peripheral::SCB};
 use embassy_executor::Spawner;
 use embassy_stm32::{
     Config,
@@ -155,4 +156,7 @@ async fn main(_spawner: Spawner) {
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! { loop {} }
+fn panic(_info: &PanicInfo) -> ! {
+    asm::delay(10_000);
+    SCB::sys_reset();
+}
