@@ -1,4 +1,3 @@
-// analog_matrix.rs
 use crate::hc164_cols::Hc164Cols;
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, SampleTime};
 use embassy_time::{Duration, Timer};
@@ -11,14 +10,13 @@ use rmk::{
 pub const FULL_TRAVEL_UNIT: u16 = 40;
 pub const TRAVEL_SCALE: u16 = 6;
 
-// QMK-ish defaults / limits
+// Defaults / limits
 pub const DEFAULT_FULL_RANGE: u16 = 900;
 pub const VALID_RAW_MIN: u16 = 1200;
 pub const VALID_RAW_MAX: u16 = 3500;
 
-// Polynomial reference points (from Keychron/QMK logic)
+// Polynomial reference points
 pub const REF_ZERO_TRAVEL: i32 = 3121;
-pub const REF_FULL_TRAVEL: i32 = 1940;
 
 // Polynomial coeffs
 pub const CONST_A1: f32 = 426.88962;
@@ -31,9 +29,9 @@ fn travel_poly(x: f32) -> f32 { CONST_A1 + CONST_B1 * x + CONST_C1 * x * x + CON
 
 #[derive(Clone, Copy)]
 pub struct HallCfg {
-    pub settle_after_col: Duration, // QMK ~40us
-    pub actuation_pt: u16,          // 0..40 (QMK default 20)
-    pub deact_offset: u16,          // QMK ~3
+    pub settle_after_col: Duration,
+    pub actuation_pt: u16,
+    pub deact_offset: u16,
 }
 
 impl Default for HallCfg {
@@ -69,7 +67,6 @@ where
     calib: [[KeyCalib; COL]; ROW],
     state: [[KeyState; COL]; ROW],
 
-    // pending key events (RMK read_event returns 1 Event at a time)
     pending: Vec<KeyboardEvent, 32>,
 }
 
@@ -88,9 +85,9 @@ where
         let mut calib =
             [[KeyCalib { zero: 3000, full: 3000u16.saturating_sub(DEFAULT_FULL_RANGE), scale_factor: 1.0 }; COL]; ROW];
 
-        for r in 0..ROW {
-            for c in 0..COL {
-                calib[r][c].scale_factor = compute_scale_factor(calib[r][c].zero, calib[r][c].full);
+        for calib_row in calib.iter_mut() {
+            for cell in calib_row.iter_mut() {
+                cell.scale_factor = compute_scale_factor(cell.zero, cell.full);
             }
         }
 
@@ -101,31 +98,21 @@ where
 
     #[inline]
     fn read_row_blocking(&mut self, r: usize) -> u16 {
-        // blocking_read takes sample_time by value; SampleTime isn't Copy on your
-        // target.
         let st = self.sample_time;
         self.adc.blocking_read(&mut self.row_adc[r], st)
     }
 
     fn convert_to_travel_scaled(&self, r: usize, c: usize, raw: u16) -> u16 {
-        if raw < VALID_RAW_MIN || raw > VALID_RAW_MAX {
+        if !(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw) {
             return self.state[r][c].travel_scaled;
         }
 
-        // Keychron/QMK hall boards: pressing lowers ADC value.
-        // QMK effectively uses (zero_travel - value) as “more pressed”.
-        //
-        // Their polynomial mapping does:
-        // offset = zero - REF_ZERO_TRAVEL
-        // x = raw - offset
-        // travel = (poly(x) - poly(REF_ZERO)) * scale_factor * TRAVEL_SCALE
         let z = self.calib[r][c].zero as i32;
         let offset = z - REF_ZERO_TRAVEL;
 
         let x = (raw as i32 - offset) as f32;
         let refz = REF_ZERO_TRAVEL as f32;
 
-        // if raw is “above” rest (should not happen much), clamp to 0 travel
         if x > refz {
             return 0;
         }
@@ -150,21 +137,20 @@ where
                 self.cols.select(col).await;
                 Timer::after(self.cfg.settle_after_col).await;
 
-                for row in 0..ROW {
-                    acc[row][col] += self.read_row_blocking(row) as u32;
+                for (row, acc_row) in acc.iter_mut().enumerate() {
+                    acc_row[col] += self.read_row_blocking(row) as u32;
                 }
 
                 self.cols.advance().await;
             }
         }
 
-        for row in 0..ROW {
-            for col in 0..COL {
-                let avg = (acc[row][col] / PASSES as u32) as u16;
-                self.calib[row][col].zero = avg;
-                self.calib[row][col].full = avg.saturating_sub(DEFAULT_FULL_RANGE);
-                self.calib[row][col].scale_factor =
-                    compute_scale_factor(self.calib[row][col].zero, self.calib[row][col].full);
+        for (acc_row, calib_row) in acc.iter().zip(self.calib.iter_mut()) {
+            for (acc_cell, calib_cell) in acc_row.iter().zip(calib_row.iter_mut()) {
+                let avg = (*acc_cell / PASSES as u32) as u16;
+                calib_cell.zero = avg;
+                calib_cell.full = avg.saturating_sub(DEFAULT_FULL_RANGE);
+                calib_cell.scale_factor = compute_scale_factor(calib_cell.zero, calib_cell.full);
             }
         }
     }
@@ -180,7 +166,6 @@ where
             for row in 0..ROW {
                 let raw = self.read_row_blocking(row);
 
-                // small noise gate (like QMK abs(last-raw) < 5)
                 let last = self.state[row][col].last_raw;
                 if last != 0 && last.abs_diff(raw) < 5 {
                     continue;
@@ -216,7 +201,6 @@ where
     ADC::Regs: BasicAdcRegs<SampleTime = embassy_stm32::adc::SampleTime>,
 {
     async fn read_event(&mut self) -> Event {
-        // One-time calibration on first call
         if self.calib[0][0].zero == 3000 {
             self.calibrate_zero_travel().await;
         }
@@ -231,8 +215,6 @@ where
             if let Some(ev) = self.pending.pop() {
                 return Event::Key(ev);
             }
-
-            // no change → yield a bit
             Timer::after(Duration::from_millis(1)).await;
         }
     }

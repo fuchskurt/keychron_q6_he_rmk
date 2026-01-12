@@ -20,7 +20,7 @@ use embassy_stm32::{
     adc::{Adc, AdcChannel as _, AnyAdcChannel, SampleTime},
     bind_interrupts,
     exti::{self, ExtiInput},
-    gpio::{Input, Level, Output, Pull, Speed},
+    gpio::{Level, Output, Pull, Speed},
     interrupt::typelevel,
     peripherals::{self, ADC1},
     rcc::{
