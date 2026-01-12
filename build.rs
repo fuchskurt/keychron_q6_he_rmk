@@ -29,9 +29,6 @@ fn main() {
 
     // Set the linker script to the one provided by cortex-m-rt.
     println!("cargo:rustc-link-arg=-Tlink.x");
-
-    // Set the extra linker script from defmt
-    println!("cargo:rustc-link-arg=-Tdefmt.x");
 }
 
 fn generate_vial_config() {

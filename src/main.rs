@@ -12,8 +12,7 @@ use crate::{
     hc164_cols::Hc164Cols,
     keymap::{COL, ROW},
 };
-use defmt::info;
-use defmt_rtt as _;
+use core::panic::PanicInfo;
 use embassy_executor::Spawner;
 use embassy_stm32::{
     Config,
@@ -40,7 +39,6 @@ use embassy_stm32::{
     time::Hertz,
     usb::{self, Driver},
 };
-use panic_probe as _;
 use rmk::{
     channel::EVENT_CHANNEL,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, VialConfig},
@@ -62,7 +60,6 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    info!("RMK start!");
     // RCC config
     let mut config = Config::default();
 
@@ -156,3 +153,6 @@ async fn main(_spawner: Spawner) {
     )
     .await;
 }
+
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! { loop {} }

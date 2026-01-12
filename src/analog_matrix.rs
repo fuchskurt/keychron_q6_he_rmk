@@ -7,25 +7,19 @@ use rmk::{
     input_device::InputDevice,
 };
 
+// Constants
 pub const FULL_TRAVEL_UNIT: u16 = 40;
 pub const TRAVEL_SCALE: u16 = 6;
-
-// Defaults / limits
 pub const DEFAULT_FULL_RANGE: u16 = 900;
 pub const VALID_RAW_MIN: u16 = 1200;
 pub const VALID_RAW_MAX: u16 = 3500;
-
-// Polynomial reference points
 pub const REF_ZERO_TRAVEL: i32 = 3121;
-
-// Polynomial coeffs
 pub const CONST_A1: f32 = 426.88962;
 pub const CONST_B1: f32 = -0.48358;
 pub const CONST_C1: f32 = 2.04637e-4;
 pub const CONST_D1: f32 = -2.99368e-8;
-
-const NOISE_GATE: u16 = 5;
-const CALIB_PASSES: usize = 8;
+pub const NOISE_GATE: u16 = 5;
+pub const CALIB_PASSES: usize = 8;
 
 #[inline]
 fn travel_poly(x: f32) -> f32 { CONST_A1 + CONST_B1 * x + CONST_C1 * x * x + CONST_D1 * x * x * x }
@@ -47,8 +41,14 @@ impl Default for HallCfg {
 #[derive(Clone, Copy)]
 struct KeyCalib {
     zero: u16,
-    full: u16,
     scale_factor: f32,
+}
+
+impl KeyCalib {
+    fn new(zero: u16, full: u16) -> Self {
+        let scale_factor = compute_scale_factor(zero, full);
+        Self { zero, scale_factor }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -58,28 +58,29 @@ struct KeyState {
     pressed: bool,
 }
 
+impl KeyState {
+    fn new() -> Self { Self { last_raw: 0, travel_scaled: 0, pressed: false } }
+}
+
 pub struct AnalogHallMatrix<'d, ADC, const ROW: usize, const COL: usize>
 where
     ADC: embassy_stm32::adc::Instance,
-    ADC::Regs: embassy_stm32::adc::BasicAdcRegs,
+    ADC::Regs: BasicAdcRegs,
 {
     adc: Adc<'d, ADC>,
     row_adc: [AnyAdcChannel<'d, ADC>; ROW],
     sample_time: SampleTime,
-
     cols: Hc164Cols<'d>,
     cfg: HallCfg,
-
     calib: [[KeyCalib; COL]; ROW],
     state: [[KeyState; COL]; ROW],
-
     pending: Vec<KeyboardEvent, 32>,
 }
 
 impl<'d, ADC, const ROW: usize, const COL: usize> AnalogHallMatrix<'d, ADC, ROW, COL>
 where
     ADC: embassy_stm32::adc::Instance,
-    ADC::Regs: BasicAdcRegs<SampleTime = embassy_stm32::adc::SampleTime>,
+    ADC::Regs: BasicAdcRegs<SampleTime = SampleTime>,
 {
     pub fn new(
         adc: Adc<'d, ADC>,
@@ -88,16 +89,8 @@ where
         cols: Hc164Cols<'d>,
         cfg: HallCfg,
     ) -> Self {
-        let mut calib =
-            [[KeyCalib { zero: 3000, full: 3000u16.saturating_sub(DEFAULT_FULL_RANGE), scale_factor: 1.0 }; COL]; ROW];
-
-        for row in calib.iter_mut() {
-            for cell in row.iter_mut() {
-                cell.scale_factor = compute_scale_factor(cell.zero, cell.full);
-            }
-        }
-
-        let state = [[KeyState { last_raw: 0, travel_scaled: 0, pressed: false }; COL]; ROW];
+        let calib = [[KeyCalib::new(3000u16, 3000u16.saturating_sub(DEFAULT_FULL_RANGE)); COL]; ROW];
+        let state = [[KeyState::new(); COL]; ROW];
 
         Self { adc, row_adc, sample_time, cols, cfg, calib, state, pending: Vec::new() }
     }
@@ -115,13 +108,16 @@ where
         if !Self::valid_raw(raw) {
             return prev;
         }
+
         let KeyCalib { zero, scale_factor, .. } = self.calib[row][col];
         let offset = zero as i32 - REF_ZERO_TRAVEL;
         let x = (raw as i32 - offset) as f32;
         let refz = REF_ZERO_TRAVEL as f32;
+
         if x > refz {
             return 0;
         }
+
         let delta = travel_poly(x) - travel_poly(refz);
         let t = delta * scale_factor * (TRAVEL_SCALE as f32);
         let max_t = (FULL_TRAVEL_UNIT * TRAVEL_SCALE) as f32;
@@ -144,19 +140,17 @@ where
             }
         }
 
-        for (acc_row, calib_row) in acc.iter().zip(self.calib.iter_mut()) {
+        for (acc_row, calib_row) in acc.iter().zip(&mut self.calib) {
             for (acc_cell, calib_cell) in acc_row.iter().zip(calib_row.iter_mut()) {
                 let avg = (*acc_cell / CALIB_PASSES as u32) as u16;
-                calib_cell.zero = avg;
-                calib_cell.full = avg.saturating_sub(DEFAULT_FULL_RANGE);
-                calib_cell.scale_factor = compute_scale_factor(calib_cell.zero, calib_cell.full);
+                *calib_cell = KeyCalib::new(avg, avg.saturating_sub(DEFAULT_FULL_RANGE));
             }
         }
     }
 
     async fn scan_and_enqueue_changes(&mut self) {
         let act = self.cfg.actuation_pt * TRAVEL_SCALE;
-        let deact = (self.cfg.actuation_pt.saturating_sub(self.cfg.deact_offset)) * TRAVEL_SCALE;
+        let deact = self.cfg.actuation_pt.saturating_sub(self.cfg.deact_offset) * TRAVEL_SCALE;
 
         for col in 0..COL {
             self.cols.select(col).await;
@@ -164,7 +158,6 @@ where
 
             for row in 0..ROW {
                 let raw = self.read_row_blocking(row);
-
                 let last_raw = self.state[row][col].last_raw;
                 let prev_travel = self.state[row][col].travel_scaled;
                 let was_pressed = self.state[row][col].pressed;
@@ -180,6 +173,7 @@ where
                 }
 
                 let now_pressed = if was_pressed { new_travel >= deact } else { new_travel >= act };
+
                 let st = &mut self.state[row][col];
                 st.last_raw = raw;
                 st.travel_scaled = new_travel;
@@ -198,10 +192,9 @@ where
 impl<'d, ADC, const ROW: usize, const COL: usize> InputDevice for AnalogHallMatrix<'d, ADC, ROW, COL>
 where
     ADC: embassy_stm32::adc::Instance,
-    ADC::Regs: BasicAdcRegs<SampleTime = embassy_stm32::adc::SampleTime>,
+    ADC::Regs: BasicAdcRegs<SampleTime = SampleTime>,
 {
     async fn read_event(&mut self) -> Event {
-        // One-time calibration on first call
         if self.calib[0][0].zero == 3000 {
             self.calibrate_zero_travel().await;
         }
@@ -225,7 +218,6 @@ where
 fn compute_scale_factor(zero: u16, full: u16) -> f32 {
     let offset = zero as i32 - REF_ZERO_TRAVEL;
     let x_full = (full as i32 - offset) as f32;
-
     let refz = REF_ZERO_TRAVEL as f32;
     let full_travel = travel_poly(x_full) - travel_poly(refz);
 

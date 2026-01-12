@@ -1,15 +1,15 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 runner = "probe-rs run --chip stm32f401rc"
-# rustflags = [
-#     # --- Compiler Features ---
-#     "-C", "target-cpu=cortex-m4",
-#     "-C", "codegen-units=1", # Single codegen unit for maximum optimization
-#     "-C", "panic=abort", # Abort on panic (smaller binary, no unwinding)
-#     "-C", "lto=fat", # Full Link Time Optimization (cross-crate)
-#     "-C", "link-arg=-O3", # Aggressive linker optimizations
-#     "-C", "linker-plugin-lto", # LTO plugin for the linker
-#     "-C", "embed-bitcode=yes", # Embed LLVM bitcode (for LTO/post-processing)
-# ]
+rustflags = [
+    # --- Compiler Features ---
+    "-C", "target-cpu=cortex-m4",
+    "-C", "codegen-units=1", # Single codegen unit for maximum optimization
+    "-C", "panic=abort", # Abort on panic (smaller binary, no unwinding)
+    "-C", "lto=fat", # Full Link Time Optimization (cross-crate)
+    "-C", "link-arg=-O3", # Aggressive linker optimizations
+    "-C", "linker-plugin-lto", # LTO plugin for the linker
+    "-C", "embed-bitcode=yes", # Embed LLVM bitcode (for LTO/post-processing)
+]
 
 # Use flip-link overflow check: https://github.com/knurling-rs/flip-link
 linker = "flip-link"
