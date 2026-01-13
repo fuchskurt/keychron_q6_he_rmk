@@ -253,7 +253,7 @@ where
             self.scan_and_enqueue_changes().await;
 
             if self.pending.is_empty() {
-                Timer::after(Duration::from_millis(1)).await;
+                Timer::after(Duration::from_micros(100)).await;
             }
         }
     }

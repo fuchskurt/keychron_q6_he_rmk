@@ -43,6 +43,7 @@ use embassy_stm32::{
     time::Hertz,
     usb::{self, Driver},
 };
+use embassy_time::Duration;
 use rmk::{
     channel::EVENT_CHANNEL,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
@@ -135,8 +136,13 @@ async fn main(_spawner: Spawner) {
         p.PA1.degrade_adc(),
     ];
 
-    let mut matrix =
-        AnalogHallMatrix::<_, ROW, COL>::new(adc, row_channels, SampleTime::CYCLES28, cols, HallCfg::default());
+    let mut matrix = AnalogHallMatrix::<_, ROW, COL>::new(
+        adc,
+        row_channels,
+        SampleTime::CYCLES15,
+        cols,
+        HallCfg { settle_after_col: Duration::from_micros(3), actuation_pt: 17, deact_offset: 3 },
+    );
 
     // Rotary enoder
     let pin_a = ExtiInput::new(p.PB14, p.EXTI14, Pull::None, Irqs);
