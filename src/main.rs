@@ -3,12 +3,14 @@
 
 mod analog_matrix;
 mod encoder_switch;
+mod flash;
 mod hc164_cols;
 mod keymap;
 mod vial;
 
 use crate::{
     analog_matrix::{AnalogHallMatrix, HallCfg},
+    flash::Flash16K,
     hc164_cols::Hc164Cols,
     keymap::{COL, ROW},
 };
@@ -20,6 +22,7 @@ use embassy_stm32::{
     adc::{Adc, AdcChannel as _, AnyAdcChannel, SampleTime},
     bind_interrupts,
     exti::{self, ExtiInput},
+    flash::Flash,
     gpio::{Level, Output, Pull, Speed},
     interrupt::typelevel,
     peripherals::{self, ADC1},
@@ -42,13 +45,14 @@ use embassy_stm32::{
 };
 use rmk::{
     channel::EVENT_CHANNEL,
-    config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, VialConfig},
+    config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
     futures::future::join3,
-    initialize_encoder_keymap,
+    initialize_encoder_keymap_and_storage,
     input_device::{Runnable, rotary_encoder::RotaryEncoder},
     keyboard::Keyboard,
     run_devices,
     run_rmk,
+    storage::async_flash_wrapper,
 };
 use static_cell::StaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
@@ -89,7 +93,15 @@ async fn main(_spawner: Spawner) {
     let mut usb_config = embassy_stm32::usb::Config::default();
     usb_config.vbus_detection = false;
     let driver = Driver::new_fs(p.USB_OTG_FS, Irqs, p.PA12, p.PA11, &mut EP_OUT_BUFFER.init([0; 1024])[..], usb_config);
+
     // Use internal flash to emulate eeprom
+    let storage_config = StorageConfig {
+        // Start at sector 1, 0x4000 from the start of the FLASH region
+        start_addr: 0x4000,
+        num_sectors: 2,
+        ..Default::default()
+    };
+    let flash = async_flash_wrapper(Flash16K(Flash::new_blocking(p.FLASH)));
 
     // Keyboard config
     let rmk_config = RmkConfig {
@@ -101,6 +113,7 @@ async fn main(_spawner: Spawner) {
             pid: 0x0B60,
             serial_number: "vial:f64c2b3c:000001",
         },
+        ..Default::default()
     };
     let _analog_matrix_power = Output::new(p.PC13, Level::High, Speed::Low);
     let _analog_matrix_wakeup = embassy_stm32::gpio::Input::new(p.PC5, Pull::Up);
@@ -137,9 +150,15 @@ async fn main(_spawner: Spawner) {
     let mut default_encoder = keymap::get_default_encoder_map();
     let mut behavior_config = BehaviorConfig::default();
     let mut per_key_config = PositionalConfig::default();
-    let keymap =
-        initialize_encoder_keymap(&mut default_keymap, &mut default_encoder, &mut behavior_config, &mut per_key_config)
-            .await;
+    let (keymap, mut storage) = initialize_encoder_keymap_and_storage(
+        &mut default_keymap,
+        &mut default_encoder,
+        flash,
+        &storage_config,
+        &mut behavior_config,
+        &mut per_key_config,
+    )
+    .await;
 
     // Initialize the  keyboard
     let mut keyboard = Keyboard::new(&keymap);
@@ -150,7 +169,7 @@ async fn main(_spawner: Spawner) {
             (matrix, encoder, enc_switch) => EVENT_CHANNEL,
         ),
         keyboard.run(),
-        run_rmk(&keymap, driver, rmk_config),
+        run_rmk(&keymap, driver, &mut storage, rmk_config),
     )
     .await;
 }

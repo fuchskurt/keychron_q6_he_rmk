@@ -10,14 +10,15 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# The storage option currently hard crashes the MCU at startup. Have not found a solution to this.
-rmk = { version = "0.8", default-features = false, features = ["async_matrix", "vial", "vial_lock"] }
 cortex-m = { version = "0.7", features = ['critical-section-single-core'] }
 cortex-m-rt = "0.7"
 embassy-time = { version = "0.5", features = ["tick-hz-32_768"] }
 embassy-stm32 = { version = "0.5", features = ["stm32f401rc", "memory-x", "time-driver-any", "exti"] }
 embassy-executor = { version = "0.9", features = [ "arch-cortex-m", "executor-thread"] }
+embedded-storage = "0.3"
 heapless = "0.9"
+# The storage option currently hard crashes the MCU at startup. Have not found a solution to this.
+rmk = { version = "0.8", default-features = false, features = ["storage", "async_matrix", "vial", "vial_lock"] }
 static_cell = "2"
 
 [build-dependencies]
