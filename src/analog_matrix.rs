@@ -15,16 +15,40 @@ pub const VALID_RAW_MIN: u16 = 1200;
 pub const VALID_RAW_MAX: u16 = 3500;
 pub const REF_ZERO_TRAVEL: u16 = 3121;
 pub const UNCALIBRATED_ZERO: u16 = 3000;
-pub const CONST_A1: f32 = 426.88962;
-pub const CONST_B1: f32 = -0.48358;
-pub const CONST_C1: f32 = 2.04637e-4;
-pub const CONST_D1: f32 = -2.99368e-8;
 pub const NOISE_GATE: u16 = 5;
 pub const CALIB_PASSES: usize = 8;
 pub const POLY_AT_REFZ: f32 = travel_poly(REF_ZERO_TRAVEL as f32);
 
+// Original calibration polynomial:
+//
+// f(x) = A + B·x + C·x² + D·x³
+//
+// f(x) = 426.88962 - 0.48358 · x + 2.04637e-4 · x² - 2.99368e-8 · x³
+//
+// Chebyshev approximation coefficients
+pub const CHEB_C0: f32 = 27.825;
+pub const CHEB_C1: f32 = -54.576;
+pub const CHEB_C2: f32 = -4.2435;
+pub const CHEB_C3: f32 = -11.383;
+pub const CHEB_RANGE: f32 = VALID_RAW_MAX as f32 - VALID_RAW_MIN as f32;
+pub const CHEB_MUL: f32 = 2.0 / CHEB_RANGE;
+pub const CHEB_BIAS: f32 = -(VALID_RAW_MAX as f32 + VALID_RAW_MIN as f32) / CHEB_RANGE;
+
 #[inline]
-const fn travel_poly(x: f32) -> f32 { (((CONST_D1 * x) + CONST_C1) * x + CONST_B1) * x + CONST_A1 }
+const fn x_to_t_pm1(x: f32) -> f32 { x * CHEB_MUL + CHEB_BIAS }
+
+#[inline]
+const fn travel_poly(x: f32) -> f32 {
+    let x = x.clamp(VALID_RAW_MIN as f32, VALID_RAW_MAX as f32);
+    let t = x_to_t_pm1(x);
+
+    // Clenshaw (degree 3)
+    let b3 = CHEB_C3;
+    let b2 = CHEB_C2 + 2.0 * t * b3;
+    let b1 = CHEB_C1 + 2.0 * t * b2 - b3;
+
+    t * b1 - b2 + CHEB_C0
+}
 
 #[inline]
 const fn travel_poly_delta_from_ref(x: f32) -> f32 { travel_poly(x) - POLY_AT_REFZ }
