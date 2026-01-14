@@ -1,7 +1,7 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 runner = "probe-rs run --chip stm32f401rc"
 rustflags = [
-    "-C", "target-cpu=cortex-m4",
+    "-C", "target-cpu=cortex-m4", # Cortex-M4 optimization
     "-C", "codegen-units=1", # Single codegen unit for maximum optimization
     "-C", "lto=fat", # Full Link Time Optimization (cross-crate)
     "-C", "linker-plugin-lto", # LTO plugin for the linker
@@ -13,6 +13,3 @@ linker = "flip-link"
 
 [build]
 target = "thumbv7em-none-eabihf" # Cortex-M4F and Cortex-M7F (with FPU)
-
-[env]
-RUST_MIN_STACK = "16777216"
