@@ -7,17 +7,21 @@ use rmk::{
     input_device::InputDevice,
 };
 
-pub const FULL_TRAVEL_UNIT: u16 = 40;
-pub const TRAVEL_SCALE: u16 = 6;
-pub const FULL_TRAVEL_SCALED: u16 = FULL_TRAVEL_UNIT * TRAVEL_SCALE;
-pub const DEFAULT_FULL_RANGE: u16 = 900;
-pub const VALID_RAW_MIN: u16 = 1200;
-pub const VALID_RAW_MAX: u16 = 3500;
-pub const REF_ZERO_TRAVEL: u16 = 3121;
-pub const UNCALIBRATED_ZERO: u16 = 3000;
-pub const NOISE_GATE: u16 = 5;
-pub const CALIB_PASSES: usize = 8;
-pub const POLY_AT_REFZ: f32 = travel_poly(REF_ZERO_TRAVEL as f32);
+const FULL_TRAVEL_UNIT: u16 = 40;
+const TRAVEL_SCALE: u16 = 6;
+const FULL_TRAVEL_SCALED: u16 = FULL_TRAVEL_UNIT * TRAVEL_SCALE;
+const DEFAULT_FULL_RANGE: u16 = 900;
+const VALID_RAW_MIN: u16 = 1200;
+const VALID_RAW_MAX: u16 = 3500;
+const VALID_RAW_MIN_F32: f32 = VALID_RAW_MIN as f32;
+const VALID_RAW_MAX_F32: f32 = VALID_RAW_MAX as f32;
+const REF_ZERO_TRAVEL: u16 = 3121;
+const UNCALIBRATED_ZERO: u16 = 3000;
+const TRAVEL_SCALE_F32: f32 = TRAVEL_SCALE as f32;
+const FULL_TRAVEL_SCALED_F32: f32 = FULL_TRAVEL_SCALED as f32;
+const NOISE_GATE: u16 = 5;
+const CALIB_PASSES: usize = 8;
+const POLY_AT_REFZ: f32 = travel_poly(REF_ZERO_TRAVEL as f32);
 
 // Original calibration polynomial:
 //
@@ -26,20 +30,20 @@ pub const POLY_AT_REFZ: f32 = travel_poly(REF_ZERO_TRAVEL as f32);
 // f(x) = 426.88962 - 0.48358 · x + 2.04637e-4 · x² - 2.99368e-8 · x³
 //
 // Chebyshev approximation coefficients
-pub const CHEB_C0: f32 = 27.825;
-pub const CHEB_C1: f32 = -54.576;
-pub const CHEB_C2: f32 = -4.2435;
-pub const CHEB_C3: f32 = -11.383;
-pub const CHEB_RANGE: f32 = VALID_RAW_MAX as f32 - VALID_RAW_MIN as f32;
-pub const CHEB_MUL: f32 = 2.0 / CHEB_RANGE;
-pub const CHEB_BIAS: f32 = -(VALID_RAW_MAX as f32 + VALID_RAW_MIN as f32) / CHEB_RANGE;
+const CHEB_C0: f32 = 27.825;
+const CHEB_C1: f32 = -54.576;
+const CHEB_C2: f32 = -4.2435;
+const CHEB_C3: f32 = -11.383;
+const CHEB_RANGE: f32 = VALID_RAW_MAX_F32 - VALID_RAW_MIN_F32;
+const CHEB_MUL: f32 = 2.0 / CHEB_RANGE;
+const CHEB_BIAS: f32 = -(VALID_RAW_MAX_F32 + VALID_RAW_MIN_F32) / CHEB_RANGE;
 
 #[inline]
 const fn x_to_t_pm1(x: f32) -> f32 { x * CHEB_MUL + CHEB_BIAS }
 
 #[inline]
 const fn travel_poly(x: f32) -> f32 {
-    let x = x.clamp(VALID_RAW_MIN as f32, VALID_RAW_MAX as f32);
+    let x = x.clamp(VALID_RAW_MIN_F32, VALID_RAW_MAX_F32);
     let t = x_to_t_pm1(x);
 
     // Clenshaw (degree 3)
@@ -102,11 +106,11 @@ impl Default for KeyState {
     fn default() -> Self { Self::new() }
 }
 
-struct Grid2D<T, const ROW: usize, const COL: usize> {
+struct MatrixGrid<T, const ROW: usize, const COL: usize> {
     cells: [[T; COL]; ROW],
 }
 
-impl<T: Copy, const ROW: usize, const COL: usize> Grid2D<T, ROW, COL> {
+impl<T: Copy, const ROW: usize, const COL: usize> MatrixGrid<T, ROW, COL> {
     fn new(mut f: impl FnMut() -> T) -> Self { Self { cells: core::array::from_fn(|_| core::array::from_fn(|_| f())) } }
 
     #[inline]
@@ -135,8 +139,8 @@ where
     cols: Hc164Cols<'d>,
     cfg: HallCfg,
 
-    calib: Grid2D<KeyCalib, ROW, COL>,
-    state: Grid2D<KeyState, ROW, COL>,
+    calib: MatrixGrid<KeyCalib, ROW, COL>,
+    state: MatrixGrid<KeyState, ROW, COL>,
 
     pending: Deque<KeyboardEvent, 32>,
 }
@@ -159,9 +163,18 @@ where
             sample_time,
             cols,
             cfg,
-            calib: Grid2D::new(KeyCalib::default),
-            state: Grid2D::new(KeyState::default),
+            calib: MatrixGrid::new(KeyCalib::default),
+            state: MatrixGrid::new(KeyState::default),
             pending: Deque::new(),
+        }
+    }
+
+    #[inline]
+    fn apply_zero_offset(zero: u16, raw: u16) -> Option<u16> {
+        if zero >= REF_ZERO_TRAVEL {
+            raw.checked_sub(zero - REF_ZERO_TRAVEL)
+        } else {
+            raw.checked_add(REF_ZERO_TRAVEL - zero)
         }
     }
 
@@ -171,22 +184,25 @@ where
             return prev;
         }
 
-        let offset = (cal.zero as i32) - REF_ZERO_TRAVEL as i32;
-        let x = (raw as i32 - offset) as f32;
+        let x = match Self::apply_zero_offset(cal.zero, raw) {
+            Some(x) => x,
+            None => return prev,
+        };
 
-        if x > REF_ZERO_TRAVEL as f32 {
+        if x > REF_ZERO_TRAVEL {
             return 0;
         }
 
-        let delta = travel_poly_delta_from_ref(x);
-        let t = delta * cal.scale_factor * (TRAVEL_SCALE as f32);
-        t.clamp(0.0, FULL_TRAVEL_SCALED as f32) as u16
+        let delta = travel_poly_delta_from_ref(x as f32);
+        let t = delta * cal.scale_factor * TRAVEL_SCALE_F32;
+
+        t.clamp(0.0, FULL_TRAVEL_SCALED_F32) as u16
     }
 
     fn needs_zero_calibration(&self) -> bool { self.calib.get(0, 0).is_some_and(|c| c.is_uncalibrated()) }
 
     async fn calibrate_zero_travel(&mut self) {
-        let mut acc: Grid2D<u32, ROW, COL> = Grid2D::new(|| 0u32);
+        let mut acc: MatrixGrid<u32, ROW, COL> = MatrixGrid::new(|| 0u32);
 
         let cfg = self.cfg;
         let sample_time = self.sample_time;
@@ -297,7 +313,7 @@ where
             self.scan_and_enqueue_changes().await;
 
             if self.pending.is_empty() {
-                Timer::after(Duration::from_micros(10)).await;
+                Timer::after(Duration::from_micros(50)).await;
             }
         }
     }
@@ -305,9 +321,20 @@ where
 
 #[inline]
 const fn compute_scale_factor(zero: u16, full: u16) -> f32 {
-    let offset = zero as i32 - REF_ZERO_TRAVEL as i32;
-    let x_full = (full as i32 - offset) as f32;
-    let full_travel = travel_poly(x_full) - POLY_AT_REFZ;
+    let x_full = if zero >= REF_ZERO_TRAVEL {
+        let off = zero - REF_ZERO_TRAVEL;
+        match full.checked_sub(off) {
+            Some(v) => v,
+            None => return 1.0,
+        }
+    } else {
+        let off = REF_ZERO_TRAVEL - zero;
+        match full.checked_add(off) {
+            Some(v) => v,
+            None => return 1.0,
+        }
+    };
 
+    let full_travel = travel_poly(x_full as f32) - POLY_AT_REFZ;
     if full_travel.abs() < 1e-6 { 1.0 } else { (FULL_TRAVEL_UNIT as f32) / full_travel }
 }

@@ -141,7 +141,7 @@ async fn main(_spawner: Spawner) {
         row_channels,
         SampleTime::CYCLES15,
         cols,
-        HallCfg { settle_after_col: Duration::from_micros(3), actuation_pt: 17, deact_offset: 3 },
+        HallCfg { settle_after_col: Duration::from_micros(10), actuation_pt: 20, deact_offset: 3 },
     );
 
     // Rotary enoder
