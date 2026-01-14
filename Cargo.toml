@@ -38,7 +38,7 @@ panic = 'unwind'
 
 [profile.release]
 codegen-units = 1       # better optimizations
-debug = true
+debug = false
 strip = "symbols"
 opt-level = "z"         # optimize for binary size
 overflow-checks = false
