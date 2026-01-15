@@ -1,3 +1,6 @@
+[unstable]
+build-std = ["core"]
+
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 runner = "probe-rs run --chip stm32f401rc"
 rustflags = [

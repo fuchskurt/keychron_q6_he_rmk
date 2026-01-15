@@ -1,3 +1,5 @@
+cargo-features = ["panic-immediate-abort"]
+
 [package]
 name = "rmk-q6_he_ansi"
 version = "0.8.0"
@@ -43,4 +45,4 @@ strip = "symbols"
 opt-level = "z"         # optimize for binary size
 overflow-checks = false
 lto = "fat"
-panic = "abort"
+panic = "immediate-abort"
