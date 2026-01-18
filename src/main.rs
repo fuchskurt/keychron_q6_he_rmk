@@ -6,6 +6,7 @@ mod encoder_switch;
 mod flash;
 mod hc164_cols;
 mod keymap;
+mod led_backlight;
 mod vial;
 
 use crate::{
@@ -40,6 +41,7 @@ use embassy_stm32::{
         Sysclk,
         mux::Clk48sel,
     },
+    spi,
     time::Hertz,
     usb::{self, Driver},
 };
@@ -124,6 +126,16 @@ async fn main(_spawner: Spawner) {
     let cp = Output::new(p.PB5, Level::Low, Speed::VeryHigh);
     let mr = Output::new(p.PD2, Level::Low, Speed::VeryHigh);
     let cols = Hc164Cols::new(ds, cp, mr);
+
+    // LED backlight (SNLED27351)
+    let mut spi_config = spi::Config::default();
+    spi_config.frequency = Hertz(1_000_000);
+    spi_config.mode = spi::MODE_0;
+    let spi = spi::Spi::new_blocking(p.SPI1, p.PA5, p.PA7, p.PA6, spi_config);
+    let cs = [Output::new(p.PB8, Level::High, Speed::VeryHigh), Output::new(p.PB9, Level::High, Speed::VeryHigh)];
+    let sdb = Output::new(p.PB7, Level::High, Speed::VeryHigh);
+    let mut backlight = led_backlight::Snled27351::new(spi, cs, sdb);
+    backlight.init(0x20).await;
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(p.ADC1);
