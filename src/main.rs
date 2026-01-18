@@ -6,6 +6,7 @@ mod encoder_switch;
 mod flash;
 mod hc164_cols;
 mod keymap;
+mod led_mapping;
 mod snled27351_spi;
 mod vial;
 
@@ -14,6 +15,7 @@ use crate::{
     flash::Flash16K,
     hc164_cols::Hc164Cols,
     keymap::{COL, ROW},
+    led_mapping::LED_LAYOUT,
 };
 use core::panic::PanicInfo;
 use cortex_m::{asm, peripheral::SCB};
@@ -140,9 +142,10 @@ async fn main(_spawner: Spawner) {
         spi_config,
     );
     let cs = [Output::new(p.PB8, Level::High, Speed::VeryHigh), Output::new(p.PB9, Level::High, Speed::VeryHigh)];
-    let sdb = Output::new(p.PB7, Level::High, Speed::VeryHigh);
-    let mut backlight = snled27351_spi::Snled27351::new(spi, cs, sdb);
+    let sdb = Output::new(p.PB7, Level::Low, Speed::VeryHigh);
+    let mut backlight = snled27351_spi::Snled27351::new(spi, cs, sdb, LED_LAYOUT);
     backlight.init(0x20).await;
+    backlight.set_color_all(255, 0, 0).await;
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(p.ADC1);

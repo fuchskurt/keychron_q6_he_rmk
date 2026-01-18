@@ -9,6 +9,7 @@ const DRIVER_COUNT: usize = 2;
 
 const WRITE_CMD: u8 = 0 << 7;
 const PATTERN_CMD: u8 = 2 << 4;
+
 const PAGE_LED_CONTROL: u8 = 0x00;
 const PAGE_PWM: u8 = 0x01;
 const PAGE_FUNCTION: u8 = 0x03;
@@ -37,15 +38,29 @@ const LED_CONTROL_REGISTER_COUNT: usize = 0x18;
 const PWM_REGISTER_COUNT: usize = 0xC0;
 const CURRENT_TUNE_REGISTER_COUNT: usize = 0x0C;
 
+#[derive(Copy, Clone)]
+pub struct SnledLed {
+    pub driver: u8,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
 pub struct Snled27351<'d> {
     spi: Spi<'d, Async, spi::mode::Master>,
     cs: [Output<'d>; DRIVER_COUNT],
     sdb: Output<'d>,
+    leds: &'static [SnledLed],
 }
 
 impl<'d> Snled27351<'d> {
-    pub fn new(spi: Spi<'d, Async, spi::mode::Master>, cs: [Output<'d>; DRIVER_COUNT], sdb: Output<'d>) -> Self {
-        Self { spi, cs, sdb }
+    pub fn new(
+        spi: Spi<'d, Async, spi::mode::Master>,
+        cs: [Output<'d>; DRIVER_COUNT],
+        sdb: Output<'d>,
+        leds: &'static [SnledLed],
+    ) -> Self {
+        Self { spi, cs, sdb, leds }
     }
 
     pub async fn init(&mut self, brightness: u8) {
@@ -64,6 +79,21 @@ impl<'d> Snled27351<'d> {
         }
     }
 
+    pub async fn set_color(&mut self, led_index: usize, r: u8, g: u8, b: u8) {
+        let led = self.leds[led_index];
+        let drv = led.driver as usize;
+
+        self.write_register(drv, PAGE_PWM, led.r, r).await;
+        self.write_register(drv, PAGE_PWM, led.g, g).await;
+        self.write_register(drv, PAGE_PWM, led.b, b).await;
+    }
+
+    pub async fn set_color_all(&mut self, r: u8, g: u8, b: u8) {
+        for i in 0..self.leds.len() {
+            self.set_color(i, r, g, b).await;
+        }
+    }
+
     async fn init_driver(&mut self, index: usize, brightness: u8) {
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_SHUTDOWN).await;
         self.write_register(index, PAGE_FUNCTION, REG_PULLDOWNUP, PULLDOWNUP_ALL_ENABLED).await;
@@ -74,15 +104,19 @@ impl<'d> Snled27351<'d> {
             .await;
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SLEEP, SOFTWARE_SLEEP_DISABLE).await;
 
+        // Enable LED control (PWM mode)
         let led_control = [0xFFu8; LED_CONTROL_REGISTER_COUNT];
         self.write(index, PAGE_LED_CONTROL, 0, &led_control).await;
 
+        // Default brightness
         let pwm = [brightness; PWM_REGISTER_COUNT];
         self.write(index, PAGE_PWM, 0, &pwm).await;
 
+        // Max current tune
         let current_tune = [0xFFu8; CURRENT_TUNE_REGISTER_COUNT];
         self.write(index, PAGE_CURRENT_TUNE, 0, &current_tune).await;
 
+        // Exit shutdown
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_NORMAL).await;
     }
 
