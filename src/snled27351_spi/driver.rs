@@ -88,6 +88,16 @@ impl<'d> Snled27351<'d> {
         self.scaled_rgb(r, g, b)
     }
 
+    #[expect(dead_code)]
+    pub async fn set_color(&mut self, led_index: usize, r: u8, g: u8, b: u8, brightness: u8) {
+        let Some(&led) = self.leds.get(led_index) else {
+            return;
+        };
+
+        let (r_scaled, g_scaled, b_scaled) = self.prepare_color(r, g, b, brightness).await;
+        self.write_led_rgb(led, r_scaled, g_scaled, b_scaled).await;
+    }
+
     pub async fn set_color_all(&mut self, r: u8, g: u8, b: u8, brightness: u8) {
         if self.leds.is_empty() {
             return;
