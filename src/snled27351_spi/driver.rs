@@ -76,13 +76,13 @@ impl<'d> Snled27351<'d> {
         let led = self.leds[led_index];
         let drv = led.driver as usize;
 
-        let r = self.gamma2(self.scale(r));
-        let g = self.gamma2(self.scale(g));
-        let b = self.gamma2(self.scale(b));
+        let r_scaled = self.gamma2(self.scale(r));
+        let g_scaled = self.gamma2(self.scale(g));
+        let b_scaled = self.gamma2(self.scale(b));
 
-        self.write_register(drv, PAGE_PWM, led.r, r).await;
-        self.write_register(drv, PAGE_PWM, led.g, g).await;
-        self.write_register(drv, PAGE_PWM, led.b, b).await;
+        self.write_register(drv, PAGE_PWM, led.r, r_scaled).await;
+        self.write_register(drv, PAGE_PWM, led.g, g_scaled).await;
+        self.write_register(drv, PAGE_PWM, led.b, b_scaled).await;
     }
 
     pub async fn set_color_all(&mut self, r: u8, g: u8, b: u8, brightness: u8) {
