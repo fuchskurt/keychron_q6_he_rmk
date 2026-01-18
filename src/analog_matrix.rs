@@ -32,7 +32,7 @@ const POLY_AT_REFZ: f32 = travel_poly(REF_ZERO_TRAVEL as f32);
 // Chebyshev approximation coefficients
 const CHEB_C0: f32 = 27.825;
 const CHEB_C1: f32 = -54.576;
-const CHEB_C2: f32 = -4.2435;
+const CHEB_C2: f32 = -4.244;
 const CHEB_C3: f32 = -11.383;
 const CHEB_RANGE: f32 = VALID_RAW_MAX_F32 - VALID_RAW_MIN_F32;
 const CHEB_MUL: f32 = 2.0 / CHEB_RANGE;
@@ -79,8 +79,6 @@ impl KeyCalib {
         let scale_factor = compute_scale_factor(zero, full);
         Self { zero, scale_factor }
     }
-
-    const fn is_uncalibrated(&self) -> bool { self.zero == UNCALIBRATED_ZERO }
 
     pub const fn uncalibrated() -> Self {
         Self::new(UNCALIBRATED_ZERO, UNCALIBRATED_ZERO.saturating_sub(DEFAULT_FULL_RANGE))
@@ -137,11 +135,13 @@ where
     sample_time: SampleTime,
 
     cols: Hc164Cols<'d>,
-    cfg: HallCfg,
+    settle_after_col: Duration,
+    act_threshold: u16,
+    deact_threshold: u16,
 
     calib: MatrixGrid<KeyCalib, ROW, COL>,
     state: MatrixGrid<KeyState, ROW, COL>,
-
+    calibrated: bool,
     pending: Deque<KeyboardEvent, 32>,
 }
 
@@ -157,14 +157,20 @@ where
         cols: Hc164Cols<'d>,
         cfg: HallCfg,
     ) -> Self {
+        let settle_after_col = cfg.settle_after_col;
+        let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
+        let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
         Self {
             adc,
             row_adc,
             sample_time,
             cols,
-            cfg,
+            settle_after_col,
+            act_threshold,
+            deact_threshold,
             calib: MatrixGrid::new(KeyCalib::default),
             state: MatrixGrid::new(KeyState::default),
+            calibrated: false,
             pending: Deque::new(),
         }
     }
@@ -199,12 +205,9 @@ where
         t.clamp(0.0, FULL_TRAVEL_SCALED_F32) as u16
     }
 
-    fn needs_zero_calibration(&self) -> bool { self.calib.get(0, 0).is_some_and(|c| c.is_uncalibrated()) }
-
     async fn calibrate_zero_travel(&mut self) {
         let mut acc: MatrixGrid<u32, ROW, COL> = MatrixGrid::new(|| 0u32);
 
-        let cfg = self.cfg;
         let sample_time = self.sample_time;
         let adc = &mut self.adc;
         let row_adc = &mut self.row_adc;
@@ -212,7 +215,7 @@ where
         for _ in 0..CALIB_PASSES {
             for col in 0..COL {
                 self.cols.select(col).await;
-                Timer::after(cfg.settle_after_col).await;
+                Timer::after(self.settle_after_col).await;
 
                 for (row, ch) in row_adc.iter_mut().enumerate() {
                     let v = adc.blocking_read(ch, sample_time);
@@ -233,21 +236,17 @@ where
                 *cal_cell = KeyCalib::new(avg, avg.saturating_sub(DEFAULT_FULL_RANGE));
             }
         }
+        self.calibrated = true;
     }
 
     async fn scan_and_enqueue_changes(&mut self) {
-        let cfg = self.cfg;
         let sample_time = self.sample_time;
-
-        let act = cfg.actuation_pt * TRAVEL_SCALE;
-        let deact = cfg.actuation_pt.saturating_sub(cfg.deact_offset) * TRAVEL_SCALE;
-
         let adc = &mut self.adc;
         let row_adc = &mut self.row_adc;
 
         for col in 0..COL {
             self.cols.select(col).await;
-            Timer::after(cfg.settle_after_col).await;
+            Timer::after(self.settle_after_col).await;
 
             for (row, ch) in row_adc.iter_mut().enumerate() {
                 let raw = adc.blocking_read(ch, sample_time);
@@ -274,7 +273,8 @@ where
                     continue;
                 }
 
-                let now_pressed = if was_pressed { new_travel >= deact } else { new_travel >= act };
+                let now_pressed =
+                    if was_pressed { new_travel >= self.deact_threshold } else { new_travel >= self.act_threshold };
 
                 st.last_raw = raw;
                 st.travel_scaled = new_travel;
@@ -301,7 +301,7 @@ where
     ADC::Regs: BasicAdcRegs<SampleTime = SampleTime>,
 {
     async fn read_event(&mut self) -> Event {
-        if self.needs_zero_calibration() {
+        if !self.calibrated {
             self.calibrate_zero_travel().await;
         }
 

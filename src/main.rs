@@ -106,7 +106,7 @@ async fn main(_spawner: Spawner) {
 
     // Keyboard config
     let rmk_config = RmkConfig {
-        vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(5, 0), (3, 1)]),
+        vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(5, 0), (5, 1)]),
         device_config: DeviceConfig {
             manufacturer: "Keychron",
             product_name: "Q6 HE",
@@ -127,7 +127,7 @@ async fn main(_spawner: Spawner) {
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(p.ADC1);
-    let row_channels: [AnyAdcChannel<'_, ADC1>; 6] = [
+    let row_channels: [AnyAdcChannel<'_, ADC1>; ROW] = [
         p.PC0.degrade_adc(),
         p.PC1.degrade_adc(),
         p.PC2.degrade_adc(),
@@ -141,10 +141,10 @@ async fn main(_spawner: Spawner) {
         row_channels,
         SampleTime::CYCLES15,
         cols,
-        HallCfg { settle_after_col: Duration::from_micros(10), actuation_pt: 20, deact_offset: 3 },
+        HallCfg { settle_after_col: Duration::from_micros(10), ..HallCfg::default() },
     );
 
-    // Rotary enoder
+    // Rotary encoder
     let pin_a = ExtiInput::new(p.PB14, p.EXTI14, Pull::None, Irqs);
     let pin_b = ExtiInput::new(p.PB15, p.EXTI15, Pull::None, Irqs);
     let mut encoder = RotaryEncoder::with_resolution(pin_a, pin_b, 4, true, 0);

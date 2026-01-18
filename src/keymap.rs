@@ -31,7 +31,7 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
 #[rustfmt::skip]
 pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAYER] {
     [
-        // Layer 0
+        // Layer 0: WIN_BASE
         [
             // Encoder 0: (Clockwise, Counter-Clockwise)
             encoder!(k!(KbVolumeUp), k!(KbVolumeDown)),
