@@ -81,11 +81,18 @@ impl<'d> Snled27351<'d> {
     }
 
     async fn set_global_brightness(&mut self, b: u8) { self.global_brightness = b; }
-    
+
     pub async fn set_global_brightness_percent(&mut self, percent: u8) {
         let p = percent.min(100);
         let b = (p as u16 * 255 / 100) as u8;
         self.set_global_brightness(b).await;
+    }
+
+    #[inline]
+    fn gamma2(&self, v: u8) -> u8 {
+        // gamma ~2.0
+        let x = v as u16;
+        ((x * x + 127) / 255) as u8
     }
 
     #[inline]
@@ -99,9 +106,9 @@ impl<'d> Snled27351<'d> {
         let led = self.leds[led_index];
         let drv = led.driver as usize;
 
-        let r = self.scale(r);
-        let g = self.scale(g);
-        let b = self.scale(b);
+        let r = self.gamma2(self.scale(r));
+        let g = self.gamma2(self.scale(g));
+        let b = self.gamma2(self.scale(b));
 
         self.write_register(drv, PAGE_PWM, led.r, r).await;
         self.write_register(drv, PAGE_PWM, led.g, g).await;
@@ -110,7 +117,7 @@ impl<'d> Snled27351<'d> {
 
     pub async fn set_color_all(&mut self, r: u8, g: u8, b: u8, brightness: u8) {
         for i in 0..self.leds.len() {
-            self.set_color(i, r, g, b,brightness).await;
+            self.set_color(i, r, g, b, brightness).await;
         }
     }
 

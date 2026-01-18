@@ -162,7 +162,7 @@ async fn main(_spawner: Spawner) {
     let mut matrix = AnalogHallMatrix::<_, ROW, COL>::new(
         adc,
         row_channels,
-        SampleTime::CYCLES15,
+        SampleTime::CYCLES56,
         cols,
         HallCfg { settle_after_col: Duration::from_micros(10), ..HallCfg::default() },
     );
