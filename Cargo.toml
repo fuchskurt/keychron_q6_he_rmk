@@ -2,7 +2,7 @@ cargo-features = ["panic-immediate-abort"]
 
 [package]
 name = "rmk-q6_he_ansi"
-version = "0.8.0"
+version = "0.9.0"
 description = "Keyboard firmware written in Rust"
 homepage = "https://github.com/haobogu/rmk"
 repository = "https://github.com/haobogu/rmk"

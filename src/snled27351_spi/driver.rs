@@ -1,3 +1,4 @@
+use crate::snled27351_spi::registers::*;
 use embassy_stm32::{
     gpio::Output,
     mode::Async,
@@ -6,37 +7,6 @@ use embassy_stm32::{
 use embassy_time::Timer;
 
 const DRIVER_COUNT: usize = 2;
-
-const WRITE_CMD: u8 = 0 << 7;
-const PATTERN_CMD: u8 = 2 << 4;
-
-const PAGE_LED_CONTROL: u8 = 0x00;
-const PAGE_PWM: u8 = 0x01;
-const PAGE_FUNCTION: u8 = 0x03;
-const PAGE_CURRENT_TUNE: u8 = 0x04;
-
-const REG_SOFTWARE_SHUTDOWN: u8 = 0x00;
-const SOFTWARE_SHUTDOWN_SSD_SHUTDOWN: u8 = 0x00;
-const SOFTWARE_SHUTDOWN_SSD_NORMAL: u8 = 0x01;
-
-const REG_PULLDOWNUP: u8 = 0x13;
-const PULLDOWNUP_ALL_ENABLED: u8 = 0xAA;
-
-const REG_SCAN_PHASE: u8 = 0x14;
-const SCAN_PHASE_12_CHANNEL: u8 = 0x00;
-
-const REG_SLEW_RATE_CONTROL_MODE_1: u8 = 0x15;
-const SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE: u8 = 1 << 2;
-
-const REG_SLEW_RATE_CONTROL_MODE_2: u8 = 0x16;
-const SLEW_RATE_CONTROL_MODE_2_SSL_ENABLE: u8 = 1 << 6;
-
-const REG_SOFTWARE_SLEEP: u8 = 0x1A;
-const SOFTWARE_SLEEP_DISABLE: u8 = 0x00;
-
-const LED_CONTROL_REGISTER_COUNT: usize = 0x18;
-const PWM_REGISTER_COUNT: usize = 0xC0;
-const CURRENT_TUNE_REGISTER_COUNT: usize = 0x0C;
 
 #[derive(Copy, Clone)]
 pub struct SnledLed {
