@@ -1,6 +1,6 @@
 use embassy_stm32::{
     gpio::Output,
-    mode::Blocking,
+    mode::Async,
     spi::{self, Spi},
 };
 use embassy_time::Timer;
@@ -38,13 +38,13 @@ const PWM_REGISTER_COUNT: usize = 0xC0;
 const CURRENT_TUNE_REGISTER_COUNT: usize = 0x0C;
 
 pub struct Snled27351<'d> {
-    spi: Spi<'d, Blocking, spi::mode::Master>,
+    spi: Spi<'d, Async, spi::mode::Master>,
     cs: [Output<'d>; DRIVER_COUNT],
     sdb: Output<'d>,
 }
 
 impl<'d> Snled27351<'d> {
-    pub fn new(spi: Spi<'d, Blocking, spi::mode::Master>, cs: [Output<'d>; DRIVER_COUNT], sdb: Output<'d>) -> Self {
+    pub fn new(spi: Spi<'d, Async, spi::mode::Master>, cs: [Output<'d>; DRIVER_COUNT], sdb: Output<'d>) -> Self {
         Self { spi, cs, sdb }
     }
 
@@ -54,52 +54,50 @@ impl<'d> Snled27351<'d> {
             cs.set_high();
         }
 
-        // Hard reset the LED driver
         self.sdb.set_low();
         Timer::after_millis(5).await;
         self.sdb.set_high();
         Timer::after_millis(5).await;
 
         for index in 0..DRIVER_COUNT {
-            self.init_driver(index, brightness);
+            self.init_driver(index, brightness).await;
         }
     }
 
-    fn init_driver(&mut self, index: usize, brightness: u8) {
-        self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_SHUTDOWN);
-        self.write_register(index, PAGE_FUNCTION, REG_PULLDOWNUP, PULLDOWNUP_ALL_ENABLED);
-        self.write_register(index, PAGE_FUNCTION, REG_SCAN_PHASE, SCAN_PHASE_12_CHANNEL);
-        self.write_register(index, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_1, SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE);
-        self.write_register(index, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_2, SLEW_RATE_CONTROL_MODE_2_SSL_ENABLE);
-        self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SLEEP, SOFTWARE_SLEEP_DISABLE);
+    async fn init_driver(&mut self, index: usize, brightness: u8) {
+        self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_SHUTDOWN).await;
+        self.write_register(index, PAGE_FUNCTION, REG_PULLDOWNUP, PULLDOWNUP_ALL_ENABLED).await;
+        self.write_register(index, PAGE_FUNCTION, REG_SCAN_PHASE, SCAN_PHASE_12_CHANNEL).await;
+        self.write_register(index, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_1, SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE)
+            .await;
+        self.write_register(index, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_2, SLEW_RATE_CONTROL_MODE_2_SSL_ENABLE)
+            .await;
+        self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SLEEP, SOFTWARE_SLEEP_DISABLE).await;
 
         let led_control = [0xFFu8; LED_CONTROL_REGISTER_COUNT];
-        self.write(index, PAGE_LED_CONTROL, 0, &led_control);
+        self.write(index, PAGE_LED_CONTROL, 0, &led_control).await;
 
         let pwm = [brightness; PWM_REGISTER_COUNT];
-        self.write(index, PAGE_PWM, 0, &pwm);
+        self.write(index, PAGE_PWM, 0, &pwm).await;
 
         let current_tune = [0xFFu8; CURRENT_TUNE_REGISTER_COUNT];
-        self.write(index, PAGE_CURRENT_TUNE, 0, &current_tune);
+        self.write(index, PAGE_CURRENT_TUNE, 0, &current_tune).await;
 
-        self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_NORMAL);
+        self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_NORMAL).await;
     }
 
-    fn write_register(&mut self, index: usize, page: u8, reg: u8, data: u8) {
-        self.write(index, page, reg, core::slice::from_ref(&data));
+    async fn write_register(&mut self, index: usize, page: u8, reg: u8, data: u8) {
+        self.write(index, page, reg, core::slice::from_ref(&data)).await;
     }
 
-    fn write(&mut self, index: usize, page: u8, reg: u8, data: &[u8]) {
+    async fn write(&mut self, index: usize, page: u8, reg: u8, data: &[u8]) {
         if index >= DRIVER_COUNT {
             return;
         }
-
         self.cs[index].set_low();
         let header = [WRITE_CMD | PATTERN_CMD | (page & 0x0F), reg];
-
-        let _ = self.spi.blocking_write(&header);
-        let _ = self.spi.blocking_write(data);
-
+        self.spi.write(&header).await.unwrap();
+        self.spi.write(data).await.unwrap();
         self.cs[index].set_high();
     }
 }
