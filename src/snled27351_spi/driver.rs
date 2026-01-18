@@ -68,26 +68,35 @@ impl<'d> Snled27351<'d> {
     #[inline]
     fn scale(&self, v: u8) -> u8 { ((v as u16 * self.global_brightness as u16 + 127) / 255) as u8 }
 
-    pub async fn set_color(&mut self, led_index: usize, r: u8, g: u8, b: u8, brightness: u8) {
-        if led_index >= self.leds.len() {
-            return;
-        }
-        self.set_global_brightness_percent(brightness).await;
-        let led = self.leds[led_index];
-        let drv = led.driver as usize;
-
+    #[inline]
+    fn scaled_rgb(&self, r: u8, g: u8, b: u8) -> (u8, u8, u8) {
         let r_scaled = self.gamma2(self.scale(r));
         let g_scaled = self.gamma2(self.scale(g));
         let b_scaled = self.gamma2(self.scale(b));
+        (r_scaled, g_scaled, b_scaled)
+    }
 
-        self.write_register(drv, PAGE_PWM, led.r, r_scaled).await;
-        self.write_register(drv, PAGE_PWM, led.g, g_scaled).await;
-        self.write_register(drv, PAGE_PWM, led.b, b_scaled).await;
+    async fn write_led_rgb(&mut self, led: SnledLed, r: u8, g: u8, b: u8) {
+        let drv = led.driver as usize;
+        self.write_register(drv, PAGE_PWM, led.r, r).await;
+        self.write_register(drv, PAGE_PWM, led.g, g).await;
+        self.write_register(drv, PAGE_PWM, led.b, b).await;
+    }
+
+    async fn prepare_color(&mut self, r: u8, g: u8, b: u8, brightness: u8) -> (u8, u8, u8) {
+        self.set_global_brightness_percent(brightness).await;
+        self.scaled_rgb(r, g, b)
     }
 
     pub async fn set_color_all(&mut self, r: u8, g: u8, b: u8, brightness: u8) {
-        for i in 0..self.leds.len() {
-            self.set_color(i, r, g, b, brightness).await;
+        if self.leds.is_empty() {
+            return;
+        }
+
+        let (r_scaled, g_scaled, b_scaled) = self.prepare_color(r, g, b, brightness).await;
+
+        for &led in self.leds.iter() {
+            self.write_led_rgb(led, r_scaled, g_scaled, b_scaled).await;
         }
     }
 
@@ -127,8 +136,14 @@ impl<'d> Snled27351<'d> {
         }
         self.cs[index].set_low();
         let header = [WRITE_CMD | PATTERN_CMD | (page & 0x0F), reg];
-        self.spi.write(&header).await.unwrap();
-        self.spi.write(data).await.unwrap();
+        if self.spi.write(&header).await.is_err() {
+            self.cs[index].set_high();
+            return;
+        }
+        if self.spi.write(data).await.is_err() {
+            self.cs[index].set_high();
+            return;
+        }
         self.cs[index].set_high();
     }
 }
