@@ -16,6 +16,7 @@ use crate::{
     hc164_cols::Hc164Cols,
     keymap::{COL, ROW},
     led_mapping::LED_LAYOUT,
+    snled27351_spi::driver::Snled27351,
 };
 use core::panic::PanicInfo;
 use cortex_m::{asm, peripheral::SCB};
@@ -143,8 +144,8 @@ async fn main(_spawner: Spawner) {
     );
     let cs = [Output::new(p.PB8, Level::High, Speed::VeryHigh), Output::new(p.PB9, Level::High, Speed::VeryHigh)];
     let sdb = Output::new(p.PB7, Level::Low, Speed::VeryHigh);
-    let mut backlight = snled27351_spi::Snled27351::new(spi, cs, sdb, LED_LAYOUT);
-    backlight.init(0x20).await;
+    let mut backlight = Snled27351::new(spi, cs, sdb, LED_LAYOUT);
+    backlight.init(0).await;
     backlight.set_color_all(255, 0, 0).await;
 
     // ADC matrix (rows are ADC pins)
