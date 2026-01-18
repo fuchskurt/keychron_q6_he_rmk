@@ -145,8 +145,8 @@ async fn main(_spawner: Spawner) {
     let cs = [Output::new(p.PB8, Level::High, Speed::VeryHigh), Output::new(p.PB9, Level::High, Speed::VeryHigh)];
     let sdb = Output::new(p.PB7, Level::Low, Speed::VeryHigh);
     let mut backlight = Snled27351::new(spi, cs, sdb, LED_LAYOUT);
-    backlight.init(0).await;
-    backlight.set_color_all(255, 0, 0).await;
+    backlight.init().await;
+    backlight.set_color_all(255, 255, 255, 100).await;
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(p.ADC1);

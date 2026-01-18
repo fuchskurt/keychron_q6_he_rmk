@@ -51,6 +51,7 @@ pub struct Snled27351<'d> {
     cs: [Output<'d>; DRIVER_COUNT],
     sdb: Output<'d>,
     leds: &'static [SnledLed],
+    global_brightness: u8,
 }
 
 impl<'d> Snled27351<'d> {
@@ -60,10 +61,10 @@ impl<'d> Snled27351<'d> {
         sdb: Output<'d>,
         leds: &'static [SnledLed],
     ) -> Self {
-        Self { spi, cs, sdb, leds }
+        Self { spi, cs, sdb, leds, global_brightness: 255 }
     }
 
-    pub async fn init(&mut self, brightness: u8) {
+    pub async fn init(&mut self) {
         // Keep CS inactive
         for cs in &mut self.cs {
             cs.set_high();
@@ -75,26 +76,45 @@ impl<'d> Snled27351<'d> {
         Timer::after_millis(5).await;
 
         for index in 0..DRIVER_COUNT {
-            self.init_driver(index, brightness).await;
+            self.init_driver(index).await;
         }
     }
 
-    pub async fn set_color(&mut self, led_index: usize, r: u8, g: u8, b: u8) {
+    async fn set_global_brightness(&mut self, b: u8) { self.global_brightness = b; }
+    
+    pub async fn set_global_brightness_percent(&mut self, percent: u8) {
+        let p = percent.min(100);
+        let b = (p as u16 * 255 / 100) as u8;
+        self.set_global_brightness(b).await;
+    }
+
+    #[inline]
+    fn scale(&self, v: u8) -> u8 { ((v as u16 * self.global_brightness as u16 + 127) / 255) as u8 }
+
+    pub async fn set_color(&mut self, led_index: usize, r: u8, g: u8, b: u8, brightness: u8) {
+        if led_index >= self.leds.len() {
+            return;
+        }
+        self.set_global_brightness_percent(brightness).await;
         let led = self.leds[led_index];
         let drv = led.driver as usize;
+
+        let r = self.scale(r);
+        let g = self.scale(g);
+        let b = self.scale(b);
 
         self.write_register(drv, PAGE_PWM, led.r, r).await;
         self.write_register(drv, PAGE_PWM, led.g, g).await;
         self.write_register(drv, PAGE_PWM, led.b, b).await;
     }
 
-    pub async fn set_color_all(&mut self, r: u8, g: u8, b: u8) {
+    pub async fn set_color_all(&mut self, r: u8, g: u8, b: u8, brightness: u8) {
         for i in 0..self.leds.len() {
-            self.set_color(i, r, g, b).await;
+            self.set_color(i, r, g, b,brightness).await;
         }
     }
 
-    async fn init_driver(&mut self, index: usize, brightness: u8) {
+    async fn init_driver(&mut self, index: usize) {
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_SHUTDOWN).await;
         self.write_register(index, PAGE_FUNCTION, REG_PULLDOWNUP, PULLDOWNUP_ALL_ENABLED).await;
         self.write_register(index, PAGE_FUNCTION, REG_SCAN_PHASE, SCAN_PHASE_12_CHANNEL).await;
@@ -120,11 +140,11 @@ impl<'d> Snled27351<'d> {
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_NORMAL).await;
     }
 
-    pub async fn write_register(&mut self, index: usize, page: u8, reg: u8, data: u8) {
+    async fn write_register(&mut self, index: usize, page: u8, reg: u8, data: u8) {
         self.write(index, page, reg, core::slice::from_ref(&data)).await;
     }
 
-    pub async fn write(&mut self, index: usize, page: u8, reg: u8, data: &[u8]) {
+    async fn write(&mut self, index: usize, page: u8, reg: u8, data: &[u8]) {
         if index >= DRIVER_COUNT {
             return;
         }
