@@ -34,7 +34,7 @@ impl<'d> Snled27351<'d> {
         Self { spi, cs, sdb, leds, global_brightness: 255 }
     }
 
-    pub async fn init(&mut self) {
+    pub async fn init(&mut self, chip_current_tune: u8) {
         // Keep CS inactive
         for cs in &mut self.cs {
             cs.set_high();
@@ -46,7 +46,7 @@ impl<'d> Snled27351<'d> {
         Timer::after_millis(5).await;
 
         for index in 0..DRIVER_COUNT {
-            self.init_driver(index).await;
+            self.init_driver(index, chip_current_tune).await;
         }
     }
 
@@ -110,7 +110,24 @@ impl<'d> Snled27351<'d> {
         }
     }
 
-    async fn init_driver(&mut self, index: usize) {
+    pub async fn set_color_all_softstart(&mut self, r: u8, g: u8, b: u8, brightness: u8, steps: u8, ramp_time_ms: u32) {
+        let target = brightness.min(100);
+        if target == 0 || self.leds.is_empty() {
+            self.set_color_all(r, g, b, target).await;
+            return;
+        }
+
+        let steps_u32 = (steps.max(1)) as u32;
+        let delay_ms = (ramp_time_ms / steps_u32).max(1) as u64;
+
+        for i in 0..=steps_u32 {
+            let p = ((target as u32) * i / steps_u32) as u8;
+            self.set_color_all(r, g, b, p).await;
+            Timer::after_millis(delay_ms).await;
+        }
+    }
+
+    async fn init_driver(&mut self, index: usize, chip_current_tune: u8) {
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_SHUTDOWN).await;
         self.write_register(index, PAGE_FUNCTION, REG_PULLDOWNUP, PULLDOWNUP_ALL_ENABLED).await;
         self.write_register(index, PAGE_FUNCTION, REG_SCAN_PHASE, SCAN_PHASE_12_CHANNEL).await;
@@ -122,15 +139,15 @@ impl<'d> Snled27351<'d> {
 
         // Enable LED control (PWM mode)
         let led_control = [0xFFu8; LED_CONTROL_REGISTER_COUNT];
-        self.write(index, PAGE_LED_CONTROL, 0, &led_control).await;
+        self.write(index, PAGE_LED_CONTROL, 0x00, &led_control).await;
 
         // Default brightness (off)
         let pwm = [0u8; PWM_REGISTER_COUNT];
         self.write(index, PAGE_PWM, 0x00, &pwm).await;
 
         // Max current tune
-        let current_tune = [0xFFu8; CURRENT_TUNE_REGISTER_COUNT];
-        self.write(index, PAGE_CURRENT_TUNE, 0, &current_tune).await;
+        let current_tune = [chip_current_tune; CURRENT_TUNE_REGISTER_COUNT];
+        self.write(index, PAGE_CURRENT_TUNE, 0x00, &current_tune).await;
 
         // Exit shutdown
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_NORMAL).await;

@@ -135,7 +135,8 @@ async fn main(_spawner: Spawner) {
     spi_config.frequency = Hertz(1_000_000);
     spi_config.mode = spi::MODE_0;
     let spi = spi::Spi::new(
-        p.SPI1, p.PA5,      // SCK
+        p.SPI1,     // SPI1
+        p.PA5,      // SCK
         p.PA7,      // MOSI
         p.PA6,      // MISO
         p.DMA2_CH3, // TX DMA
@@ -145,8 +146,8 @@ async fn main(_spawner: Spawner) {
     let cs = [Output::new(p.PB8, Level::High, Speed::VeryHigh), Output::new(p.PB9, Level::High, Speed::VeryHigh)];
     let sdb = Output::new(p.PB7, Level::Low, Speed::VeryHigh);
     let mut backlight = Snled27351::new(spi, cs, sdb, LED_LAYOUT);
-    backlight.init().await;
-    backlight.set_color_all(255, 255, 255, 100).await;
+    backlight.init(0x28_u8).await;
+    backlight.set_color_all_softstart(255, 255, 255, 100, 24, 150).await;
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(p.ADC1);
