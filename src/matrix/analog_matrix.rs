@@ -1,4 +1,4 @@
-use crate::hc164_cols::Hc164Cols;
+use crate::matrix::hc164_cols::Hc164Cols;
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, SampleTime};
 use embassy_time::{Duration, Timer};
 use heapless::Deque;

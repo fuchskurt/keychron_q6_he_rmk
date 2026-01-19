@@ -1,24 +1,25 @@
 #![no_main]
 #![no_std]
 
-mod analog_matrix;
 mod backlight;
-mod encoder_switch;
 mod flash;
-mod hc164_cols;
 mod keymap;
+mod matrix;
 mod snled27351_spi;
 mod vial;
 
 use crate::{
-    analog_matrix::{AnalogHallMatrix, HallCfg},
     backlight::{
         init::backlight_runner,
         lock_indicator::{BACKLIGHT_CH, BacklightCmd, SnledIndicatorController},
     },
     flash::Flash16K,
-    hc164_cols::Hc164Cols,
     keymap::{COL, ROW},
+    matrix::{
+        analog_matrix::{AnalogHallMatrix, HallCfg},
+        encoder_switch,
+        hc164_cols::Hc164Cols,
+    },
 };
 use core::panic::PanicInfo;
 use embassy_executor::Spawner;
