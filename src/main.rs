@@ -27,8 +27,9 @@ use embassy_stm32::{
     bind_interrupts,
     exti::{self, ExtiInput},
     flash::Flash,
-    gpio::{Level, Output, Pull, Speed},
+    gpio::{Input, Level, Output, Pull, Speed},
     interrupt::typelevel,
+    mode::Async,
     peripherals::{self, ADC1},
     rcc::{
         AHBPrescaler,
@@ -44,11 +45,11 @@ use embassy_stm32::{
         Sysclk,
         mux::Clk48sel,
     },
-    spi,
+    spi::{self, Spi},
     time::Hertz,
     usb::{self, Driver},
 };
-use embassy_time::Duration;
+use embassy_time::{Duration, Timer};
 use rmk::{
     channel::EVENT_CHANNEL,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
@@ -68,6 +69,23 @@ bind_interrupts!(struct Irqs {
     EXTI3 => exti::InterruptHandler<typelevel::EXTI3>;
     EXTI15_10 => exti::InterruptHandler<typelevel::EXTI15_10>;
 });
+
+#[embassy_executor::task]
+async fn backlight_task(
+    spi: Spi<'static, Async, spi::mode::Master>,
+    cs0: Output<'static>,
+    cs1: Output<'static>,
+    sdb: Output<'static>,
+) -> ! {
+    let cs = [cs0, cs1];
+    let mut backlight = Snled27351::new(spi, cs, sdb, LED_LAYOUT);
+
+    backlight.init(0x28).await;
+    backlight.set_color_all_softstart(255, 255, 255, 100, 50, 1000).await;
+    loop {
+        Timer::after_secs(5000).await;
+    }
+}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -122,32 +140,13 @@ async fn main(_spawner: Spawner) {
         ..Default::default()
     };
     let _analog_matrix_power = Output::new(p.PC13, Level::High, Speed::Low);
-    let _analog_matrix_wakeup = embassy_stm32::gpio::Input::new(p.PC5, Pull::Up);
+    let _analog_matrix_wakeup = Input::new(p.PC5, Pull::Up);
 
     // HC164 columns
     let ds = Output::new(p.PB3, Level::Low, Speed::VeryHigh);
     let cp = Output::new(p.PB5, Level::Low, Speed::VeryHigh);
     let mr = Output::new(p.PD2, Level::Low, Speed::VeryHigh);
     let cols = Hc164Cols::new(ds, cp, mr);
-
-    // LED backlight (SNLED27351)
-    let mut spi_config = spi::Config::default();
-    spi_config.frequency = Hertz(1_000_000);
-    spi_config.mode = spi::MODE_0;
-    let spi = spi::Spi::new(
-        p.SPI1,     // SPI1
-        p.PA5,      // SCK
-        p.PA7,      // MOSI
-        p.PA6,      // MISO
-        p.DMA2_CH3, // TX DMA
-        p.DMA2_CH0, // RX DMA
-        spi_config,
-    );
-    let cs = [Output::new(p.PB8, Level::High, Speed::VeryHigh), Output::new(p.PB9, Level::High, Speed::VeryHigh)];
-    let sdb = Output::new(p.PB7, Level::Low, Speed::VeryHigh);
-    let mut backlight = Snled27351::new(spi, cs, sdb, LED_LAYOUT);
-    backlight.init(0x28_u8).await;
-    backlight.set_color_all_softstart(255, 255, 255, 100, 24, 150).await;
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(p.ADC1);
@@ -192,6 +191,24 @@ async fn main(_spawner: Spawner) {
 
     // Initialize the  keyboard
     let mut keyboard = Keyboard::new(&keymap);
+
+    // LED backlight (SNLED27351)
+    let mut spi_config = spi::Config::default();
+    spi_config.frequency = Hertz(1_000_000);
+    spi_config.mode = spi::MODE_0;
+    let spi_backlight = spi::Spi::new(
+        p.SPI1,     // SPI1
+        p.PA5,      // SCK
+        p.PA7,      // MOSI
+        p.PA6,      // MISO
+        p.DMA2_CH3, // TX DMA
+        p.DMA2_CH0, // RX DMA
+        spi_config,
+    );
+    let cs0 = Output::new(p.PB8, Level::High, Speed::VeryHigh);
+    let cs1 = Output::new(p.PB9, Level::High, Speed::VeryHigh);
+    let sdb = Output::new(p.PB7, Level::Low, Speed::VeryHigh);
+    _spawner.spawn(backlight_task(spi_backlight, cs0, cs1, sdb)).unwrap();
 
     // Start
     join3(
