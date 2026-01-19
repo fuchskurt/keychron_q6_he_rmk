@@ -12,7 +12,10 @@ mod vial;
 
 use crate::{
     analog_matrix::{AnalogHallMatrix, HallCfg},
-    backlight::{BACKLIGHT_CH, BacklightCmd, backlight_runner},
+    backlight::{
+        init::backlight_runner,
+        lock_indicator::{BACKLIGHT_CH, BacklightCmd, SnledIndicatorController},
+    },
     flash::Flash16K,
     hc164_cols::Hc164Cols,
     keymap::{COL, ROW},
@@ -189,7 +192,7 @@ async fn main(_spawner: Spawner) {
     let cs0 = Output::new(p.PB8, Level::High, Speed::VeryHigh);
     let cs1 = Output::new(p.PB9, Level::High, Speed::VeryHigh);
     let sdb = Output::new(p.PB7, Level::Low, Speed::VeryHigh);
-    let mut snled_indicator = backlight::SnledIndicatorController::new();
+    let mut snled_indicator = SnledIndicatorController::new();
 
     // Start
     join5(
