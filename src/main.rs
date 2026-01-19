@@ -18,7 +18,7 @@ use crate::{
     led_mapping::LED_LAYOUT,
     snled27351_spi::driver::Snled27351,
 };
-use core::panic::PanicInfo;
+use core::{future::pending, panic::PanicInfo};
 use cortex_m::{asm, peripheral::SCB};
 use embassy_executor::Spawner;
 use embassy_stm32::{
@@ -49,7 +49,7 @@ use embassy_stm32::{
     time::Hertz,
     usb::{self, Driver},
 };
-use embassy_time::{Duration, Timer};
+use embassy_time::Duration;
 use rmk::{
     channel::EVENT_CHANNEL,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
@@ -76,15 +76,13 @@ async fn backlight_task(
     cs0: Output<'static>,
     cs1: Output<'static>,
     sdb: Output<'static>,
-) -> ! {
+) {
     let cs = [cs0, cs1];
     let mut backlight = Snled27351::new(spi, cs, sdb, LED_LAYOUT);
 
     backlight.init(0x28).await;
     backlight.set_color_all_softstart(255, 255, 255, 100, 50, 1000).await;
-    loop {
-        Timer::after_secs(5000).await;
-    }
+    pending::<()>().await;
 }
 
 #[embassy_executor::main]
