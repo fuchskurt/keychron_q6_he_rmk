@@ -2,26 +2,22 @@
 #![no_std]
 
 mod analog_matrix;
-mod backlight_indicator;
+mod backlight;
 mod encoder_switch;
 mod flash;
 mod hc164_cols;
 mod keymap;
-mod led_mapping;
 mod snled27351_spi;
 mod vial;
 
 use crate::{
     analog_matrix::{AnalogHallMatrix, HallCfg},
-    backlight_indicator::{BACKLIGHT_CH, BacklightCmd},
+    backlight::{BACKLIGHT_CH, BacklightCmd, backlight_runner},
     flash::Flash16K,
     hc164_cols::Hc164Cols,
     keymap::{COL, ROW},
-    led_mapping::LED_LAYOUT,
-    snled27351_spi::driver::Snled27351,
 };
 use core::panic::PanicInfo;
-use cortex_m::{asm, peripheral::SCB};
 use embassy_executor::Spawner;
 use embassy_stm32::{
     Config,
@@ -31,7 +27,6 @@ use embassy_stm32::{
     flash::Flash,
     gpio::{Input, Level, Output, Pull, Speed},
     interrupt::typelevel,
-    mode::Async,
     peripherals::{self, ADC1},
     rcc::{
         AHBPrescaler,
@@ -47,7 +42,7 @@ use embassy_stm32::{
         Sysclk,
         mux::Clk48sel,
     },
-    spi::{self, Spi},
+    spi::{self},
     time::Hertz,
     usb::{self, Driver},
 };
@@ -56,8 +51,7 @@ use rmk::{
     channel::EVENT_CHANNEL,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
     controller::EventController,
-    embassy_futures::join::join,
-    futures::future::join3,
+    futures::future::join5,
     initialize_encoder_keymap_and_storage,
     input_device::{Runnable, rotary_encoder::RotaryEncoder},
     keyboard::Keyboard,
@@ -73,38 +67,6 @@ bind_interrupts!(struct Irqs {
     EXTI3 => exti::InterruptHandler<typelevel::EXTI3>;
     EXTI15_10 => exti::InterruptHandler<typelevel::EXTI15_10>;
 });
-
-#[embassy_executor::task]
-async fn backlight_task(
-    spi: Spi<'static, Async, spi::mode::Master>,
-    cs0: Output<'static>,
-    cs1: Output<'static>,
-    sdb: Output<'static>,
-) {
-    let cs = [cs0, cs1];
-    let mut backlight = Snled27351::new(spi, cs, sdb, LED_LAYOUT);
-
-    backlight.init(0x28).await;
-    backlight.set_color_all_softstart(255, 255, 255, 100, 50, 1000).await;
-    let rx = BACKLIGHT_CH.receiver();
-    loop {
-        match rx.receive().await {
-            BacklightCmd::Indicators { caps, num } => {
-                if caps {
-                    backlight.set_color(62, 255, 0, 0, 100).await;
-                } else {
-                    backlight.set_color(62, 255, 255, 255, 100).await;
-                }
-
-                if num {
-                    backlight.set_color(37, 255, 255, 255, 100).await;
-                } else {
-                    backlight.set_color(37, 0, 0, 0, 0).await;
-                }
-            }
-        }
-    }
-}
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -227,22 +189,26 @@ async fn main(_spawner: Spawner) {
     let cs0 = Output::new(p.PB8, Level::High, Speed::VeryHigh);
     let cs1 = Output::new(p.PB9, Level::High, Speed::VeryHigh);
     let sdb = Output::new(p.PB7, Level::Low, Speed::VeryHigh);
-    _spawner.spawn(backlight_task(spi_backlight, cs0, cs1, sdb)).unwrap();
-    let mut snled_indicator = backlight_indicator::SnledIndicatorController::new();
+    let mut snled_indicator = backlight::SnledIndicatorController::new();
 
     // Start
-    let rmk_fut = join3(
+    join5(
         run_devices!((matrix, encoder, enc_switch) => EVENT_CHANNEL),
         keyboard.run(),
         run_rmk(&keymap, driver, &mut storage, rmk_config),
-    );
-
-    // Run RMK and the controller loop
-    join(rmk_fut, snled_indicator.event_loop()).await;
+        backlight_runner(spi_backlight, cs0, cs1, sdb),
+        snled_indicator.event_loop(),
+    )
+    .await;
 }
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    asm::delay(10_000);
-    SCB::sys_reset();
+    // Blink Backlight LEDs
+    let _ = BACKLIGHT_CH.try_send(BacklightCmd::Panic);
+
+    // Stop everything else
+    loop {
+        cortex_m::asm::wfi();
+    }
 }

@@ -1,5 +1,17 @@
-use crate::snled27351_spi::{driver::SnledLed, led_address::*};
-
+use crate::snled27351_spi::{
+    driver::{Snled27351, SnledLed},
+    led_address::*,
+};
+use embassy_stm32::{
+    gpio::Output,
+    mode::Async,
+    spi::{self, Spi},
+};
+use rmk::{
+    channel::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel},
+    event::LedIndicatorEvent,
+    macros::controller,
+};
 pub const LED_LAYOUT: &[SnledLed] = &[
     SnledLed { driver: 0, r: CB7_CA16, g: CB9_CA16, b: CB8_CA16 },
     SnledLed { driver: 0, r: CB7_CA15, g: CB9_CA15, b: CB8_CA15 },
@@ -110,3 +122,66 @@ pub const LED_LAYOUT: &[SnledLed] = &[
     SnledLed { driver: 1, r: CB10_CA2, g: CB12_CA2, b: CB11_CA2 },
     SnledLed { driver: 1, r: CB10_CA1, g: CB12_CA1, b: CB11_CA1 },
 ];
+
+pub static BACKLIGHT_CH: Channel<CriticalSectionRawMutex, BacklightCmd, 4> = Channel::new();
+
+#[derive(Copy, Clone)]
+pub enum BacklightCmd {
+    Indicators { caps: bool, num: bool },
+    Panic,
+}
+
+#[controller(subscribe = [LedIndicatorEvent])]
+pub struct SnledIndicatorController;
+
+impl SnledIndicatorController {
+    pub fn new() -> Self { Self }
+
+    async fn on_led_indicator_event(&mut self, event: LedIndicatorEvent) {
+        let caps = event.indicator.caps_lock();
+        let num = event.indicator.num_lock();
+
+        BACKLIGHT_CH.sender().send(BacklightCmd::Indicators { caps, num }).await;
+    }
+}
+
+pub async fn backlight_runner(
+    spi: Spi<'static, Async, spi::mode::Master>,
+    cs0: Output<'static>,
+    cs1: Output<'static>,
+    sdb: Output<'static>,
+) -> ! {
+    let cs = [cs0, cs1];
+    let mut backlight = Snled27351::new(spi, cs, sdb, LED_LAYOUT);
+
+    backlight.init(0xFF).await;
+    backlight.set_color_all_softstart(255, 255, 255, 100, 50, 1000).await;
+
+    let rx = BACKLIGHT_CH.receiver();
+    loop {
+        match rx.receive().await {
+            BacklightCmd::Indicators { caps, num } => {
+                if caps {
+                    backlight.set_color(62, 255, 0, 0, 100).await;
+                } else {
+                    backlight.set_color(62, 255, 255, 255, 100).await;
+                }
+
+                if num {
+                    backlight.set_color(37, 255, 255, 255, 100).await;
+                } else {
+                    backlight.set_color(37, 0, 0, 0, 0).await;
+                }
+            }
+            BacklightCmd::Panic => {
+                loop {
+                    // solid red or blinking red
+                    backlight.set_color_all(255, 0, 0, 100).await;
+                    embassy_time::Timer::after_millis(300).await;
+                    backlight.set_color_all(0, 0, 0, 0).await;
+                    embassy_time::Timer::after_millis(300).await;
+                }
+            }
+        }
+    }
+}
