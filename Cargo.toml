@@ -17,7 +17,7 @@ embassy-stm32 = { version = "0.5", features = ["stm32f401rc", "memory-x", "time-
 embassy-executor = { version = "0.9", features = [ "arch-cortex-m", "executor-thread"] }
 embedded-storage = "0.3"
 heapless = "0.9"
-rmk = { version = "0.8", default-features = false, features = ["async_matrix", "storage", "vial", "vial_lock"], git = "https://github.com/HaoboGu/rmk.git" }
+rmk = { version = "0.8", default-features = false, features = ["async_matrix", "storage", "vial", "vial_lock", "controller"], git = "https://github.com/HaoboGu/rmk.git" }
 static_cell = "2.1"
 
 [build-dependencies]

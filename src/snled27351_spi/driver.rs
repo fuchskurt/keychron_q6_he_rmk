@@ -88,7 +88,6 @@ impl<'d> Snled27351<'d> {
         self.scaled_rgb(r, g, b)
     }
 
-    #[expect(dead_code)]
     pub async fn set_color(&mut self, led_index: usize, r: u8, g: u8, b: u8, brightness: u8) {
         let Some(&led) = self.leds.get(led_index) else {
             return;
