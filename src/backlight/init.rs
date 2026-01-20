@@ -11,6 +11,14 @@ use embassy_stm32::{
     spi::{self, Spi},
 };
 
+const CAPS_LOCK_LED_INDEX: usize = 62;
+const NUM_LOCK_LED_INDEX: usize = 37;
+const INDICATOR_BRIGHTNESS: u8 = 100;
+const PANIC_BLINK_DELAY_MS: u64 = 300;
+const INDICATOR_RED: (u8, u8, u8) = (255, 0, 0);
+const INDICATOR_WHITE: (u8, u8, u8) = (255, 255, 255);
+const INDICATOR_OFF: (u8, u8, u8) = (0, 0, 0);
+
 pub async fn backlight_runner(
     spi: Spi<'static, Async, spi::mode::Master>,
     cs0: Output<'static>,
@@ -27,23 +35,18 @@ pub async fn backlight_runner(
     loop {
         match rx.receive().await {
             BacklightCmd::Indicators { caps, num } => {
-                if caps {
-                    backlight.set_color(62, 255, 0, 0, 100).await;
-                } else {
-                    backlight.set_color(62, 255, 255, 255, 100).await;
-                }
-
-                if num {
-                    backlight.set_color(37, 255, 255, 255, 100).await;
-                } else {
-                    backlight.set_color(37, 0, 0, 0, 0).await;
-                }
+                let (caps_r, caps_g, caps_b) = if caps { INDICATOR_RED } else { INDICATOR_WHITE };
+                backlight.set_color(CAPS_LOCK_LED_INDEX, caps_r, caps_g, caps_b, INDICATOR_BRIGHTNESS).await;
+                let (num_r, num_g, num_b) = if num { INDICATOR_WHITE } else { INDICATOR_OFF };
+                backlight.set_color(NUM_LOCK_LED_INDEX, num_r, num_g, num_b, INDICATOR_BRIGHTNESS).await;
             }
             BacklightCmd::Panic => loop {
-                backlight.set_color_all(255, 0, 0, 100).await;
-                embassy_time::Timer::after_millis(300).await;
-                backlight.set_color_all(0, 0, 0, 0).await;
-                embassy_time::Timer::after_millis(300).await;
+                let (panic_r, panic_g, panic_b) = INDICATOR_RED;
+                backlight.set_color_all(panic_r, panic_g, panic_b, INDICATOR_BRIGHTNESS).await;
+                embassy_time::Timer::after_millis(PANIC_BLINK_DELAY_MS).await;
+                let (off_r, off_g, off_b) = INDICATOR_OFF;
+                backlight.set_color_all(off_r, off_g, off_b, 0).await;
+                embassy_time::Timer::after_millis(PANIC_BLINK_DELAY_MS).await;
             },
         }
     }

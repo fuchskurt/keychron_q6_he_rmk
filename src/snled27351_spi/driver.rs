@@ -50,12 +50,12 @@ impl<'d> Snled27351<'d> {
         }
     }
 
-    async fn set_global_brightness(&mut self, b: u8) { self.global_brightness = b; }
+    fn set_global_brightness(&mut self, b: u8) { self.global_brightness = b; }
 
-    pub async fn set_global_brightness_percent(&mut self, percent: u8) {
+    pub fn set_global_brightness_percent(&mut self, percent: u8) {
         let p = percent.min(100);
         let b = (p as u16 * 255 / 100) as u8;
-        self.set_global_brightness(b).await;
+        self.set_global_brightness(b);
     }
 
     #[inline]
@@ -83,8 +83,8 @@ impl<'d> Snled27351<'d> {
         self.write_register(drv, PAGE_PWM, led.b, b).await;
     }
 
-    async fn prepare_color(&mut self, r: u8, g: u8, b: u8, brightness: u8) -> (u8, u8, u8) {
-        self.set_global_brightness_percent(brightness).await;
+    fn prepare_color(&mut self, r: u8, g: u8, b: u8, brightness: u8) -> (u8, u8, u8) {
+        self.set_global_brightness_percent(brightness);
         self.scaled_rgb(r, g, b)
     }
 
@@ -93,7 +93,7 @@ impl<'d> Snled27351<'d> {
             return;
         };
 
-        let (r_scaled, g_scaled, b_scaled) = self.prepare_color(r, g, b, brightness).await;
+        let (r_scaled, g_scaled, b_scaled) = self.prepare_color(r, g, b, brightness);
         self.write_led_rgb(led, r_scaled, g_scaled, b_scaled).await;
     }
 
@@ -102,7 +102,7 @@ impl<'d> Snled27351<'d> {
             return;
         }
 
-        let (r_scaled, g_scaled, b_scaled) = self.prepare_color(r, g, b, brightness).await;
+        let (r_scaled, g_scaled, b_scaled) = self.prepare_color(r, g, b, brightness);
 
         for &led in self.leds.iter() {
             self.write_led_rgb(led, r_scaled, g_scaled, b_scaled).await;
