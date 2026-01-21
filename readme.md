@@ -6,9 +6,11 @@ A customizable 100% hall effect keyboard.
 
 * Keyboard Maintainer: [Kurt Fuchs](https://github.com/fuchskurt)
 * Hardware Supported: Keychron Q6 HE
-* Hardware Availability: [Keychron Q6 HE QMK/VIA Wireless Custom Mechanical Keyboard](https://www.keychron.com/products/keychron-q6-he-qmk-wireless-custom-keyboard)
+* Hardware
+  Availability: [Keychron Q6 HE QMK/VIA Wireless Custom Mechanical Keyboard](https://www.keychron.com/products/keychron-q6-he-qmk-wireless-custom-keyboard)
 
 Make example for this keyboard (after setting up your build environment):
+
 ```
     cargo make objcopy
 ```

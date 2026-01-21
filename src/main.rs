@@ -4,6 +4,7 @@
 mod backlight;
 mod flash;
 mod keymap;
+mod layer_toggle;
 mod matrix;
 mod snled27351_spi;
 mod vial;
@@ -15,6 +16,7 @@ use crate::{
     },
     flash::Flash16K,
     keymap::{COL, ROW},
+    layer_toggle::{LayerToggle, MatrixPos},
     matrix::{
         analog_matrix::{AnalogHallMatrix, HallCfg},
         encoder_switch,
@@ -99,7 +101,7 @@ async fn main(_spawner: Spawner) {
 
     // Usb config
     static EP_OUT_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
-    let mut usb_config = embassy_stm32::usb::Config::default();
+    let mut usb_config = usb::Config::default();
     usb_config.vbus_detection = false;
     let driver = Driver::new_fs(p.USB_OTG_FS, Irqs, p.PA12, p.PA11, &mut EP_OUT_BUFFER.init([0; 1024])[..], usb_config);
 
@@ -147,7 +149,7 @@ async fn main(_spawner: Spawner) {
     let mut matrix = AnalogHallMatrix::<_, ROW, COL>::new(
         adc,
         row_channels,
-        SampleTime::CYCLES56,
+        SampleTime::CYCLES15,
         cols,
         HallCfg { settle_after_col: Duration::from_micros(10), ..HallCfg::default() },
     );
@@ -158,6 +160,14 @@ async fn main(_spawner: Spawner) {
     let mut encoder = RotaryEncoder::with_resolution(pin_a, pin_b, 4, true, 0);
     let enc_sw_pin = ExtiInput::new(p.PA3, p.EXTI3, Pull::Up, Irqs);
     let mut enc_switch = encoder_switch::EncoderSwitch::new(enc_sw_pin, 0, 13);
+
+    // Layer Toggle Switch
+    let layer_toggle_pin = ExtiInput::new(p.PB12, p.EXTI12, Pull::Up, Irqs);
+    let mut layer_toggle = LayerToggle::new_with_default_debounce(
+        layer_toggle_pin,
+        MatrixPos { row: 5, col: 7 }, // HIGH taps this
+        MatrixPos { row: 5, col: 8 }, // LOW taps this
+    );
 
     // Initialize the storage and keymap
     let mut default_keymap = keymap::get_default_keymap();
@@ -197,7 +207,7 @@ async fn main(_spawner: Spawner) {
 
     // Start
     join5(
-        run_devices!((matrix, encoder, enc_switch) => EVENT_CHANNEL),
+        run_devices!((matrix, encoder, enc_switch, layer_toggle) => EVENT_CHANNEL),
         keyboard.run(),
         run_rmk(&keymap, driver, &mut storage, rmk_config),
         backlight_runner(spi_backlight, cs0, cs1, sdb),
