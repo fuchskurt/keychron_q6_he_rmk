@@ -6,5 +6,7 @@ pub mod analog_matrix;
 pub mod encoder_switch;
 /// HC164 column selector.
 pub mod hc164_cols;
+/// Layer toggle input handling.
+pub mod layer_toggle;
 /// Travel lookup table data.
 pub mod travel_lut;

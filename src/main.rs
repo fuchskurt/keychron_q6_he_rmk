@@ -24,8 +24,6 @@ mod backlight;
 mod flash;
 /// Default keymap definitions.
 mod keymap;
-/// Layer toggle input handling.
-mod layer_toggle;
 /// Matrix scanning components.
 mod matrix;
 /// SNLED27351 driver support.
@@ -40,11 +38,11 @@ use crate::{
     },
     flash::Flash16K,
     keymap::{COL, ROW},
-    layer_toggle::{LayerToggle, MatrixPos},
     matrix::{
         analog_matrix::{AnalogHallMatrix, HallCfg},
         encoder_switch,
         hc164_cols::Hc164Cols,
+        layer_toggle::{LayerToggle, MatrixPos},
     },
 };
 use core::panic::PanicInfo;
