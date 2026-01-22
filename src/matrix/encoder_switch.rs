@@ -8,17 +8,22 @@ use rmk::{
 };
 
 /// Debounced encoder switch exposed as an input device.
-pub struct EncoderSwitch<'d> {
-    pin: ExtiInput<'d>,
-    row: u8,
+pub struct EncoderSwitch<'peripherals> {
+    /// Logical column index reported to the input system.
     col: u8,
-    last_pressed: bool,
+    /// Debounce duration applied to state changes.
     debounce: Duration,
+    /// Last debounced logical state of the switch.
+    last_pressed: bool,
+    /// External interrupt–backed input pin for the switch.
+    pin: ExtiInput<'peripherals>,
+    /// Logical row index reported to the input system.
+    row: u8,
 }
 
-impl<'d> EncoderSwitch<'d> {
+impl<'peripherals> EncoderSwitch<'peripherals> {
     /// Create a new encoder switch input wrapper.
-    pub fn new(pin: ExtiInput<'d>, row: u8, col: u8) -> Self {
+    pub const fn new(pin: ExtiInput<'peripherals>, row: u8, col: u8) -> Self {
         Self { pin, row, col, last_pressed: false, debounce: Duration::from_millis(5) }
     }
 
@@ -27,7 +32,7 @@ impl<'d> EncoderSwitch<'d> {
     fn sample_pressed(&self) -> bool { self.pin.is_low() }
 }
 
-impl<'d> InputDevice for EncoderSwitch<'d> {
+impl InputDevice for EncoderSwitch<'_> {
     /// Wait for the next debounced encoder switch event.
     async fn read_event(&mut self) -> Event {
         loop {

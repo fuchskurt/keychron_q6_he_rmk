@@ -27,18 +27,29 @@ pub struct LayerToggle<'d> {
 
 impl<'d> LayerToggle<'d> {
     /// Create a new layer toggle with a provided debounce duration.
-    pub const fn new(pin: ExtiInput<'d>, high_pos: MatrixPos, low_pos: MatrixPos, debounce: Duration) -> Self {
+    pub const fn new(
+        pin: ExtiInput<'d>,
+        high_pos: MatrixPos,
+        low_pos: MatrixPos,
+        debounce: Duration,
+    ) -> Self {
         Self { pin, high_pos, low_pos, last_level: None, pending_release: None, debounce }
     }
 
     /// Create a new layer toggle with the default debounce.
-    pub const fn new_with_default_debounce(pin: ExtiInput<'d>, high_pos: MatrixPos, low_pos: MatrixPos) -> Self {
+    pub const fn new_with_default_debounce(
+        pin: ExtiInput<'d>,
+        high_pos: MatrixPos,
+        low_pos: MatrixPos,
+    ) -> Self {
         Self::new(pin, high_pos, low_pos, Duration::from_micros(20))
     }
 
     #[inline]
     /// Select the matrix position for the provided level.
-    const fn pos_for_level(&self, level_high: bool) -> MatrixPos { if level_high { self.high_pos } else { self.low_pos } }
+    const fn pos_for_level(&self, level_high: bool) -> MatrixPos {
+        if level_high { self.high_pos } else { self.low_pos }
+    }
 
     #[inline]
     /// Queue a tap event for the provided position.
@@ -48,7 +59,7 @@ impl<'d> LayerToggle<'d> {
     }
 
     /// Read the switch level after a debounce delay.
-    async fn read_level_debounced(&mut self) -> bool {
+    async fn read_level_debounced(&self) -> bool {
         if self.debounce != Duration::from_millis(0) {
             Timer::after(self.debounce).await;
         }

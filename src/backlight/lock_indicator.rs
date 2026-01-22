@@ -13,7 +13,13 @@ pub static BACKLIGHT_CH: Channel<CriticalSectionRawMutex, BacklightCmd, 4> = Cha
 /// Commands for lock indicator LEDs.
 pub enum BacklightCmd {
     /// Update caps/num lock indicator states.
-    Indicators { caps: bool, num: bool },
+    Indicators {
+        /// Whether Caps Lock is active.
+        caps: bool,
+
+        /// Whether Num Lock is active.
+        num: bool,
+    },
     /// Trigger a panic blink sequence.
     Panic,
 }
@@ -27,7 +33,7 @@ impl SnledIndicatorController {
     pub const fn new() -> Self { Self }
 
     /// Handle incoming lock LED indicator events.
-    async fn on_led_indicator_event(&mut self, event: LedIndicatorEvent) {
+    async fn on_led_indicator_event(&self, event: LedIndicatorEvent) {
         let caps = event.indicator.caps_lock();
         let num = event.indicator.num_lock();
 

@@ -46,9 +46,13 @@ pub async fn backlight_runner(
         match rx.receive().await {
             BacklightCmd::Indicators { caps, num } => {
                 let (caps_r, caps_g, caps_b) = if caps { INDICATOR_RED } else { INDICATOR_WHITE };
-                backlight.set_color(CAPS_LOCK_LED_INDEX, caps_r, caps_g, caps_b, INDICATOR_BRIGHTNESS).await;
+                backlight
+                    .set_color(CAPS_LOCK_LED_INDEX, caps_r, caps_g, caps_b, INDICATOR_BRIGHTNESS)
+                    .await;
                 let (num_r, num_g, num_b) = if num { INDICATOR_WHITE } else { INDICATOR_OFF };
-                backlight.set_color(NUM_LOCK_LED_INDEX, num_r, num_g, num_b, INDICATOR_BRIGHTNESS).await;
+                backlight
+                    .set_color(NUM_LOCK_LED_INDEX, num_r, num_g, num_b, INDICATOR_BRIGHTNESS)
+                    .await;
             }
             BacklightCmd::Panic => loop {
                 let (panic_r, panic_g, panic_b) = INDICATOR_RED;

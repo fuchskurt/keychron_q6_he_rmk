@@ -1,4 +1,4 @@
-max_width = 120                   # Maximum line width before wrapping code
+max_width = 100                   # Maximum line width before wrapping code
 hard_tabs = false                 # Use spaces instead of tab characters
 tab_spaces = 4                    # Number of spaces per indentation level
 format_code_in_doc_comments = true # Format Rust code blocks within doc comments
