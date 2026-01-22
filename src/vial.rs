@@ -1,4 +1,7 @@
+//! Vial keyboard ID and definition blobs.
+/// Vial configuration constant `VIAL_KEYBOARD_ID`.
 pub const VIAL_KEYBOARD_ID: &[u8; 8] = &[185_u8, 188_u8, 9_u8, 178_u8, 157_u8, 55_u8, 76_u8, 234_u8];
+/// Vial configuration constant `VIAL_KEYBOARD_DEF`.
 pub const VIAL_KEYBOARD_DEF: &[u8; 432] = &[
     253_u8, 55_u8, 122_u8, 88_u8, 90_u8, 0_u8, 0_u8, 4_u8, 230_u8, 214_u8, 180_u8, 70_u8, 2_u8, 0_u8, 33_u8, 1_u8,
     22_u8, 0_u8, 0_u8, 0_u8, 116_u8, 47_u8, 229_u8, 163_u8, 224_u8, 4_u8, 190_u8, 1_u8, 112_u8, 93_u8, 0_u8, 61_u8,

@@ -21,24 +21,32 @@ use embedded_storage::nor_flash::{ErrorType, NorFlash, ReadNorFlash};
 pub struct Flash16K<F>(pub F);
 
 impl<F: ErrorType> ErrorType for Flash16K<F> {
+    /// Error type propagated from the wrapped flash implementation.
     type Error = F::Error;
 }
 
 impl<F: ReadNorFlash> ReadNorFlash for Flash16K<F> {
+    /// Read granularity for the underlying flash.
     const READ_SIZE: usize = F::READ_SIZE;
 
+    /// Read bytes from the flash at the given offset.
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> { self.0.read(offset, bytes) }
 
+    /// Return the total capacity of the flash device.
     fn capacity(&self) -> usize { self.0.capacity() }
 }
 
 impl<F: NorFlash> NorFlash for Flash16K<F> {
+    /// Erase size reported as 16KB for the wrapped flash.
     const ERASE_SIZE: usize = 16 * 1024;
+    /// Write granularity for the underlying flash.
     const WRITE_SIZE: usize = F::WRITE_SIZE;
 
     // 16KB for sectors 1-2
 
+    /// Erase the flash range between the given offsets.
     fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> { self.0.erase(from, to) }
 
+    /// Write bytes to the flash at the given offset.
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> { self.0.write(offset, bytes) }
 }

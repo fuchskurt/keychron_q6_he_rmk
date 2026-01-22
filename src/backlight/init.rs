@@ -1,3 +1,5 @@
+//! Backlight task initialization and runtime loop.
+
 use crate::{
     backlight::{
         lock_indicator::{BACKLIGHT_CH, BacklightCmd},
@@ -11,14 +13,22 @@ use embassy_stm32::{
     spi::{self, Spi},
 };
 
+/// LED index for the caps lock indicator.
 const CAPS_LOCK_LED_INDEX: usize = 62;
+/// LED index for the num lock indicator.
 const NUM_LOCK_LED_INDEX: usize = 37;
+/// Brightness used for indicator LEDs.
 const INDICATOR_BRIGHTNESS: u8 = 100;
+/// Delay between panic blink toggles.
 const PANIC_BLINK_DELAY_MS: u64 = 300;
+/// RGB value for the red indicator state.
 const INDICATOR_RED: (u8, u8, u8) = (255, 0, 0);
+/// RGB value for the white indicator state.
 const INDICATOR_WHITE: (u8, u8, u8) = (255, 255, 255);
+/// RGB value for the off indicator state.
 const INDICATOR_OFF: (u8, u8, u8) = (0, 0, 0);
 
+/// Run the backlight controller loop.
 pub async fn backlight_runner(
     spi: Spi<'static, Async, spi::mode::Master>,
     cs0: Output<'static>,

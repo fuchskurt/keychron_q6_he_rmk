@@ -17,12 +17,19 @@
 )]
 #![expect(clippy::future_not_send, reason = "Embassy is designed that way")]
 
+/// Backlight driver integration.
 mod backlight;
+/// Flash storage wrapper types.
 mod flash;
+/// Default keymap definitions.
 mod keymap;
+/// Layer toggle input handling.
 mod layer_toggle;
+/// Matrix scanning components.
 mod matrix;
+/// SNLED27351 driver support.
 mod snled27351_spi;
+/// Vial configuration constants.
 mod vial;
 
 use crate::{
@@ -92,6 +99,7 @@ bind_interrupts!(struct Irqs {
 });
 
 #[embassy_executor::main]
+/// Entry point for the firmware.
 async fn main(_spawner: Spawner) {
     // RCC config
     let mut config = Config::default();
@@ -241,6 +249,7 @@ async fn main(_spawner: Spawner) {
 }
 
 #[panic_handler]
+/// Panic handler that triggers a backlight blink loop.
 fn panic(_info: &PanicInfo) -> ! {
     // Blink Backlight LEDs
     let _ = BACKLIGHT_CH.try_send(BacklightCmd::Panic);
