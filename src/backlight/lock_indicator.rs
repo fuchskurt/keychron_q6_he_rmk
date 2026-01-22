@@ -16,7 +16,7 @@ pub enum BacklightCmd {
 pub struct SnledIndicatorController;
 
 impl SnledIndicatorController {
-    pub fn new() -> Self { Self }
+    pub const fn new() -> Self { Self }
 
     async fn on_led_indicator_event(&mut self, event: LedIndicatorEvent) {
         let caps = event.indicator.caps_lock();

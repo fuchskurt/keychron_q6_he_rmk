@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, reason = "Possible unused Addresses")]
 
 pub const CB1_CA1: u8 = 0x00;
 pub const CB1_CA2: u8 = 0x01;

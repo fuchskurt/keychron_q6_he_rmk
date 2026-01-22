@@ -1,7 +1,7 @@
 use crate::{
     backlight::{
         lock_indicator::{BACKLIGHT_CH, BacklightCmd},
-        mapping::*,
+        mapping::LED_LAYOUT,
     },
     snled27351_spi::driver::Snled27351,
 };

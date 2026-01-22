@@ -22,16 +22,16 @@ pub struct LayerToggle<'d> {
 }
 
 impl<'d> LayerToggle<'d> {
-    pub fn new(pin: ExtiInput<'d>, high_pos: MatrixPos, low_pos: MatrixPos, debounce: Duration) -> Self {
+    pub const fn new(pin: ExtiInput<'d>, high_pos: MatrixPos, low_pos: MatrixPos, debounce: Duration) -> Self {
         Self { pin, high_pos, low_pos, last_level: None, pending_release: None, debounce }
     }
 
-    pub fn new_with_default_debounce(pin: ExtiInput<'d>, high_pos: MatrixPos, low_pos: MatrixPos) -> Self {
+    pub const fn new_with_default_debounce(pin: ExtiInput<'d>, high_pos: MatrixPos, low_pos: MatrixPos) -> Self {
         Self::new(pin, high_pos, low_pos, Duration::from_micros(20))
     }
 
     #[inline]
-    fn pos_for_level(&self, level_high: bool) -> MatrixPos { if level_high { self.high_pos } else { self.low_pos } }
+    const fn pos_for_level(&self, level_high: bool) -> MatrixPos { if level_high { self.high_pos } else { self.low_pos } }
 
     #[inline]
     fn queue_tap(&mut self, pos: MatrixPos) -> Event {
@@ -55,7 +55,7 @@ impl<'d> LayerToggle<'d> {
     }
 }
 
-impl<'d> InputDevice for LayerToggle<'d> {
+impl InputDevice for LayerToggle<'_> {
     async fn read_event(&mut self) -> Event {
         if let Some(pos) = self.pending_release.take() {
             return Event::Key(KeyboardEvent::key(pos.row, pos.col, false));

@@ -2,7 +2,9 @@ pub const LUT_MIN: u16 = 1200;
 pub const LUT_MAX: u16 = 3500;
 pub const LUT_SCALE: i32 = 256;
 pub const LUT_LEN: usize = 2301;
+pub const DELTA_Q: u32 = 8;
 pub const SCALE_Q: i32 = 16;
+pub const SCALE_SHIFT: u32 = DELTA_Q.saturating_add(u32::try_from(SCALE_Q).unwrap_or_default());
 pub const SCALE_Q_FACTOR: i32 = 1 << SCALE_Q;
 pub const LUT_DELTA: [i16; LUT_LEN] = [
     22708, 22677, 22646, 22615, 22584, 22553, 22522, 22491, 22460, 22429, 22399, 22368, 22337, 22307, 22276, 22246,
@@ -143,5 +145,5 @@ pub const LUT_DELTA: [i16; LUT_LEN] = [
 pub const fn delta_from_ref(raw: u16) -> i32 {
     let x = raw.clamp(LUT_MIN, LUT_MAX);
     let idx = (x - LUT_MIN) as usize;
-    LUT_DELTA.get(idx).copied().unwrap_or_default() as i32 / LUT_SCALE
+    i32::from(LUT_DELTA.get(idx).copied().unwrap_or_default()).saturating_div(LUT_SCALE)
 }

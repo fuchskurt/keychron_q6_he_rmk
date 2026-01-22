@@ -1,9 +1,9 @@
 use crate::matrix::{
     hc164_cols::Hc164Cols,
-    travel_lut::{SCALE_Q_FACTOR, delta_from_ref},
+    travel_lut::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
 };
 use core::array::from_fn;
-use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, SampleTime};
+use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, Instance, SampleTime};
 use embassy_time::{Duration, Timer};
 use heapless::Deque;
 use rmk::{
@@ -14,7 +14,7 @@ use rmk::{
 const FULL_TRAVEL_UNIT: u16 = 40;
 const TRAVEL_SCALE: u16 = 6;
 const TRAVEL_SCALE_I64: i64 = i64::from(TRAVEL_SCALE);
-const FULL_TRAVEL_SCALED: u16 = FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE);
+const FULL_TRAVEL_SCALED: i64 = i64::from(FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE));
 const DEFAULT_FULL_RANGE: u16 = 900;
 const VALID_RAW_MIN: u16 = 1200;
 const VALID_RAW_MAX: u16 = 3500;
@@ -93,7 +93,7 @@ impl<T: Copy, const ROW: usize, const COL: usize> MatrixGrid<T, ROW, COL> {
 
 pub struct AnalogHallMatrix<'d, ADC, const ROW: usize, const COL: usize>
 where
-    ADC: embassy_stm32::adc::Instance,
+    ADC: Instance,
     ADC::Regs: BasicAdcRegs,
 {
     adc: Adc<'d, ADC>,
@@ -113,7 +113,7 @@ where
 
 impl<'d, ADC, const ROW: usize, const COL: usize> AnalogHallMatrix<'d, ADC, ROW, COL>
 where
-    ADC: embassy_stm32::adc::Instance,
+    ADC: Instance,
     ADC::Regs: BasicAdcRegs<SampleTime = SampleTime>,
 {
     pub fn new(
@@ -142,7 +142,7 @@ where
     }
 
     #[inline]
-    fn apply_zero_offset(zero: u16, raw: u16) -> Option<u16> {
+    const fn apply_zero_offset(zero: u16, raw: u16) -> Option<u16> {
         if zero >= REF_ZERO_TRAVEL {
             raw.checked_sub(zero - REF_ZERO_TRAVEL)
         } else {
@@ -167,13 +167,13 @@ where
 
         let delta = i64::from(delta_from_ref(x));
         let prod = delta.saturating_mul(i64::from(cal.scale_factor)).saturating_mul(TRAVEL_SCALE_I64);
-        let t = (prod >> (8 + 16)) as i64;
+        let travel = prod.checked_shr(SCALE_SHIFT).unwrap_or(0);
 
-        t.clamp(0, FULL_TRAVEL_SCALED as i64) as u16
+        u16::try_from(travel.clamp(0, FULL_TRAVEL_SCALED)).unwrap_or_default()
     }
 
     async fn calibrate_zero_travel(&mut self) {
-        let mut acc: MatrixGrid<u32, ROW, COL> = MatrixGrid::new(|| 0u32);
+        let mut acc: MatrixGrid<u32, ROW, COL> = MatrixGrid::new(|| 0_u32);
 
         let sample_time = self.sample_time;
         let adc = &mut self.adc;
@@ -185,10 +185,10 @@ where
                 Timer::after(self.settle_after_col).await;
 
                 for (row, ch) in row_adc.iter_mut().enumerate() {
-                    let v = adc.blocking_read(ch, sample_time);
+                    let value = adc.blocking_read(ch, sample_time);
 
                     if let Some(cell) = acc.get_mut(row, col) {
-                        *cell += v as u32;
+                        (*cell) = (*cell).saturating_add(u32::from(value));
                     }
                 }
 
@@ -197,7 +197,8 @@ where
         }
 
         for ((row, col), acc_cell) in acc.iter_cells() {
-            let avg = (*acc_cell / CALIB_PASSES as u32) as u16;
+            let avg = u16::try_from((*acc_cell).saturating_div(u32::try_from(CALIB_PASSES).unwrap_or_default()))
+                .unwrap_or_default();
 
             if let Some(cal_cell) = self.calib.get_mut(row, col) {
                 *cal_cell = KeyCalib::new(avg, avg.saturating_sub(DEFAULT_FULL_RANGE));
@@ -249,7 +250,11 @@ where
                 if now_pressed != st.pressed {
                     st.pressed = now_pressed;
 
-                    let ev = KeyboardEvent::key(row as u8, col as u8, now_pressed);
+                    let ev = KeyboardEvent::key(
+                        u8::try_from(row).unwrap_or_default(),
+                        u8::try_from(col).unwrap_or_default(),
+                        now_pressed,
+                    );
                     if self.pending.push_back(ev).is_err() {
                         let _ = self.pending.pop_front();
                         let _ = self.pending.push_back(ev);
@@ -264,7 +269,7 @@ where
 
 impl<'d, ADC, const ROW: usize, const COL: usize> InputDevice for AnalogHallMatrix<'d, ADC, ROW, COL>
 where
-    ADC: embassy_stm32::adc::Instance,
+    ADC: Instance,
     ADC::Regs: BasicAdcRegs<SampleTime = SampleTime>,
 {
     async fn read_event(&mut self) -> Event {
@@ -288,24 +293,23 @@ where
 
 #[inline]
 const fn compute_scale_factor(zero: u16, full: u16) -> i32 {
-    let x_full = if zero >= REF_ZERO_TRAVEL {
-        let off = zero - REF_ZERO_TRAVEL;
-        match full.checked_sub(off) {
-            Some(v) => v,
+    let x_full: u16 = if zero >= REF_ZERO_TRAVEL {
+        match full.checked_sub(zero.saturating_sub(REF_ZERO_TRAVEL)) {
+            Some(value) => value,
             None => return SCALE_Q_FACTOR,
         }
     } else {
-        let off = REF_ZERO_TRAVEL - zero;
-        match full.checked_add(off) {
-            Some(v) => v,
+        match full.checked_add(REF_ZERO_TRAVEL.saturating_sub(zero)) {
+            Some(value) => value,
             None => return SCALE_Q_FACTOR,
         }
     };
 
-    let full_travel = delta_from_ref(x_full);
+    let full_travel: i64 = i64::from(delta_from_ref(x_full));
     if full_travel == 0 {
         return SCALE_Q_FACTOR;
     }
-    let num = (FULL_TRAVEL_UNIT as i64) * (256i64) * (SCALE_Q_FACTOR as i64);
-    (num / (full_travel as i64)) as i32
+
+    let num = i64::from(FULL_TRAVEL_UNIT).saturating_mul(256_i64).saturating_mul(i64::from(SCALE_Q_FACTOR));
+    i32::try_from(num.saturating_div(full_travel)).unwrap_or_default()
 }

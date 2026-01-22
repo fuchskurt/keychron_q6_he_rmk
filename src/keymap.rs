@@ -7,11 +7,11 @@ use rmk::{
     types::action::{EncoderAction, KeyAction},
 };
 
-pub(crate) const COL: usize = 21;
-pub(crate) const ROW: usize = 6;
-pub(crate) const NUM_LAYER: usize = 2;
+pub const COL: usize = 21;
+pub const ROW: usize = 6;
+pub const NUM_LAYER: usize = 2;
 
-pub(crate) const NUM_ENCODER: usize = 1;
+pub const NUM_ENCODER: usize = 1;
 
 #[rustfmt::skip]
 pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
