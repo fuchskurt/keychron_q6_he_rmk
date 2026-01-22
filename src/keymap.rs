@@ -1,3 +1,5 @@
+//! Default keymap definitions and sizes.
+
 use rmk::{
     a,
     df,
@@ -7,13 +9,18 @@ use rmk::{
     types::action::{EncoderAction, KeyAction},
 };
 
-pub(crate) const COL: usize = 21;
-pub(crate) const ROW: usize = 6;
-pub(crate) const NUM_LAYER: usize = 2;
+/// Number of columns in the key matrix.
+pub const COL: usize = 21;
+/// Number of rows in the key matrix.
+pub const ROW: usize = 6;
+/// Number of supported layers.
+pub const NUM_LAYER: usize = 2;
 
-pub(crate) const NUM_ENCODER: usize = 1;
+/// Number of rotary encoders.
+pub const NUM_ENCODER: usize = 1;
 
 #[rustfmt::skip]
+/// Return the default keymap for all layers.
 pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
     [
         layer!(
@@ -40,6 +47,7 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
 }
 
 #[rustfmt::skip]
+/// Return the default encoder action map for each layer.
 pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAYER] {
     [
         // Layer 0: MAC_BASE

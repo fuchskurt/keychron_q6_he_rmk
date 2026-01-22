@@ -1,12 +1,34 @@
 #![no_main]
 #![no_std]
+#![feature(const_trait_impl)]
+#![feature(const_cmp)]
+#![feature(const_option_ops)]
+#![feature(const_index)]
+#![feature(const_convert)]
+#![feature(const_result_trait_fn)]
+#![warn(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+#![deny(warnings)]
+#![expect(
+    clippy::implicit_return,
+    clippy::blanket_clippy_restriction_lints,
+    clippy::separated_literal_suffix,
+    clippy::single_call_fn,
+    clippy::self_named_module_files,
+    reason = "Cleaner code"
+)]
+#![expect(clippy::future_not_send, reason = "Embassy is designed that way")]
 
+/// Backlight driver integration.
 mod backlight;
+/// Flash storage wrapper types.
 mod flash;
+/// Default keymap definitions.
 mod keymap;
-mod layer_toggle;
+/// Matrix scanning components.
 mod matrix;
+/// SNLED27351 driver support.
 mod snled27351_spi;
+/// Vial configuration constants.
 mod vial;
 
 use crate::{
@@ -16,14 +38,15 @@ use crate::{
     },
     flash::Flash16K,
     keymap::{COL, ROW},
-    layer_toggle::{LayerToggle, MatrixPos},
     matrix::{
         analog_matrix::{AnalogHallMatrix, HallCfg},
         encoder_switch,
         hc164_cols::Hc164Cols,
+        layer_toggle::{LayerToggle, MatrixPos},
     },
 };
 use core::panic::PanicInfo;
+use cortex_m::asm::wfi;
 use embassy_executor::Spawner;
 use embassy_stm32::{
     Config,
@@ -56,10 +79,10 @@ use embassy_time::Duration;
 use rmk::{
     channel::EVENT_CHANNEL,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
-    controller::EventController,
+    controller::EventController as _,
     futures::future::join5,
     initialize_encoder_keymap_and_storage,
-    input_device::{Runnable, rotary_encoder::RotaryEncoder},
+    input_device::{Runnable as _, rotary_encoder::RotaryEncoder},
     keyboard::Keyboard,
     run_devices,
     run_rmk,
@@ -75,7 +98,10 @@ bind_interrupts!(struct Irqs {
 });
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+/// Entry point for the firmware.
+async fn main(spawner: Spawner) {
+    // Explicitly drop spawner.
+    let _: Spawner = spawner;
     // RCC config
     let mut config = Config::default();
 
@@ -97,13 +123,20 @@ async fn main(_spawner: Spawner) {
     config.rcc.mux.clk48sel = Clk48sel::PLL1_Q;
 
     // Initialize peripherals
-    let p = embassy_stm32::init(config);
+    let peripheral = embassy_stm32::init(config);
 
     // Usb config
     static EP_OUT_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
     let mut usb_config = usb::Config::default();
     usb_config.vbus_detection = false;
-    let driver = Driver::new_fs(p.USB_OTG_FS, Irqs, p.PA12, p.PA11, &mut EP_OUT_BUFFER.init([0; 1024])[..], usb_config);
+    let driver = Driver::new_fs(
+        peripheral.USB_OTG_FS,
+        Irqs,
+        peripheral.PA12,
+        peripheral.PA11,
+        &mut EP_OUT_BUFFER.init([0; 1024])[..],
+        usb_config,
+    );
 
     // Use internal flash to emulate eeprom
     let storage_config = StorageConfig {
@@ -112,7 +145,7 @@ async fn main(_spawner: Spawner) {
         num_sectors: 2,
         ..Default::default()
     };
-    let flash = async_flash_wrapper(Flash16K(Flash::new_blocking(p.FLASH)));
+    let flash = async_flash_wrapper(Flash16K(Flash::new_blocking(peripheral.FLASH)));
 
     // Keyboard config
     let rmk_config = RmkConfig {
@@ -126,24 +159,24 @@ async fn main(_spawner: Spawner) {
         },
         ..Default::default()
     };
-    let _analog_matrix_power = Output::new(p.PC13, Level::High, Speed::Low);
-    let _analog_matrix_wakeup = Input::new(p.PC5, Pull::Up);
+    let _analog_matrix_power = Output::new(peripheral.PC13, Level::High, Speed::Low);
+    let _analog_matrix_wakeup = Input::new(peripheral.PC5, Pull::Up);
 
     // HC164 columns
-    let ds = Output::new(p.PB3, Level::Low, Speed::VeryHigh);
-    let cp = Output::new(p.PB5, Level::Low, Speed::VeryHigh);
-    let mr = Output::new(p.PD2, Level::Low, Speed::VeryHigh);
+    let ds = Output::new(peripheral.PB3, Level::Low, Speed::VeryHigh);
+    let cp = Output::new(peripheral.PB5, Level::Low, Speed::VeryHigh);
+    let mr = Output::new(peripheral.PD2, Level::Low, Speed::VeryHigh);
     let cols = Hc164Cols::new(ds, cp, mr);
 
     // ADC matrix (rows are ADC pins)
-    let adc: Adc<'_, ADC1> = Adc::new(p.ADC1);
+    let adc: Adc<'_, ADC1> = Adc::new(peripheral.ADC1);
     let row_channels: [AnyAdcChannel<'_, ADC1>; ROW] = [
-        p.PC0.degrade_adc(),
-        p.PC1.degrade_adc(),
-        p.PC2.degrade_adc(),
-        p.PC3.degrade_adc(),
-        p.PA0.degrade_adc(),
-        p.PA1.degrade_adc(),
+        peripheral.PC0.degrade_adc(),
+        peripheral.PC1.degrade_adc(),
+        peripheral.PC2.degrade_adc(),
+        peripheral.PC3.degrade_adc(),
+        peripheral.PA0.degrade_adc(),
+        peripheral.PA1.degrade_adc(),
     ];
 
     let mut matrix = AnalogHallMatrix::<_, ROW, COL>::new(
@@ -155,14 +188,14 @@ async fn main(_spawner: Spawner) {
     );
 
     // Rotary encoder
-    let pin_a = ExtiInput::new(p.PB14, p.EXTI14, Pull::None, Irqs);
-    let pin_b = ExtiInput::new(p.PB15, p.EXTI15, Pull::None, Irqs);
+    let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
+    let pin_b = ExtiInput::new(peripheral.PB15, peripheral.EXTI15, Pull::None, Irqs);
     let mut encoder = RotaryEncoder::with_resolution(pin_a, pin_b, 4, true, 0);
-    let enc_sw_pin = ExtiInput::new(p.PA3, p.EXTI3, Pull::Up, Irqs);
+    let enc_sw_pin = ExtiInput::new(peripheral.PA3, peripheral.EXTI3, Pull::Up, Irqs);
     let mut enc_switch = encoder_switch::EncoderSwitch::new(enc_sw_pin, 0, 13);
 
     // Layer Toggle Switch
-    let layer_toggle_pin = ExtiInput::new(p.PB12, p.EXTI12, Pull::Up, Irqs);
+    let layer_toggle_pin = ExtiInput::new(peripheral.PB12, peripheral.EXTI12, Pull::Up, Irqs);
     let mut layer_toggle = LayerToggle::new_with_default_debounce(
         layer_toggle_pin,
         MatrixPos { row: 5, col: 7 }, // HIGH taps this
@@ -192,17 +225,17 @@ async fn main(_spawner: Spawner) {
     spi_config.frequency = Hertz(1_000_000);
     spi_config.mode = spi::MODE_0;
     let spi_backlight = spi::Spi::new(
-        p.SPI1,     // SPI1
-        p.PA5,      // SCK
-        p.PA7,      // MOSI
-        p.PA6,      // MISO
-        p.DMA2_CH3, // TX DMA
-        p.DMA2_CH0, // RX DMA
+        peripheral.SPI1,     // SPI1
+        peripheral.PA5,      // SCK
+        peripheral.PA7,      // MOSI
+        peripheral.PA6,      // MISO
+        peripheral.DMA2_CH3, // TX DMA
+        peripheral.DMA2_CH0, // RX DMA
         spi_config,
     );
-    let cs0 = Output::new(p.PB8, Level::High, Speed::VeryHigh);
-    let cs1 = Output::new(p.PB9, Level::High, Speed::VeryHigh);
-    let sdb = Output::new(p.PB7, Level::Low, Speed::VeryHigh);
+    let cs0 = Output::new(peripheral.PB8, Level::High, Speed::VeryHigh);
+    let cs1 = Output::new(peripheral.PB9, Level::High, Speed::VeryHigh);
+    let sdb = Output::new(peripheral.PB7, Level::Low, Speed::VeryHigh);
     let mut snled_indicator = SnledIndicatorController::new();
 
     // Start
@@ -217,12 +250,14 @@ async fn main(_spawner: Spawner) {
 }
 
 #[panic_handler]
+/// Panic handler that triggers a backlight blink loop.
 fn panic(_info: &PanicInfo) -> ! {
     // Blink Backlight LEDs
-    let _ = BACKLIGHT_CH.try_send(BacklightCmd::Panic);
-
+    if BACKLIGHT_CH.try_send(BacklightCmd::Panic).is_err() {
+        // channel full or disconnected
+    }
     // Stop everything else
     loop {
-        cortex_m::asm::wfi();
+        wfi();
     }
 }
