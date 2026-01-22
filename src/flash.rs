@@ -33,9 +33,7 @@ impl<F: ReadNorFlash> ReadNorFlash for Flash16K<F> {
     fn capacity(&self) -> usize { self.0.capacity() }
 
     /// Read bytes from the flash at the given offset.
-    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
-        self.0.read(offset, bytes)
-    }
+    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> { self.0.read(offset, bytes) }
 }
 
 impl<F: NorFlash> NorFlash for Flash16K<F> {
@@ -49,7 +47,5 @@ impl<F: NorFlash> NorFlash for Flash16K<F> {
     fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> { self.0.erase(from, to) }
 
     /// Write bytes to the flash at the given offset.
-    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.0.write(offset, bytes)
-    }
+    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> { self.0.write(offset, bytes) }
 }

@@ -80,14 +80,7 @@ use embassy_stm32::{
 use embassy_time::Duration;
 use rmk::{
     channel::EVENT_CHANNEL,
-    config::{
-        BehaviorConfig,
-        DeviceConfig,
-        PositionalConfig,
-        RmkConfig,
-        StorageConfig,
-        VialConfig,
-    },
+    config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
     controller::EventController as _,
     futures::future::join5,
     initialize_encoder_keymap_and_storage,

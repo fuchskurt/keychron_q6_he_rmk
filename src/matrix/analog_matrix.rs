@@ -49,9 +49,7 @@ pub struct HallCfg {
 
 impl Default for HallCfg {
     /// Provide default hall configuration values.
-    fn default() -> Self {
-        Self { settle_after_col: Duration::from_micros(40), actuation_pt: 20, deact_offset: 3 }
-    }
+    fn default() -> Self { Self { settle_after_col: Duration::from_micros(40), actuation_pt: 20, deact_offset: 3 } }
 }
 
 #[derive(Clone, Copy)]
@@ -112,9 +110,7 @@ impl<T: Copy, const ROW: usize, const COL: usize> MatrixGrid<T, ROW, COL> {
     #[inline]
     #[expect(clippy::return_and_then, reason = "Needed for this function.")]
     /// Get a reference to a cell if it exists.
-    fn get(&self, row: usize, col: usize) -> Option<&T> {
-        self.cells.get(row).and_then(|row_cells| row_cells.get(col))
-    }
+    fn get(&self, row: usize, col: usize) -> Option<&T> { self.cells.get(row).and_then(|row_cells| row_cells.get(col)) }
 
     #[inline]
     #[expect(clippy::return_and_then, reason = "Needed for this function.")]
@@ -127,16 +123,12 @@ impl<T: Copy, const ROW: usize, const COL: usize> MatrixGrid<T, ROW, COL> {
     /// Iterate over all grid cells with their coordinates.
     fn iter_cells(&self) -> impl Iterator<Item = ((usize, usize), &T)> {
         self.cells.iter().enumerate().flat_map(|(row_iterator, row)| {
-            row.iter()
-                .enumerate()
-                .map(move |(col_iterator, cell)| ((row_iterator, col_iterator), cell))
+            row.iter().enumerate().map(move |(col_iterator, cell)| ((row_iterator, col_iterator), cell))
         })
     }
 
     /// Create a new grid filled using the provided initializer.
-    fn new(mut function: impl FnMut() -> T) -> Self {
-        Self { cells: from_fn(|_| from_fn(|_| function())) }
-    }
+    fn new(mut function: impl FnMut() -> T) -> Self { Self { cells: from_fn(|_| from_fn(|_| function())) } }
 }
 
 /// Hall-effect analog matrix scanner.
@@ -169,8 +161,7 @@ where
     state: MatrixGrid<KeyState, ROW, COL>,
 }
 
-impl<'peripherals, ADC, const ROW: usize, const COL: usize>
-    AnalogHallMatrix<'peripherals, ADC, ROW, COL>
+impl<'peripherals, ADC, const ROW: usize, const COL: usize> AnalogHallMatrix<'peripherals, ADC, ROW, COL>
 where
     ADC: Instance,
     ADC::Regs: BasicAdcRegs<SampleTime = SampleTime>,
@@ -236,8 +227,7 @@ where
     ) -> Self {
         let settle_after_col = cfg.settle_after_col;
         let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
-        let deact_threshold =
-            cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
+        let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
         Self {
             adc,
             row_adc,
@@ -288,11 +278,8 @@ where
                     continue;
                 }
 
-                let now_pressed = if was_pressed {
-                    new_travel >= self.deact_threshold
-                } else {
-                    new_travel >= self.act_threshold
-                };
+                let now_pressed =
+                    if was_pressed { new_travel >= self.deact_threshold } else { new_travel >= self.act_threshold };
 
                 st.last_raw = raw;
                 st.travel_scaled = new_travel;
@@ -343,8 +330,7 @@ where
         }
 
         let delta = i64::from(delta_from_ref(x));
-        let prod =
-            delta.saturating_mul(i64::from(cal.scale_factor)).saturating_mul(TRAVEL_SCALE_I64);
+        let prod = delta.saturating_mul(i64::from(cal.scale_factor)).saturating_mul(TRAVEL_SCALE_I64);
         let travel = prod.checked_shr(SCALE_SHIFT).unwrap_or(0);
 
         u16::try_from(travel.clamp(0, FULL_TRAVEL_SCALED)).unwrap_or_default()
@@ -396,9 +382,7 @@ const fn compute_scale_factor(zero: u16, full: u16) -> i32 {
         return SCALE_Q_FACTOR;
     }
 
-    let num = i64::from(FULL_TRAVEL_UNIT)
-        .saturating_mul(256_i64)
-        .saturating_mul(i64::from(SCALE_Q_FACTOR));
+    let num = i64::from(FULL_TRAVEL_UNIT).saturating_mul(256_i64).saturating_mul(i64::from(SCALE_Q_FACTOR));
     let Some(quotient) = num.checked_div(full_travel) else {
         return SCALE_Q_FACTOR;
     };

@@ -82,29 +82,13 @@ impl<'peripherals> Snled27351<'peripherals> {
 
     /// Initialize a single SNLED27351 driver.
     async fn init_driver(&mut self, index: usize, chip_current_tune: u8) {
-        self.write_register(
-            index,
-            PAGE_FUNCTION,
-            REG_SOFTWARE_SHUTDOWN,
-            SOFTWARE_SHUTDOWN_SSD_SHUTDOWN,
-        )
-        .await;
+        self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_SHUTDOWN).await;
         self.write_register(index, PAGE_FUNCTION, REG_PULLDOWNUP, PULLDOWNUP_ALL_ENABLED).await;
         self.write_register(index, PAGE_FUNCTION, REG_SCAN_PHASE, SCAN_PHASE_12_CHANNEL).await;
-        self.write_register(
-            index,
-            PAGE_FUNCTION,
-            REG_SLEW_RATE_CONTROL_MODE_1,
-            SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE,
-        )
-        .await;
-        self.write_register(
-            index,
-            PAGE_FUNCTION,
-            REG_SLEW_RATE_CONTROL_MODE_2,
-            SLEW_RATE_CONTROL_MODE_2_SSL_ENABLE,
-        )
-        .await;
+        self.write_register(index, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_1, SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE)
+            .await;
+        self.write_register(index, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_2, SLEW_RATE_CONTROL_MODE_2_SSL_ENABLE)
+            .await;
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SLEEP, SOFTWARE_SLEEP_DISABLE).await;
 
         // Enable LED control (PWM mode)
@@ -120,13 +104,7 @@ impl<'peripherals> Snled27351<'peripherals> {
         self.write(index, PAGE_CURRENT_TUNE, 0x00, &current_tune).await;
 
         // Exit shutdown
-        self.write_register(
-            index,
-            PAGE_FUNCTION,
-            REG_SOFTWARE_SHUTDOWN,
-            SOFTWARE_SHUTDOWN_SSD_NORMAL,
-        )
-        .await;
+        self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_NORMAL).await;
     }
 
     /// Create a new SNLED27351 driver with the provided LED map.
@@ -140,13 +118,7 @@ impl<'peripherals> Snled27351<'peripherals> {
     }
 
     /// Prepare an RGB value for a given brightness.
-    const fn prepare_color(
-        &mut self,
-        red: u8,
-        green: u8,
-        blue: u8,
-        brightness: u8,
-    ) -> (u8, u8, u8) {
+    const fn prepare_color(&mut self, red: u8, green: u8, blue: u8, brightness: u8) -> (u8, u8, u8) {
         self.set_global_brightness_percent(brightness.clamp(0, 100));
         self.scaled_rgb(red, green, blue)
     }
@@ -155,10 +127,7 @@ impl<'peripherals> Snled27351<'peripherals> {
     /// Scale a value using the global brightness.
     const fn scale(&self, value: u8) -> u8 {
         u8::try_from(
-            u16::from(value)
-                .saturating_mul(u16::from(self.global_brightness))
-                .saturating_add(127)
-                .saturating_div(255),
+            u16::from(value).saturating_mul(u16::from(self.global_brightness)).saturating_add(127).saturating_div(255),
         )
         .unwrap_or_default()
     }
@@ -173,14 +142,7 @@ impl<'peripherals> Snled27351<'peripherals> {
     }
 
     /// Set the color for a single LED by index.
-    pub async fn set_color(
-        &mut self,
-        led_index: usize,
-        red: u8,
-        green: u8,
-        blue: u8,
-        brightness: u8,
-    ) {
+    pub async fn set_color(&mut self, led_index: usize, red: u8, green: u8, blue: u8, brightness: u8) {
         let Some(&led) = self.leds.get(led_index) else {
             return;
         };
@@ -196,8 +158,7 @@ impl<'peripherals> Snled27351<'peripherals> {
         }
         let brightness_clamped = brightness.clamp(0, 100);
 
-        let (r_scaled, g_scaled, b_scaled) =
-            self.prepare_color(red, green, blue, brightness_clamped);
+        let (r_scaled, g_scaled, b_scaled) = self.prepare_color(red, green, blue, brightness_clamped);
 
         for &led in self.leds {
             self.write_led_rgb(led, r_scaled, g_scaled, b_scaled).await;
@@ -228,25 +189,20 @@ impl<'peripherals> Snled27351<'peripherals> {
 
         for step in 0..=steps_u32 {
             let scaled = u32::from(target).saturating_mul(step);
-            let percent = scaled
-                .checked_div(steps_u32)
-                .map_or(0, |value| u8::try_from(value).unwrap_or_default());
+            let percent = scaled.checked_div(steps_u32).map_or(0, |value| u8::try_from(value).unwrap_or_default());
             self.set_color_all(red, green, blue, percent).await;
             Timer::after_millis(delay_ms).await;
         }
     }
 
     /// Set the global brightness scale (0-255).
-    const fn set_global_brightness(&mut self, brightness: u8) {
-        self.global_brightness = brightness;
-    }
+    const fn set_global_brightness(&mut self, brightness: u8) { self.global_brightness = brightness; }
 
     /// Set the global brightness as a percentage.
     pub const fn set_global_brightness_percent(&mut self, percent: u8) {
         let percent_parameter = percent.min(100);
         let brightness =
-            u8::try_from(u16::from(percent_parameter).saturating_mul(255).saturating_div(100))
-                .unwrap_or_default();
+            u8::try_from(u16::from(percent_parameter).saturating_mul(255).saturating_div(100)).unwrap_or_default();
         self.set_global_brightness(brightness);
     }
 

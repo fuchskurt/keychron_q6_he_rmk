@@ -24,11 +24,7 @@ impl<'peripherals> Hc164Cols<'peripherals> {
     }
 
     /// Create a new column selector for the HC164.
-    pub const fn new(
-        ds: Output<'peripherals>,
-        cp: Output<'peripherals>,
-        mr: Output<'peripherals>,
-    ) -> Self {
+    pub const fn new(ds: Output<'peripherals>, cp: Output<'peripherals>, mr: Output<'peripherals>) -> Self {
         Self { ds, cp, mr, bit_delay: Duration::from_micros(1) }
     }
 
