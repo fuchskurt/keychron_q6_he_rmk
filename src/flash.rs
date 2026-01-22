@@ -29,13 +29,13 @@ impl<F: ReadNorFlash> ReadNorFlash for Flash16K<F> {
     /// Read granularity for the underlying flash.
     const READ_SIZE: usize = F::READ_SIZE;
 
+    /// Return the total capacity of the flash device.
+    fn capacity(&self) -> usize { self.0.capacity() }
+
     /// Read bytes from the flash at the given offset.
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         self.0.read(offset, bytes)
     }
-
-    /// Return the total capacity of the flash device.
-    fn capacity(&self) -> usize { self.0.capacity() }
 }
 
 impl<F: NorFlash> NorFlash for Flash16K<F> {
@@ -45,7 +45,6 @@ impl<F: NorFlash> NorFlash for Flash16K<F> {
     const WRITE_SIZE: usize = F::WRITE_SIZE;
 
     // 16KB for sectors 1-2
-
     /// Erase the flash range between the given offsets.
     fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> { self.0.erase(from, to) }
 

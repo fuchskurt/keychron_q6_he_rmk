@@ -147,7 +147,7 @@ impl<'peripherals> Snled27351<'peripherals> {
         blue: u8,
         brightness: u8,
     ) -> (u8, u8, u8) {
-        self.set_global_brightness_percent(brightness);
+        self.set_global_brightness_percent(brightness.clamp(0, 100));
         self.scaled_rgb(red, green, blue)
     }
 
@@ -194,8 +194,10 @@ impl<'peripherals> Snled27351<'peripherals> {
         if self.leds.is_empty() {
             return;
         }
+        let brightness_clamped = brightness.clamp(0, 100);
 
-        let (r_scaled, g_scaled, b_scaled) = self.prepare_color(red, green, blue, brightness);
+        let (r_scaled, g_scaled, b_scaled) =
+            self.prepare_color(red, green, blue, brightness_clamped);
 
         for &led in self.leds {
             self.write_led_rgb(led, r_scaled, g_scaled, b_scaled).await;
@@ -212,19 +214,23 @@ impl<'peripherals> Snled27351<'peripherals> {
         steps: u8,
         ramp_time_ms: u32,
     ) {
-        let target = brightness.min(100);
+        let target = brightness.clamp(0, 100);
         if target == 0 || self.leds.is_empty() {
             self.set_color_all(red, green, blue, target).await;
             return;
         }
 
         let steps_u32 = u32::from(steps.max(1));
-        let delay_ms = u64::from(ramp_time_ms.saturating_div(steps_u32).max(1));
+        let delay_ms = match ramp_time_ms.checked_div(steps_u32) {
+            Some(value) if value > 0 => u64::from(value),
+            _ => 1,
+        };
 
         for step in 0..=steps_u32 {
-            let percent =
-                u8::try_from(u32::from(target).saturating_mul(step).saturating_div(steps_u32))
-                    .unwrap_or_default();
+            let scaled = u32::from(target).saturating_mul(step);
+            let percent = scaled
+                .checked_div(steps_u32)
+                .map_or(0, |value| u8::try_from(value).unwrap_or_default());
             self.set_color_all(red, green, blue, percent).await;
             Timer::after_millis(delay_ms).await;
         }

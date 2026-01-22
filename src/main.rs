@@ -13,6 +13,7 @@
     clippy::blanket_clippy_restriction_lints,
     clippy::separated_literal_suffix,
     clippy::single_call_fn,
+    clippy::self_named_module_files,
     reason = "Cleaner code"
 )]
 #![expect(clippy::future_not_send, reason = "Embassy is designed that way")]
@@ -107,7 +108,9 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 /// Entry point for the firmware.
-async fn main(_spawner: Spawner) {
+async fn main(spawner: Spawner) {
+    // Explicitly drop spawner.
+    let _: Spawner = spawner;
     // RCC config
     let mut config = Config::default();
 
@@ -259,8 +262,9 @@ async fn main(_spawner: Spawner) {
 /// Panic handler that triggers a backlight blink loop.
 fn panic(_info: &PanicInfo) -> ! {
     // Blink Backlight LEDs
-    let _ = BACKLIGHT_CH.try_send(BacklightCmd::Panic);
-
+    if BACKLIGHT_CH.try_send(BacklightCmd::Panic).is_err() {
+        // channel full or disconnected
+    }
     // Stop everything else
     loop {
         wfi();

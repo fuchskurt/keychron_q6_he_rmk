@@ -10,25 +10,41 @@ use rmk::{
 #[derive(Copy, Clone)]
 /// Matrix coordinates for a key position.
 pub struct MatrixPos {
-    pub row: u8,
+    /// Column index within the matrix.
     pub col: u8,
+    /// Row index within the matrix.
+    pub row: u8,
 }
 
 /// Input device that toggles layers based on a switch position.
-pub struct LayerToggle<'d> {
-    pin: ExtiInput<'d>,
-    high_pos: MatrixPos,
-    low_pos: MatrixPos,
-
-    last_level: Option<bool>,
-    pending_release: Option<MatrixPos>,
+pub struct LayerToggle<'peripherals> {
+    /// Debounce duration applied to input level changes.
     debounce: Duration,
+    /// Matrix position activated when the input is at a high logic level.
+    high_pos: MatrixPos,
+    /// Last observed logic level of the input pin.
+    last_level: Option<bool>,
+    /// Matrix position activated when the input is at a low logic level.
+    low_pos: MatrixPos,
+    /// Matrix position pending release after a level change.
+    pending_release: Option<MatrixPos>,
+    /// External interrupt input pin used to read the switch state.
+    pin: ExtiInput<'peripherals>,
 }
 
-impl<'d> LayerToggle<'d> {
+impl<'peripherals> LayerToggle<'peripherals> {
+    /// Emit an event if the level has changed.
+    fn maybe_emit_for_level(&mut self, new_level: bool) -> Option<Event> {
+        if self.last_level == Some(new_level) {
+            return None;
+        }
+        self.last_level = Some(new_level);
+        Some(self.queue_tap(self.pos_for_level(new_level)))
+    }
+
     /// Create a new layer toggle with a provided debounce duration.
     pub const fn new(
-        pin: ExtiInput<'d>,
+        pin: ExtiInput<'peripherals>,
         high_pos: MatrixPos,
         low_pos: MatrixPos,
         debounce: Duration,
@@ -38,7 +54,7 @@ impl<'d> LayerToggle<'d> {
 
     /// Create a new layer toggle with the default debounce.
     pub const fn new_with_default_debounce(
-        pin: ExtiInput<'d>,
+        pin: ExtiInput<'peripherals>,
         high_pos: MatrixPos,
         low_pos: MatrixPos,
     ) -> Self {
@@ -64,15 +80,6 @@ impl<'d> LayerToggle<'d> {
             Timer::after(self.debounce).await;
         }
         self.pin.is_high()
-    }
-
-    /// Emit an event if the level has changed.
-    fn maybe_emit_for_level(&mut self, new_level: bool) -> Option<Event> {
-        if self.last_level == Some(new_level) {
-            return None;
-        }
-        self.last_level = Some(new_level);
-        Some(self.queue_tap(self.pos_for_level(new_level)))
     }
 }
 
