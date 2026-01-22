@@ -1,3 +1,5 @@
+//! LED mapping for the SNLED backlight layout.
+
 use crate::snled27351_spi::{
     driver::SnledLed,
     led_address::{
@@ -184,6 +186,7 @@ use crate::snled27351_spi::{
     },
 };
 
+/// LED layout table mapping LED indices to SNLED driver channels.
 pub const LED_LAYOUT: &[SnledLed] = &[
     SnledLed { driver: 0, r: CB7_CA16, g: CB9_CA16, b: CB8_CA16 },
     SnledLed { driver: 0, r: CB7_CA15, g: CB9_CA15, b: CB8_CA15 },

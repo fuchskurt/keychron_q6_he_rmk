@@ -1,11 +1,21 @@
+//! Travel lookup table for analog hall sensors.
+/// Lookup table constant `LUT_MIN`.
 pub const LUT_MIN: u16 = 1200;
+/// Lookup table constant `LUT_MAX`.
 pub const LUT_MAX: u16 = 3500;
+/// Lookup table constant `LUT_SCALE`.
 pub const LUT_SCALE: i32 = 256;
+/// Lookup table constant `LUT_LEN`.
 pub const LUT_LEN: usize = 2301;
+/// Lookup table constant `DELTA_Q`.
 pub const DELTA_Q: u32 = 8;
+/// Lookup table constant `SCALE_Q`.
 pub const SCALE_Q: i32 = 16;
+/// Lookup table constant `SCALE_SHIFT`.
 pub const SCALE_SHIFT: u32 = DELTA_Q.saturating_add(u32::try_from(SCALE_Q).unwrap_or_default());
+/// Lookup table constant `SCALE_Q_FACTOR`.
 pub const SCALE_Q_FACTOR: i32 = 1 << SCALE_Q;
+/// Lookup table constant `LUT_DELTA`.
 pub const LUT_DELTA: [i16; LUT_LEN] = [
     22708, 22677, 22646, 22615, 22584, 22553, 22522, 22491, 22460, 22429, 22399, 22368, 22337, 22307, 22276, 22246,
     22215, 22185, 22155, 22125, 22094, 22064, 22034, 22004, 21974, 21944, 21914, 21884, 21854, 21825, 21795, 21765,
@@ -142,6 +152,7 @@ pub const LUT_DELTA: [i16; LUT_LEN] = [
 ];
 
 #[inline]
+/// Convert a raw reading into a delta using `delta_from_ref` lookup table data.
 pub const fn delta_from_ref(raw: u16) -> i32 {
     let x = raw.clamp(LUT_MIN, LUT_MAX);
     let idx = (x - LUT_MIN) as usize;

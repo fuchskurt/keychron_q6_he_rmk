@@ -1,3 +1,5 @@
+//! Analog hall-effect matrix scanning and calibration.
+
 use crate::matrix::{
     hc164_cols::Hc164Cols,
     travel_lut::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
@@ -11,19 +13,31 @@ use rmk::{
     input_device::InputDevice,
 };
 
+/// Expected travel distance in physical units.
 const FULL_TRAVEL_UNIT: u16 = 40;
+/// Scale factor applied to travel computations.
 const TRAVEL_SCALE: u16 = 6;
+/// `i64` version of `TRAVEL_SCALE`.
 const TRAVEL_SCALE_I64: i64 = i64::from(TRAVEL_SCALE);
+/// Full travel value after scaling.
 const FULL_TRAVEL_SCALED: i64 = i64::from(FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE));
+/// Default full-range calibration delta.
 const DEFAULT_FULL_RANGE: u16 = 900;
+/// Minimum acceptable raw ADC value.
 const VALID_RAW_MIN: u16 = 1200;
+/// Maximum acceptable raw ADC value.
 const VALID_RAW_MAX: u16 = 3500;
+/// Reference zero-travel value for the LUT.
 const REF_ZERO_TRAVEL: u16 = 3121;
+/// Fallback zero value when uncalibrated.
 const UNCALIBRATED_ZERO: u16 = 3000;
+/// Raw ADC delta below which noise is ignored.
 const NOISE_GATE: u16 = 5;
+/// Number of passes used during calibration.
 const CALIB_PASSES: usize = 8;
 
 #[derive(Clone, Copy)]
+/// Configuration for hall matrix scanning thresholds and timing.
 pub struct HallCfg {
     pub settle_after_col: Duration,
     pub actuation_pt: u16,
@@ -31,31 +45,37 @@ pub struct HallCfg {
 }
 
 impl Default for HallCfg {
+    /// Provide default hall configuration values.
     fn default() -> Self { Self { settle_after_col: Duration::from_micros(40), actuation_pt: 20, deact_offset: 3 } }
 }
 
 #[derive(Clone, Copy)]
+/// Calibration values for a single key.
 struct KeyCalib {
     zero: u16,
     scale_factor: i32,
 }
 
 impl KeyCalib {
+    /// Build calibration data from zero and full travel values.
     const fn new(zero: u16, full: u16) -> Self {
         let scale_factor = compute_scale_factor(zero, full);
         Self { zero, scale_factor }
     }
 
+    /// Build an uncalibrated placeholder calibration.
     pub const fn uncalibrated() -> Self {
         Self::new(UNCALIBRATED_ZERO, UNCALIBRATED_ZERO.saturating_sub(DEFAULT_FULL_RANGE))
     }
 }
 
 impl Default for KeyCalib {
+    /// Provide a default uncalibrated calibration record.
     fn default() -> Self { Self::uncalibrated() }
 }
 
 #[derive(Clone, Copy)]
+/// Dynamic state tracked per key.
 struct KeyState {
     last_raw: u16,
     travel_scaled: u16,
@@ -63,34 +83,42 @@ struct KeyState {
 }
 
 impl KeyState {
+    /// Create a new default key state.
     pub const fn new() -> Self { Self { last_raw: 0, travel_scaled: 0, pressed: false } }
 }
 
 impl Default for KeyState {
+    /// Provide a default key state.
     fn default() -> Self { Self::new() }
 }
 
+/// Two-dimensional grid for matrix data.
 struct MatrixGrid<T, const ROW: usize, const COL: usize> {
     cells: [[T; COL]; ROW],
 }
 
 impl<T: Copy, const ROW: usize, const COL: usize> MatrixGrid<T, ROW, COL> {
+    /// Create a new grid filled using the provided initializer.
     fn new(mut f: impl FnMut() -> T) -> Self { Self { cells: from_fn(|_| from_fn(|_| f())) } }
 
     #[inline]
+    /// Get a reference to a cell if it exists.
     fn get(&self, row: usize, col: usize) -> Option<&T> { self.cells.get(row).and_then(|r| r.get(col)) }
 
     #[inline]
+    /// Get a mutable reference to a cell if it exists.
     fn get_mut(&mut self, row: usize, col: usize) -> Option<&mut T> {
         self.cells.get_mut(row).and_then(|r| r.get_mut(col))
     }
 
     #[inline]
+    /// Iterate over all grid cells with their coordinates.
     fn iter_cells(&self) -> impl Iterator<Item = ((usize, usize), &T)> {
         self.cells.iter().enumerate().flat_map(|(r, row)| row.iter().enumerate().map(move |(c, cell)| ((r, c), cell)))
     }
 }
 
+/// Hall-effect analog matrix scanner.
 pub struct AnalogHallMatrix<'d, ADC, const ROW: usize, const COL: usize>
 where
     ADC: Instance,
@@ -116,6 +144,7 @@ where
     ADC: Instance,
     ADC::Regs: BasicAdcRegs<SampleTime = SampleTime>,
 {
+    /// Create a new hall matrix scanner instance.
     pub fn new(
         adc: Adc<'d, ADC>,
         row_adc: [AnyAdcChannel<'d, ADC>; ROW],
@@ -142,6 +171,7 @@ where
     }
 
     #[inline]
+    /// Apply a zero offset to a raw reading and clamp to a valid range.
     const fn apply_zero_offset(zero: u16, raw: u16) -> Option<u16> {
         if zero >= REF_ZERO_TRAVEL {
             raw.checked_sub(zero - REF_ZERO_TRAVEL)
@@ -151,6 +181,7 @@ where
     }
 
     #[inline]
+    /// Convert a raw reading into a scaled travel value.
     fn travel_scaled_from(cal: &KeyCalib, prev: u16, raw: u16) -> u16 {
         if !(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw) {
             return prev;
@@ -172,6 +203,7 @@ where
         u16::try_from(travel.clamp(0, FULL_TRAVEL_SCALED)).unwrap_or_default()
     }
 
+    /// Collect calibration samples to determine zero-travel values.
     async fn calibrate_zero_travel(&mut self) {
         let mut acc: MatrixGrid<u32, ROW, COL> = MatrixGrid::new(|| 0_u32);
 
@@ -207,6 +239,7 @@ where
         self.calibrated = true;
     }
 
+    /// Scan the matrix and enqueue any key state changes.
     async fn scan_and_enqueue_changes(&mut self) {
         let sample_time = self.sample_time;
         let adc = &mut self.adc;
@@ -272,6 +305,7 @@ where
     ADC: Instance,
     ADC::Regs: BasicAdcRegs<SampleTime = SampleTime>,
 {
+    /// Read the next key event, calibrating on first use.
     async fn read_event(&mut self) -> Event {
         if !self.calibrated {
             self.calibrate_zero_travel().await;
@@ -292,6 +326,7 @@ where
 }
 
 #[inline]
+/// Compute a scale factor from zero and full-travel calibration values.
 const fn compute_scale_factor(zero: u16, full: u16) -> i32 {
     let x_full: u16 = if zero >= REF_ZERO_TRAVEL {
         match full.checked_sub(zero.saturating_sub(REF_ZERO_TRAVEL)) {
