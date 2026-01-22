@@ -1,4 +1,8 @@
-use crate::matrix::hc164_cols::Hc164Cols;
+use crate::matrix::{
+    hc164_cols::Hc164Cols,
+    travel_lut::{SCALE_Q_FACTOR, delta_from_ref},
+};
+use core::array::from_fn;
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, SampleTime};
 use embassy_time::{Duration, Timer};
 use heapless::Deque;
@@ -9,53 +13,15 @@ use rmk::{
 
 const FULL_TRAVEL_UNIT: u16 = 40;
 const TRAVEL_SCALE: u16 = 6;
-const FULL_TRAVEL_SCALED: u16 = FULL_TRAVEL_UNIT * TRAVEL_SCALE;
+const TRAVEL_SCALE_I64: i64 = i64::from(TRAVEL_SCALE);
+const FULL_TRAVEL_SCALED: u16 = FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE);
 const DEFAULT_FULL_RANGE: u16 = 900;
 const VALID_RAW_MIN: u16 = 1200;
 const VALID_RAW_MAX: u16 = 3500;
-const VALID_RAW_MIN_F32: f32 = VALID_RAW_MIN as f32;
-const VALID_RAW_MAX_F32: f32 = VALID_RAW_MAX as f32;
 const REF_ZERO_TRAVEL: u16 = 3121;
 const UNCALIBRATED_ZERO: u16 = 3000;
-const TRAVEL_SCALE_F32: f32 = TRAVEL_SCALE as f32;
-const FULL_TRAVEL_SCALED_F32: f32 = FULL_TRAVEL_SCALED as f32;
 const NOISE_GATE: u16 = 5;
 const CALIB_PASSES: usize = 8;
-const POLY_AT_REFZ: f32 = travel_poly(REF_ZERO_TRAVEL as f32);
-
-// Original calibration polynomial:
-//
-// f(x) = A + B·x + C·x² + D·x³
-//
-// f(x) = 426.88962 - 0.48358 · x + 2.04637e-4 · x² - 2.99368e-8 · x³
-//
-// Chebyshev approximation coefficients
-const CHEB_C0: f32 = 27.825;
-const CHEB_C1: f32 = -54.576;
-const CHEB_C2: f32 = -4.244;
-const CHEB_C3: f32 = -11.383;
-const CHEB_RANGE: f32 = VALID_RAW_MAX_F32 - VALID_RAW_MIN_F32;
-const CHEB_MUL: f32 = 2.0 / CHEB_RANGE;
-const CHEB_BIAS: f32 = -(VALID_RAW_MAX_F32 + VALID_RAW_MIN_F32) / CHEB_RANGE;
-
-#[inline]
-const fn x_to_t_pm1(x: f32) -> f32 { x * CHEB_MUL + CHEB_BIAS }
-
-#[inline]
-const fn travel_poly(x: f32) -> f32 {
-    let x = x.clamp(VALID_RAW_MIN_F32, VALID_RAW_MAX_F32);
-    let t = x_to_t_pm1(x);
-
-    // Clenshaw (degree 3)
-    let b3 = CHEB_C3;
-    let b2 = CHEB_C2 + 2.0 * t * b3;
-    let b1 = CHEB_C1 + 2.0 * t * b2 - b3;
-
-    t * b1 - b2 + CHEB_C0
-}
-
-#[inline]
-const fn travel_poly_delta_from_ref(x: f32) -> f32 { travel_poly(x) - POLY_AT_REFZ }
 
 #[derive(Clone, Copy)]
 pub struct HallCfg {
@@ -71,7 +37,7 @@ impl Default for HallCfg {
 #[derive(Clone, Copy)]
 struct KeyCalib {
     zero: u16,
-    scale_factor: f32,
+    scale_factor: i32,
 }
 
 impl KeyCalib {
@@ -109,7 +75,7 @@ struct MatrixGrid<T, const ROW: usize, const COL: usize> {
 }
 
 impl<T: Copy, const ROW: usize, const COL: usize> MatrixGrid<T, ROW, COL> {
-    fn new(mut f: impl FnMut() -> T) -> Self { Self { cells: core::array::from_fn(|_| core::array::from_fn(|_| f())) } }
+    fn new(mut f: impl FnMut() -> T) -> Self { Self { cells: from_fn(|_| from_fn(|_| f())) } }
 
     #[inline]
     fn get(&self, row: usize, col: usize) -> Option<&T> { self.cells.get(row).and_then(|r| r.get(col)) }
@@ -199,10 +165,11 @@ where
             return 0;
         }
 
-        let delta = travel_poly_delta_from_ref(x as f32);
-        let t = delta * cal.scale_factor * TRAVEL_SCALE_F32;
+        let delta = i64::from(delta_from_ref(x));
+        let prod = delta.saturating_mul(i64::from(cal.scale_factor)).saturating_mul(TRAVEL_SCALE_I64);
+        let t = (prod >> (8 + 16)) as i64;
 
-        t.clamp(0.0, FULL_TRAVEL_SCALED_F32) as u16
+        t.clamp(0, FULL_TRAVEL_SCALED as i64) as u16
     }
 
     async fn calibrate_zero_travel(&mut self) {
@@ -320,21 +287,25 @@ where
 }
 
 #[inline]
-const fn compute_scale_factor(zero: u16, full: u16) -> f32 {
+const fn compute_scale_factor(zero: u16, full: u16) -> i32 {
     let x_full = if zero >= REF_ZERO_TRAVEL {
         let off = zero - REF_ZERO_TRAVEL;
         match full.checked_sub(off) {
             Some(v) => v,
-            None => return 1.0,
+            None => return SCALE_Q_FACTOR,
         }
     } else {
         let off = REF_ZERO_TRAVEL - zero;
         match full.checked_add(off) {
             Some(v) => v,
-            None => return 1.0,
+            None => return SCALE_Q_FACTOR,
         }
     };
 
-    let full_travel = travel_poly(x_full as f32) - POLY_AT_REFZ;
-    if full_travel.abs() < 1e-6 { 1.0 } else { (FULL_TRAVEL_UNIT as f32) / full_travel }
+    let full_travel = delta_from_ref(x_full);
+    if full_travel == 0 {
+        return SCALE_Q_FACTOR;
+    }
+    let num = (FULL_TRAVEL_UNIT as i64) * (256i64) * (SCALE_Q_FACTOR as i64);
+    (num / (full_travel as i64)) as i32
 }

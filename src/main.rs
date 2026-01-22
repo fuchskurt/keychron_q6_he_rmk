@@ -1,5 +1,10 @@
 #![no_main]
 #![no_std]
+#![feature(const_trait_impl)]
+#![feature(const_cmp)]
+#![feature(const_option_ops)]
+#![feature(const_index)]
+#![feature(const_convert)]
 
 mod backlight;
 mod flash;
