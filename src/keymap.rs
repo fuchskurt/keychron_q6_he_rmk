@@ -1,5 +1,6 @@
 //! Default keymap definitions and sizes.
 
+#![expect(clippy::min_ident_chars, reason = "RMK-side implementation")]
 use rmk::{
     a,
     df,

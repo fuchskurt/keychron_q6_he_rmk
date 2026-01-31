@@ -1,5 +1,5 @@
 //! SNLED27351 LED address map constants.
-#![allow(dead_code, reason = "Possible unused Addresses")]
+#![expect(dead_code, reason = "Possible unused Addresses")]
 
 /// LED address for `CB1_CA1`.
 pub const CB1_CA1: u8 = 0x00;
