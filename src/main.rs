@@ -34,7 +34,7 @@ mod vial;
 use crate::{
     backlight::{
         init::backlight_runner,
-        lock_indicator::{BACKLIGHT_CH, BacklightCmd, SnledIndicatorController},
+        lock_indicator::{BACKLIGHT_CH, BacklightCmd, SnledIndicatorProcessor},
     },
     flash::Flash16K,
     keymap::{COL, ROW},
@@ -77,14 +77,12 @@ use embassy_stm32::{
 };
 use embassy_time::Duration;
 use rmk::{
-    channel::EVENT_CHANNEL,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
-    controller::EventController as _,
-    futures::future::join5,
+    futures::future::join4,
     initialize_encoder_keymap_and_storage,
     input_device::{Runnable as _, rotary_encoder::RotaryEncoder},
     keyboard::Keyboard,
-    run_devices,
+    run_all,
     run_rmk,
     storage::async_flash_wrapper,
 };
@@ -236,15 +234,14 @@ async fn main(spawner: Spawner) {
     let cs0 = Output::new(peripheral.PB8, Level::High, Speed::VeryHigh);
     let cs1 = Output::new(peripheral.PB9, Level::High, Speed::VeryHigh);
     let sdb = Output::new(peripheral.PB7, Level::Low, Speed::VeryHigh);
-    let mut snled_indicator = SnledIndicatorController::new();
+    let mut snled_indicator = SnledIndicatorProcessor::new();
 
     // Start
-    join5(
-        run_devices!((matrix, encoder, enc_switch, layer_toggle) => EVENT_CHANNEL),
+    join4(
+        run_all!(matrix, encoder, enc_switch, layer_toggle, snled_indicator),
         keyboard.run(),
         run_rmk(&keymap, driver, &mut storage, rmk_config),
         backlight_runner(spi_backlight, cs0, cs1, sdb),
-        snled_indicator.event_loop(),
     )
     .await;
 }

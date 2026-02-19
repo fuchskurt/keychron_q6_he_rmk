@@ -1,11 +1,6 @@
-//! Layer toggle input device handling.
-
 use embassy_stm32::exti::ExtiInput;
 use embassy_time::{Duration, Timer};
-use rmk::{
-    event::{Event, KeyboardEvent},
-    input_device::InputDevice,
-};
+use rmk::{event::KeyboardEvent, macros::input_device};
 
 #[derive(Copy, Clone)]
 /// Matrix coordinates for a key position.
@@ -17,6 +12,7 @@ pub struct MatrixPos {
 }
 
 /// Input device that toggles layers based on a switch position.
+#[input_device(publish = KeyboardEvent)]
 pub struct LayerToggle<'peripherals> {
     /// Debounce duration applied to input level changes.
     debounce: Duration,
@@ -34,7 +30,7 @@ pub struct LayerToggle<'peripherals> {
 
 impl<'peripherals> LayerToggle<'peripherals> {
     /// Emit an event if the level has changed.
-    fn maybe_emit_for_level(&mut self, new_level: bool) -> Option<Event> {
+    fn maybe_emit_for_level(&mut self, new_level: bool) -> Option<KeyboardEvent> {
         if self.last_level == Some(new_level) {
             return None;
         }
@@ -69,25 +65,15 @@ impl<'peripherals> LayerToggle<'peripherals> {
 
     #[inline]
     /// Queue a tap event for the provided position.
-    fn queue_tap(&mut self, pos: MatrixPos) -> Event {
+    fn queue_tap(&mut self, pos: MatrixPos) -> KeyboardEvent {
         self.pending_release = Some(pos);
-        Event::Key(KeyboardEvent::key(pos.row, pos.col, true))
+        KeyboardEvent::key(pos.row, pos.col, true)
     }
 
-    /// Read the switch level after a debounce delay.
-    async fn read_level_debounced(&self) -> bool {
-        if self.debounce != Duration::from_millis(0) {
-            Timer::after(self.debounce).await;
-        }
-        self.pin.is_high()
-    }
-}
-
-impl InputDevice for LayerToggle<'_> {
-    /// Read the next layer toggle event.
-    async fn read_event(&mut self) -> Event {
+    /// Read the next layer-toggle `KeyboardEvent`.
+    async fn read_keyboard_event(&mut self) -> KeyboardEvent {
         if let Some(pos) = self.pending_release.take() {
-            return Event::Key(KeyboardEvent::key(pos.row, pos.col, false));
+            return KeyboardEvent::key(pos.row, pos.col, false);
         }
 
         if self.last_level.is_none() {
@@ -104,5 +90,13 @@ impl InputDevice for LayerToggle<'_> {
                 return evt;
             }
         }
+    }
+
+    /// Read the switch level after a debounce delay.
+    async fn read_level_debounced(&self) -> bool {
+        if self.debounce != Duration::from_millis(0) {
+            Timer::after(self.debounce).await;
+        }
+        self.pin.is_high()
     }
 }

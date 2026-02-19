@@ -1,9 +1,7 @@
-//! Lock indicator backlight integration.
-
 use rmk::{
     channel::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel},
     event::LedIndicatorEvent,
-    macros::controller,
+    macros::processor,
 };
 
 /// Channel used to send backlight indicator commands.
@@ -24,11 +22,11 @@ pub enum BacklightCmd {
     Panic,
 }
 
-#[controller(subscribe = [LedIndicatorEvent])]
+#[processor(subscribe = [LedIndicatorEvent])]
 /// Controller that reacts to indicator events for the SNLED driver.
-pub struct SnledIndicatorController;
+pub struct SnledIndicatorProcessor;
 
-impl SnledIndicatorController {
+impl SnledIndicatorProcessor {
     /// Create a new indicator controller.
     pub const fn new() -> Self { Self }
 

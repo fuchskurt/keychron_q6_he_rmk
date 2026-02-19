@@ -5,13 +5,10 @@ use crate::matrix::{
     travel_lut::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
 };
 use core::array::from_fn;
-use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, Instance, SampleTime};
+use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, Instance};
 use embassy_time::{Duration, Timer};
 use heapless::Deque;
-use rmk::{
-    event::{Event, KeyboardEvent},
-    input_device::InputDevice,
-};
+use rmk::{event::KeyboardEvent, macros::input_device};
 
 /// Expected travel distance in physical units.
 const FULL_TRAVEL_UNIT: u16 = 40;
@@ -35,6 +32,9 @@ const UNCALIBRATED_ZERO: u16 = 3000;
 const NOISE_GATE: u16 = 5;
 /// Number of passes used during calibration.
 const CALIB_PASSES: u32 = 8;
+
+/// ADC sample-time type associated with the selected ADC peripheral.
+type AdcSampleTime<ADC> = <<ADC as BasicInstance>::Regs as BasicAdcRegs>::SampleTime;
 
 #[derive(Clone, Copy)]
 /// Configuration parameters for hall-effect key sensing.
@@ -132,10 +132,12 @@ impl<T: Copy, const ROW: usize, const COL: usize> MatrixGrid<T, ROW, COL> {
 }
 
 /// Hall-effect analog matrix scanner.
+#[input_device(publish = KeyboardEvent)]
 pub struct AnalogHallMatrix<'peripherals, ADC, const ROW: usize, const COL: usize>
 where
-    ADC: Instance,
+    ADC: Instance + BasicInstance,
     ADC::Regs: BasicAdcRegs,
+    AdcSampleTime<ADC>: Clone,
 {
     /// Actuation threshold in scaled travel units.
     act_threshold: u16,
@@ -154,7 +156,7 @@ where
     /// ADC channels corresponding to each row.
     row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
     /// ADC sample time configuration.
-    sample_time: SampleTime,
+    sample_time: AdcSampleTime<ADC>,
     /// Delay after switching a column before sampling.
     settle_after_col: Duration,
     /// Dynamic per-key state for the matrix.
@@ -163,8 +165,9 @@ where
 
 impl<'peripherals, ADC, const ROW: usize, const COL: usize> AnalogHallMatrix<'peripherals, ADC, ROW, COL>
 where
-    ADC: Instance,
-    ADC::Regs: BasicAdcRegs<SampleTime = SampleTime>,
+    ADC: Instance + BasicInstance,
+    ADC::Regs: BasicAdcRegs,
+    AdcSampleTime<ADC>: Clone,
 {
     #[inline]
     /// Apply a zero offset to a raw reading and clamp to a valid range.
@@ -186,7 +189,6 @@ where
     async fn calibrate_zero_travel(&mut self) {
         let mut acc: MatrixGrid<u32, ROW, COL> = MatrixGrid::new(|| 0_u32);
 
-        let sample_time = self.sample_time;
         let adc = &mut self.adc;
         let row_adc = &mut self.row_adc;
 
@@ -196,10 +198,9 @@ where
                 Timer::after(self.settle_after_col).await;
 
                 for (row, ch) in row_adc.iter_mut().enumerate() {
-                    let value = adc.blocking_read(ch, sample_time);
-
+                    let value = adc.blocking_read(ch, self.sample_time.clone());
                     if let Some(cell) = acc.get_mut(row, col) {
-                        (*cell) = (*cell).saturating_add(u32::from(value));
+                        *cell = cell.saturating_add(u32::from(value));
                     }
                 }
 
@@ -221,7 +222,7 @@ where
     pub fn new(
         adc: Adc<'peripherals, ADC>,
         row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
-        sample_time: SampleTime,
+        sample_time: AdcSampleTime<ADC>,
         cols: Hc164Cols<'peripherals>,
         cfg: HallCfg,
     ) -> Self {
@@ -243,9 +244,27 @@ where
         }
     }
 
+    /// Read the next debounced `KeyboardEvent` from the analog hall matrix.
+    async fn read_keyboard_event(&mut self) -> KeyboardEvent {
+        if !self.calibrated {
+            self.calibrate_zero_travel().await;
+        }
+
+        loop {
+            if let Some(ev) = self.pending.pop_front() {
+                return ev;
+            }
+
+            self.scan_and_enqueue_changes().await;
+
+            if self.pending.is_empty() {
+                Timer::after(Duration::from_micros(50)).await;
+            }
+        }
+    }
+
     /// Scan the matrix and enqueue any key state changes.
     async fn scan_and_enqueue_changes(&mut self) {
-        let sample_time = self.sample_time;
         let adc = &mut self.adc;
         let row_adc = &mut self.row_adc;
 
@@ -254,7 +273,7 @@ where
             Timer::after(self.settle_after_col).await;
 
             for (row, ch) in row_adc.iter_mut().enumerate() {
-                let raw = adc.blocking_read(ch, sample_time);
+                let raw = adc.blocking_read(ch, self.sample_time.clone());
 
                 let Some(&cal) = self.calib.get(row, col) else {
                     continue;
@@ -334,31 +353,6 @@ where
         let travel = prod.checked_shr(SCALE_SHIFT).unwrap_or(0);
 
         u16::try_from(travel.clamp(0, FULL_TRAVEL_SCALED)).unwrap_or_default()
-    }
-}
-
-impl<ADC, const ROW: usize, const COL: usize> InputDevice for AnalogHallMatrix<'_, ADC, ROW, COL>
-where
-    ADC: Instance,
-    ADC::Regs: BasicAdcRegs<SampleTime = SampleTime>,
-{
-    /// Read the next key event, calibrating on first use.
-    async fn read_event(&mut self) -> Event {
-        if !self.calibrated {
-            self.calibrate_zero_travel().await;
-        }
-
-        loop {
-            if let Some(ev) = self.pending.pop_front() {
-                return Event::Key(ev);
-            }
-
-            self.scan_and_enqueue_changes().await;
-
-            if self.pending.is_empty() {
-                Timer::after(Duration::from_micros(50)).await;
-            }
-        }
     }
 }
 
