@@ -32,10 +32,7 @@ mod snled27351_spi;
 mod vial;
 
 use crate::{
-    backlight::{
-        init::backlight_runner,
-        lock_indicator::{BACKLIGHT_CH, BacklightCmd, SnledIndicatorProcessor},
-    },
+    backlight::{init::backlight_runner, lock_indicator::SnledIndicatorProcessor},
     flash::Flash16K,
     keymap::{COL, ROW},
     matrix::{
@@ -46,7 +43,7 @@ use crate::{
     },
 };
 use core::panic::PanicInfo;
-use cortex_m::asm::wfi;
+use cortex_m::{asm, peripheral::SCB};
 use embassy_executor::Spawner;
 use embassy_stm32::{
     Config,
@@ -247,14 +244,8 @@ async fn main(spawner: Spawner) {
 }
 
 #[panic_handler]
-/// Panic handler that triggers a backlight blink loop.
+/// Panic handler that triggers a restart.
 fn panic(_info: &PanicInfo) -> ! {
-    // Blink Backlight LEDs
-    if BACKLIGHT_CH.try_send(BacklightCmd::Panic).is_err() {
-        // channel full or disconnected
-    }
-    // Stop everything else
-    loop {
-        wfi();
-    }
+    asm::delay(10_000);
+    SCB::sys_reset();
 }

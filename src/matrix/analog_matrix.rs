@@ -1,5 +1,3 @@
-//! Analog hall-effect matrix scanning and calibration.
-
 use crate::matrix::{
     hc164_cols::Hc164Cols,
     travel_lut::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},

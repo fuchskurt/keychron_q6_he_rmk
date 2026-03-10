@@ -19,8 +19,6 @@ const CAPS_LOCK_LED_INDEX: usize = 62;
 const NUM_LOCK_LED_INDEX: usize = 37;
 /// Brightness used for indicator LEDs.
 const INDICATOR_BRIGHTNESS: u8 = 100;
-/// Delay between panic blink toggles.
-const PANIC_BLINK_DELAY_MS: u64 = 300;
 /// RGB value for the red indicator state.
 const INDICATOR_RED: (u8, u8, u8) = (255, 0, 0);
 /// RGB value for the white indicator state.
@@ -50,14 +48,6 @@ pub async fn backlight_runner(
                 let (num_r, num_g, num_b) = if num { INDICATOR_WHITE } else { INDICATOR_OFF };
                 backlight.set_color(NUM_LOCK_LED_INDEX, num_r, num_g, num_b, INDICATOR_BRIGHTNESS).await;
             }
-            BacklightCmd::Panic => loop {
-                let (panic_r, panic_g, panic_b) = INDICATOR_RED;
-                backlight.set_color_all(panic_r, panic_g, panic_b, INDICATOR_BRIGHTNESS).await;
-                embassy_time::Timer::after_millis(PANIC_BLINK_DELAY_MS).await;
-                let (off_r, off_g, off_b) = INDICATOR_OFF;
-                backlight.set_color_all(off_r, off_g, off_b, 0).await;
-                embassy_time::Timer::after_millis(PANIC_BLINK_DELAY_MS).await;
-            },
         }
     }
 }

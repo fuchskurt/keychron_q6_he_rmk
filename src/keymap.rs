@@ -16,7 +16,6 @@ pub const COL: usize = 21;
 pub const ROW: usize = 6;
 /// Number of supported layers.
 pub const NUM_LAYER: usize = 2;
-
 /// Number of rotary encoders.
 pub const NUM_ENCODER: usize = 1;
 

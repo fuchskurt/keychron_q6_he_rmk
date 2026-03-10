@@ -1,5 +1,3 @@
-//! Encoder switch input device handling.
-
 use embassy_stm32::exti::ExtiInput;
 use embassy_time::{Duration, Timer};
 use rmk::{event::KeyboardEvent, macros::input_device};

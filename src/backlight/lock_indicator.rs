@@ -18,8 +18,6 @@ pub enum BacklightCmd {
         /// Whether Num Lock is active.
         num: bool,
     },
-    /// Trigger a panic blink sequence.
-    Panic,
 }
 
 #[processor(subscribe = [LedIndicatorEvent])]
