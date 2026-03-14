@@ -219,7 +219,7 @@ async fn main(spawner: Spawner) {
         peripheral.PA7,      // MOSI
         peripheral.PA6,      // MISO
         peripheral.DMA2_CH3, // TX DMA
-        peripheral.DMA2_CH0, // RX DMA
+        peripheral.DMA2_CH2, // RX DMA
         spi_config,
     );
     let cs0 = Output::new(peripheral.PB8, Level::High, Speed::VeryHigh);
