@@ -343,7 +343,7 @@ where
         };
 
         if x > REF_ZERO_TRAVEL {
-            return 0;
+            return prev;
         }
 
         let delta = i64::from(delta_from_ref(x));
