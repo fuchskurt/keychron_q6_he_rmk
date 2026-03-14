@@ -56,6 +56,10 @@ pub struct Snled27351<'peripherals> {
     global_brightness: u8,
     /// Static mapping of logical LEDs to driver channels.
     leds: &'static [SnledLed],
+    /// Index is the raw SNLED register address (0x00–0xBF).
+    pwm_buf: [[u8; PWM_REGISTER_COUNT]; DRIVER_COUNT],
+    /// Whether each driver's buffer has unsent changes.
+    pwm_dirty: [bool; DRIVER_COUNT],
     /// Shutdown (SDB) control pin for enabling or disabling the driver.
     sdb: Output<'peripherals>,
     /// SPI peripheral used to communicate with the SNLED driver(s).
@@ -63,6 +67,23 @@ pub struct Snled27351<'peripherals> {
 }
 
 impl<'peripherals> Snled27351<'peripherals> {
+    /// Flush all dirty PWM shadow buffers to the hardware.
+    pub async fn flush(&mut self) {
+        for drv in 0..DRIVER_COUNT {
+            if !self.pwm_dirty.get(drv).copied().unwrap_or(false) {
+                continue;
+            }
+            // Copy the buffer onto the stack before calling `self.write` so
+            // that the immutable borrow of `self.pwm_buf[drv]` is released
+            // before the mutable borrow of `self` in `write` begins.
+            let Some(&buf) = self.pwm_buf.get(drv) else { continue };
+            self.write(drv, PAGE_PWM, PAGE_LED_CONTROL, &buf).await;
+            if let Some(dirty) = self.pwm_dirty.get_mut(drv) {
+                *dirty = false;
+            }
+        }
+    }
+
     /// Initialize all SNLED27351 driver chips.
     pub async fn init(&mut self, chip_current_tune: u8) {
         // Keep CS inactive
@@ -114,7 +135,15 @@ impl<'peripherals> Snled27351<'peripherals> {
         sdb: Output<'peripherals>,
         leds: &'static [SnledLed],
     ) -> Self {
-        Self { spi, cs, sdb, leds, global_brightness: 255 }
+        Self {
+            spi,
+            cs,
+            sdb,
+            leds,
+            global_brightness: 255,
+            pwm_buf: [[0_u8; PWM_REGISTER_COUNT]; DRIVER_COUNT],
+            pwm_dirty: [false; DRIVER_COUNT],
+        }
     }
 
     /// Prepare an RGB value for a given brightness.
@@ -148,7 +177,8 @@ impl<'peripherals> Snled27351<'peripherals> {
         };
 
         let (r_scaled, g_scaled, b_scaled) = self.prepare_color(red, green, blue, brightness);
-        self.write_led_rgb(led, r_scaled, g_scaled, b_scaled).await;
+        self.stage_led_rgb(led, r_scaled, g_scaled, b_scaled);
+        self.flush().await;
     }
 
     /// Set the color for all LEDs.
@@ -161,8 +191,9 @@ impl<'peripherals> Snled27351<'peripherals> {
         let (r_scaled, g_scaled, b_scaled) = self.prepare_color(red, green, blue, brightness_clamped);
 
         for &led in self.leds {
-            self.write_led_rgb(led, r_scaled, g_scaled, b_scaled).await;
+            self.stage_led_rgb(led, r_scaled, g_scaled, b_scaled);
         }
+        self.flush().await;
     }
 
     /// Set the color for all LEDs with a soft-start ramp.
@@ -206,6 +237,26 @@ impl<'peripherals> Snled27351<'peripherals> {
         self.set_global_brightness(brightness);
     }
 
+    /// Write scaled RGB values into the PWM shadow buffer for one LED.
+    const fn stage_led_rgb(&mut self, led: SnledLed, red: u8, green: u8, blue: u8) {
+        let drv = usize::from(led.driver);
+        let Some(buf) = self.pwm_buf.get_mut(drv) else { return };
+
+        if let Some(slot) = buf.get_mut(usize::from(led.red)) {
+            *slot = red;
+        }
+        if let Some(slot) = buf.get_mut(usize::from(led.green)) {
+            *slot = green;
+        }
+        if let Some(slot) = buf.get_mut(usize::from(led.blue)) {
+            *slot = blue;
+        }
+
+        if let Some(dirty) = self.pwm_dirty.get_mut(drv) {
+            *dirty = true;
+        }
+    }
+
     /// Write data to the specified register page.
     async fn write(&mut self, index: usize, page: u8, reg: u8, data: &[u8]) {
         let Some(cs) = self.cs.get_mut(index) else {
@@ -222,14 +273,6 @@ impl<'peripherals> Snled27351<'peripherals> {
             return;
         }
         cs.set_high();
-    }
-
-    /// Write an RGB value to a specific LED.
-    async fn write_led_rgb(&mut self, led: SnledLed, red: u8, green: u8, blue: u8) {
-        let drv = usize::from(led.driver);
-        self.write_register(drv, PAGE_PWM, led.red, red).await;
-        self.write_register(drv, PAGE_PWM, led.green, green).await;
-        self.write_register(drv, PAGE_PWM, led.blue, blue).await;
     }
 
     /// Write a single-byte register value.
