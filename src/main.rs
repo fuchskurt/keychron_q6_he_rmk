@@ -72,7 +72,6 @@ use embassy_stm32::{
     time::Hertz,
     usb::{self, Driver},
 };
-use embassy_time::Duration;
 use rmk::{
     KeymapData,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
@@ -178,9 +177,9 @@ async fn main(spawner: Spawner) {
     let mut matrix = AnalogHallMatrix::<_, ROW, COL>::new(
         adc,
         row_channels,
-        SampleTime::CYCLES15,
+        SampleTime::CYCLES3,
         cols,
-        HallCfg { settle_after_col: Duration::from_micros(10), ..HallCfg::default() },
+        HallCfg { settle_after_col_cycles: 84, ..HallCfg::default() },
     );
 
     // Rotary encoder

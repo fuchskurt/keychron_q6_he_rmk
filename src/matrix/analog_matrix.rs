@@ -3,6 +3,7 @@ use crate::matrix::{
     travel_lut::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
 };
 use core::array::from_fn;
+use cortex_m::asm::delay;
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, Instance};
 use embassy_time::{Duration, Timer};
 use heapless::Deque;
@@ -42,12 +43,12 @@ pub struct HallCfg {
     /// Offset from the actuation point required for de-activation.
     pub deact_offset: u16,
     /// Delay after switching a column before sampling the ADC.
-    pub settle_after_col: Duration,
+    pub settle_after_col_cycles: u32,
 }
 
 impl Default for HallCfg {
     /// Provide default hall configuration values.
-    fn default() -> Self { Self { settle_after_col: Duration::from_micros(40), actuation_pt: 20, deact_offset: 3 } }
+    fn default() -> Self { Self { settle_after_col_cycles: 84, actuation_pt: 20, deact_offset: 3 } }
 }
 
 #[derive(Clone, Copy)]
@@ -156,7 +157,7 @@ where
     /// ADC sample time configuration.
     sample_time: AdcSampleTime<ADC>,
     /// Delay after switching a column before sampling.
-    settle_after_col: Duration,
+    settle_after_col_cycles: u32,
     /// Dynamic per-key state for the matrix.
     state: MatrixGrid<KeyState, ROW, COL>,
 }
@@ -193,7 +194,7 @@ where
         for _ in 0..CALIB_PASSES {
             for col in 0..COL {
                 self.cols.select(col).await;
-                Timer::after(self.settle_after_col).await;
+                delay(self.settle_after_col_cycles);
 
                 for (row, ch) in row_adc.iter_mut().enumerate() {
                     let value = adc.blocking_read(ch, self.sample_time.clone());
@@ -224,7 +225,7 @@ where
         cols: Hc164Cols<'peripherals>,
         cfg: HallCfg,
     ) -> Self {
-        let settle_after_col = cfg.settle_after_col;
+        let settle_after_col_cycles = cfg.settle_after_col_cycles;
         let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
         let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
         Self {
@@ -232,7 +233,7 @@ where
             row_adc,
             sample_time,
             cols,
-            settle_after_col,
+            settle_after_col_cycles,
             act_threshold,
             deact_threshold,
             calib: MatrixGrid::new(KeyCalib::default),
@@ -268,7 +269,7 @@ where
 
         for col in 0..COL {
             self.cols.select(col).await;
-            Timer::after(self.settle_after_col).await;
+            delay(self.settle_after_col_cycles);
 
             for (row, ch) in row_adc.iter_mut().enumerate() {
                 let raw = adc.blocking_read(ch, self.sample_time.clone());
