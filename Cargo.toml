@@ -21,9 +21,9 @@ rmk = { version = "*", default-features = false, features = ["async_matrix", "st
 static_cell = "2.1"
 
 [build-dependencies]
-xz2 = "0.1.7"
-json = "0.12"
-const-gen = "1.6"
+xz2 = "*"
+json = "*"
+const-gen = "*"
 
 [[bin]]
 name = "rmk-q6_he_ansi"

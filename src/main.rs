@@ -74,9 +74,10 @@ use embassy_stm32::{
 };
 use embassy_time::Duration;
 use rmk::{
+    KeymapData,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
     futures::future::join4,
-    initialize_encoder_keymap_and_storage,
+    initialize_keymap_and_storage,
     input_device::{Runnable as _, rotary_encoder::RotaryEncoder},
     keyboard::Keyboard,
     run_all,
@@ -198,19 +199,12 @@ async fn main(spawner: Spawner) {
     );
 
     // Initialize the storage and keymap
-    let mut default_keymap = keymap::get_default_keymap();
-    let mut default_encoder = keymap::get_default_encoder_map();
+    let mut keymap_data = KeymapData::new_with_encoder(keymap::get_default_keymap(), keymap::get_default_encoder_map());
     let mut behavior_config = BehaviorConfig::default();
-    let mut per_key_config = PositionalConfig::default();
-    let (keymap, mut storage) = initialize_encoder_keymap_and_storage(
-        &mut default_keymap,
-        &mut default_encoder,
-        flash,
-        &storage_config,
-        &mut behavior_config,
-        &mut per_key_config,
-    )
-    .await;
+    let key_config = PositionalConfig::default();
+    let (keymap, mut storage) =
+        initialize_keymap_and_storage(&mut keymap_data, flash, &storage_config, &mut behavior_config, &key_config)
+            .await;
 
     // Initialize the  keyboard
     let mut keyboard = Keyboard::new(&keymap);
