@@ -57,7 +57,7 @@ const fn correct(red: u8, green: u8, blue: u8, brightness_percent: u8) -> (u8, u
     )
 }
 
-/// Runs the soft-start brightness ramp at initialisation.
+/// Runs the soft-start brightness ramp at initialization.
 ///
 /// Steps brightness from 0 up to `target_brightness` over
 /// [`SOFTSTART_STEPS`] increments across [`SOFTSTART_RAMP_MS`]
@@ -86,7 +86,7 @@ async fn softstart(
 
 /// Runs the backlight controller loop.
 ///
-/// Initialises the SNLED27351 drivers, performs a soft-start brightness ramp,
+/// Initializes the SNLED27351 drivers, performs a soft-start brightness ramp,
 /// then enters the event loop responding to [`BacklightCmd`] messages.
 pub async fn backlight_runner(
     spi: Spi<'static, Async, spi::mode::Master>,
