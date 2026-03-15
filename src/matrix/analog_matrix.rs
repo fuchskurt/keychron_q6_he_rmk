@@ -197,13 +197,12 @@ where
 
         let adc = &mut self.adc;
         let row_adc = &mut self.row_adc;
+        let sample_time = self.sample_time.clone();
 
         for _ in 0..CALIB_PASSES {
             for col in 0..COL {
                 self.cols.select(col);
                 delay(self.settle_after_col_cycles);
-                let sample_time = self.sample_time.clone();
-
                 for (row, ch) in row_adc.iter_mut().enumerate() {
                     let value = adc.blocking_read(ch, sample_time.clone());
                     if let Some(cell) = acc.get_mut(row, col) {
@@ -265,11 +264,11 @@ where
     fn scan_for_next_change(&mut self) -> Option<KeyboardEvent> {
         let adc = &mut self.adc;
         let row_adc = &mut self.row_adc;
+        let sample_time = self.sample_time.clone();
 
         for col in 0..COL {
             self.cols.select(col);
             delay(self.settle_after_col_cycles);
-            let sample_time = self.sample_time.clone();
 
             for (row, ch) in row_adc.iter_mut().enumerate() {
                 let raw = adc.blocking_read(ch, sample_time.clone());
