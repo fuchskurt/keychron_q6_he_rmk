@@ -1,6 +1,5 @@
 #![no_main]
 #![no_std]
-#![expect(incomplete_features, reason = "Needed for one dimensional matrix grid")]
 #![feature(const_trait_impl)]
 #![feature(const_cmp)]
 #![feature(const_option_ops)]
@@ -17,9 +16,10 @@
     clippy::separated_literal_suffix,
     clippy::single_call_fn,
     clippy::self_named_module_files,
-    reason = "Cleaner code"
+    clippy::future_not_send,
+    incomplete_features,
+    reason = "Implementation specific ignored lints"
 )]
-#![expect(clippy::future_not_send, reason = "Embassy is designed that way")]
 /// Backlight driver integration.
 mod backlight;
 /// Flash storage wrapper types.
