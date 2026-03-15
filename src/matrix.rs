@@ -8,5 +8,5 @@ pub mod encoder_switch;
 pub mod hc164_cols;
 /// Layer toggle input handling.
 pub mod layer_toggle;
-/// Travel lookup table data.
-pub mod travel_lut;
+/// Travel polynomial functions.
+pub mod travel_helpers;

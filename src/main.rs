@@ -6,6 +6,7 @@
 #![feature(const_index)]
 #![feature(const_convert)]
 #![feature(const_result_trait_fn)]
+#![feature(const_ops)]
 #![warn(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
 #![deny(warnings)]
 #![expect(
@@ -17,7 +18,6 @@
     reason = "Cleaner code"
 )]
 #![expect(clippy::future_not_send, reason = "Embassy is designed that way")]
-
 /// Backlight driver integration.
 mod backlight;
 /// Flash storage wrapper types.
