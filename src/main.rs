@@ -212,7 +212,7 @@ async fn main(spawner: Spawner) {
 
     // LED backlight (SNLED27351)
     let mut spi_config = spi::Config::default();
-    spi_config.frequency = Hertz(1_000_000);
+    spi_config.frequency = Hertz(3_500_000);
     spi_config.mode = spi::MODE_0;
     let spi_backlight = spi::Spi::new(
         peripheral.SPI1,     // SPI1
