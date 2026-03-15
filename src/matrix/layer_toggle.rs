@@ -54,7 +54,7 @@ impl<'peripherals> LayerToggle<'peripherals> {
         high_pos: MatrixPos,
         low_pos: MatrixPos,
     ) -> Self {
-        Self::new(pin, high_pos, low_pos, Duration::from_micros(20))
+        Self::new(pin, high_pos, low_pos, Duration::from_micros(5))
     }
 
     #[inline]
