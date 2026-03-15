@@ -126,8 +126,8 @@ where
     #[expect(clippy::arithmetic_side_effects, reason = "Needed for one dimensional matrix grid iteration")]
     fn iter_cells(&self) -> impl Iterator<Item = ((usize, usize), &T)> {
         self.cells.iter().enumerate().map(|(idx, cell)| {
-            let row = idx.wrapping_div(COL);
-            let col = idx.wrapping_rem(COL);
+            let row = idx.saturating_div(COL);
+            let col = idx.saturating_div(COL);
             ((row, col), cell)
         })
     }

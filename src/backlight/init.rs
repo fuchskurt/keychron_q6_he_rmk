@@ -72,11 +72,11 @@ async fn softstart(
 ) {
     let target = u32::from(target_brightness.min(100));
     let steps = u32::from(SOFTSTART_STEPS.max(1));
-    let delay_ms = u64::from(SOFTSTART_RAMP_MS.wrapping_div(steps));
+    let delay_ms = u64::from(SOFTSTART_RAMP_MS.saturating_div(steps));
 
     let mut step = 0_u32;
     while step <= steps {
-        let percent = u8::try_from(target.saturating_mul(step).wrapping_div(steps)).unwrap_or(0);
+        let percent = u8::try_from(target.saturating_mul(step).saturating_div(steps)).unwrap_or(0);
         let (scaled_red, scaled_green, scaled_blue) = correct(base_red, base_green, base_blue, percent);
         backlight.set_all_leds(scaled_red, scaled_green, scaled_blue).await;
         Timer::after_millis(delay_ms).await;
