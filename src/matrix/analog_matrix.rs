@@ -99,35 +99,43 @@ impl Default for KeyState {
     fn default() -> Self { Self::new() }
 }
 
-/// Two-dimensional grid for matrix data.
-struct MatrixGrid<T, const ROW: usize, const COL: usize> {
-    /// Cell storage indexed as `[row][col]`.
-    cells: [[T; COL]; ROW],
+/// One-dimensional grid for matrix data.
+struct MatrixGrid<T, const ROW: usize, const COL: usize>
+where
+    [(); ROW.wrapping_mul(COL)]:,
+{
+    /// Cell storage.
+    cells: [T; ROW.wrapping_mul(COL)],
 }
 
-impl<T: Copy, const ROW: usize, const COL: usize> MatrixGrid<T, ROW, COL> {
-    #[inline]
-    #[expect(clippy::return_and_then, reason = "Needed for this function.")]
+impl<T: Copy, const ROW: usize, const COL: usize> MatrixGrid<T, ROW, COL>
+where
+    [(); ROW.wrapping_mul(COL)]:,
+{
     /// Get a reference to a cell if it exists.
-    fn get(&self, row: usize, col: usize) -> Option<&T> { self.cells.get(row).and_then(|row_cells| row_cells.get(col)) }
-
     #[inline]
-    #[expect(clippy::return_and_then, reason = "Needed for this function.")]
-    /// Get a mutable reference to a cell if it exists.
-    fn get_mut(&mut self, row: usize, col: usize) -> Option<&mut T> {
-        self.cells.get_mut(row).and_then(|row_cells| row_cells.get_mut(col))
+    const fn get(&self, row: usize, col: usize) -> Option<&T> {
+        self.cells.get(row.saturating_mul(COL).saturating_add(col))
     }
 
+    /// Get a mutable reference to a cell if it exists.
     #[inline]
+    const fn get_mut(&mut self, row: usize, col: usize) -> Option<&mut T> {
+        self.cells.get_mut(row.saturating_mul(COL).saturating_add(col))
+    }
+
     /// Iterate over all grid cells with their coordinates.
+    #[expect(clippy::arithmetic_side_effects, reason = "Needed for one dimensional matrix grid iteration")]
     fn iter_cells(&self) -> impl Iterator<Item = ((usize, usize), &T)> {
-        self.cells.iter().enumerate().flat_map(|(row_iterator, row)| {
-            row.iter().enumerate().map(move |(col_iterator, cell)| ((row_iterator, col_iterator), cell))
+        self.cells.iter().enumerate().map(|(idx, cell)| {
+            let row = idx.wrapping_div(COL);
+            let col = idx.wrapping_rem(COL);
+            ((row, col), cell)
         })
     }
 
     /// Create a new grid filled using the provided initializer.
-    fn new(mut function: impl FnMut() -> T) -> Self { Self { cells: from_fn(|_| from_fn(|_| function())) } }
+    fn new(mut function: impl FnMut() -> T) -> Self { Self { cells: from_fn(|_| function()) } }
 }
 
 /// Hall-effect analog matrix scanner.
@@ -137,6 +145,7 @@ where
     ADC: Instance + BasicInstance,
     ADC::Regs: BasicAdcRegs,
     AdcSampleTime<ADC>: Clone,
+    [(); ROW.wrapping_mul(COL)]:,
 {
     /// Actuation threshold in scaled travel units.
     act_threshold: u16,
@@ -167,20 +176,15 @@ where
     ADC: Instance + BasicInstance,
     ADC::Regs: BasicAdcRegs,
     AdcSampleTime<ADC>: Clone,
+    [(); ROW.wrapping_mul(COL)]:,
 {
-    #[inline]
     /// Apply a zero offset to a raw reading and clamp to a valid range.
+    #[inline]
     const fn apply_zero_offset(zero: u16, raw: u16) -> Option<u16> {
         if zero >= REF_ZERO_TRAVEL {
-            match raw.checked_sub(zero.saturating_sub(REF_ZERO_TRAVEL)) {
-                Some(value) => Some(value),
-                None => None,
-            }
+            raw.checked_sub(zero.saturating_sub(REF_ZERO_TRAVEL))
         } else {
-            match raw.checked_add(REF_ZERO_TRAVEL.saturating_sub(zero)) {
-                Some(value) => Some(value),
-                None => None,
-            }
+            raw.checked_add(REF_ZERO_TRAVEL.saturating_sub(zero))
         }
     }
 
@@ -195,9 +199,10 @@ where
             for col in 0..COL {
                 self.cols.select(col).await;
                 delay(self.settle_after_col_cycles);
+                let sample_time = self.sample_time.clone();
 
                 for (row, ch) in row_adc.iter_mut().enumerate() {
-                    let value = adc.blocking_read(ch, self.sample_time.clone());
+                    let value = adc.blocking_read(ch, sample_time.clone());
                     if let Some(cell) = acc.get_mut(row, col) {
                         *cell = cell.saturating_add(u32::from(value));
                     }
@@ -270,9 +275,10 @@ where
         for col in 0..COL {
             self.cols.select(col).await;
             delay(self.settle_after_col_cycles);
+            let sample_time = self.sample_time.clone();
 
             for (row, ch) in row_adc.iter_mut().enumerate() {
-                let raw = adc.blocking_read(ch, self.sample_time.clone());
+                let raw = adc.blocking_read(ch, sample_time.clone());
 
                 let Some(&cal) = self.calib.get(row, col) else {
                     continue;

@@ -54,12 +54,12 @@ pub const SCALE_Q_FACTOR: i32 = 1_i32 << SCALE_Q;
 
 /// Evaluate the degree-3 Chebyshev series at `t` via Clenshaw recurrence.
 #[inline]
-const fn chebyshev(raw: f32) -> f32 {
-    let t2 = raw.mul(2.0_f32);
+const fn chebyshev(scaled_t: f32) -> f32 {
+    let t2 = scaled_t.mul(2.0_f32);
     let b3 = C3;
     let b2 = t2.mul(b3).add(C2);
     let b1 = t2.mul(b2).add(C1).sub(b3);
-    raw.mul(b1).add(C0).sub(b2)
+    scaled_t.mul(b1).add(C0).sub(b2)
 }
 
 /// Returns (f(raw) − f(3121)) as a Q8 fixed-point value (scaled by 256).

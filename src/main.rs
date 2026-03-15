@@ -1,5 +1,6 @@
 #![no_main]
 #![no_std]
+#![expect(incomplete_features, reason = "Needed for one dimensional matrix grid")]
 #![feature(const_trait_impl)]
 #![feature(const_cmp)]
 #![feature(const_option_ops)]
@@ -7,6 +8,7 @@
 #![feature(const_convert)]
 #![feature(const_result_trait_fn)]
 #![feature(const_ops)]
+#![feature(generic_const_exprs)]
 #![warn(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
 #![deny(warnings)]
 #![expect(
