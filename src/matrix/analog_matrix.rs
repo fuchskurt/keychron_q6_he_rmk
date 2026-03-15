@@ -4,9 +4,10 @@ use crate::matrix::{
 };
 use core::array::from_fn;
 use cortex_m::asm::delay;
+use embassy_futures::yield_now;
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, Instance};
 use heapless::Deque;
-use rmk::{event::KeyboardEvent, macros::input_device};
+use rmk::{embassy_futures, event::KeyboardEvent, macros::input_device};
 
 /// Expected travel distance in physical units.
 const FULL_TRAVEL_UNIT: u16 = 40;
@@ -188,7 +189,7 @@ where
     }
 
     /// Collect calibration samples to determine zero-travel values.
-    async fn calibrate_zero_travel(&mut self) {
+    fn calibrate_zero_travel(&mut self) {
         let mut acc: MatrixGrid<u32, ROW, COL> = MatrixGrid::new(|| 0_u32);
 
         let adc = &mut self.adc;
@@ -196,7 +197,7 @@ where
 
         for _ in 0..CALIB_PASSES {
             for col in 0..COL {
-                self.cols.select(col).await;
+                self.cols.select(col);
                 delay(self.settle_after_col_cycles);
                 let sample_time = self.sample_time.clone();
 
@@ -206,8 +207,6 @@ where
                         *cell = cell.saturating_add(u32::from(value));
                     }
                 }
-
-                self.cols.advance().await;
             }
         }
 
@@ -250,7 +249,7 @@ where
     /// Read the next debounced `KeyboardEvent` from the analog hall matrix.
     async fn read_keyboard_event(&mut self) -> KeyboardEvent {
         if !self.calibrated {
-            self.calibrate_zero_travel().await;
+            self.calibrate_zero_travel();
         }
 
         loop {
@@ -258,37 +257,40 @@ where
                 return ev;
             }
 
-            self.scan_and_enqueue_changes().await;
+            self.scan_and_enqueue_changes();
+            yield_now().await;
         }
     }
 
     /// Scan the matrix and enqueue any key state changes.
-    async fn scan_and_enqueue_changes(&mut self) {
+    fn scan_and_enqueue_changes(&mut self) {
         let adc = &mut self.adc;
         let row_adc = &mut self.row_adc;
 
         for col in 0..COL {
-            self.cols.select(col).await;
+            self.cols.select(col);
             delay(self.settle_after_col_cycles);
             let sample_time = self.sample_time.clone();
 
             for (row, ch) in row_adc.iter_mut().enumerate() {
                 let raw = adc.blocking_read(ch, sample_time.clone());
 
-                let Some(&cal) = self.calib.get(row, col) else {
-                    continue;
-                };
                 let Some(st) = self.state.get_mut(row, col) else {
                     continue;
                 };
 
                 let last_raw = st.last_raw;
-                let prev_travel = st.travel_scaled;
-                let was_pressed = st.pressed;
 
                 if last_raw != 0 && last_raw.abs_diff(raw) < NOISE_GATE {
                     continue;
                 }
+
+                let Some(&cal) = self.calib.get(row, col) else {
+                    continue;
+                };
+
+                let prev_travel = st.travel_scaled;
+                let was_pressed = st.pressed;
 
                 let new_travel = Self::travel_scaled_from(&cal, prev_travel, raw);
 
@@ -327,8 +329,6 @@ where
                     }
                 }
             }
-
-            self.cols.advance().await;
         }
     }
 
