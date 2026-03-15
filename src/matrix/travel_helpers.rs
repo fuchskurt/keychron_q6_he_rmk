@@ -42,8 +42,7 @@ const REF_VAL: f32 = 0.837_090_f32;
 pub const VALID_RAW_MIN: u16 = 1200_u16;
 /// Maximum valid raw ADC input.
 pub const VALID_RAW_MAX: u16 = 3500_u16;
-/// Q8 scale of the value returned by [`delta_from_ref`]./// Q exponent of the
-/// delta values returned by [`delta_from_ref`].
+/// Q exponent of the delta values returned by [`delta_from_ref`].
 pub const DELTA_Q: u32 = 8_u32;
 /// Q exponent of the per-key scale factor stored in `KeyCalib`.
 pub const SCALE_Q: i32 = 16_i32;

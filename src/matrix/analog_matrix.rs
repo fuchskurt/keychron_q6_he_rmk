@@ -5,7 +5,6 @@ use crate::matrix::{
 use core::array::from_fn;
 use cortex_m::asm::delay;
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, Instance};
-use embassy_time::{Duration, Timer};
 use heapless::Deque;
 use rmk::{event::KeyboardEvent, macros::input_device};
 
@@ -260,10 +259,6 @@ where
             }
 
             self.scan_and_enqueue_changes().await;
-
-            if self.pending.is_empty() {
-                Timer::after(Duration::from_micros(50)).await;
-            }
         }
     }
 

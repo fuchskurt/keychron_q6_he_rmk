@@ -39,9 +39,9 @@ impl<'peripherals> Hc164Cols<'peripherals> {
     /// Reset the shift register to the initial state.
     async fn reset(&mut self) {
         self.mr.set_low();
-        Timer::after(Duration::from_micros(2)).await;
+        Timer::after(self.bit_delay).await;
         self.mr.set_high();
-        Timer::after(Duration::from_micros(2)).await;
+        Timer::after(self.bit_delay).await;
     }
 
     /// Select a specific column, resetting when column zero is requested.
