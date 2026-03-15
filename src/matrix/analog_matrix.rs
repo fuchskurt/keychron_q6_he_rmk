@@ -4,10 +4,9 @@ use crate::matrix::{
 };
 use core::array::from_fn;
 use cortex_m::asm::delay;
-use embassy_futures::yield_now;
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, Instance};
 use heapless::Deque;
-use rmk::{embassy_futures, event::KeyboardEvent, macros::input_device};
+use rmk::{embassy_futures::yield_now, event::KeyboardEvent, macros::input_device};
 
 /// Expected travel distance in physical units.
 const FULL_TRAVEL_UNIT: u16 = 40;

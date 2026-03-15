@@ -207,7 +207,7 @@ async fn main(spawner: Spawner) {
         initialize_keymap_and_storage(&mut keymap_data, flash, &storage_config, &mut behavior_config, &key_config)
             .await;
 
-    // Initialize the  keyboard
+    // Initialize the keyboard
     let mut keyboard = Keyboard::new(&keymap);
 
     // LED backlight (SNLED27351)
