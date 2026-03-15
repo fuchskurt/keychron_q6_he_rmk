@@ -9,13 +9,13 @@ use heapless::Deque;
 use rmk::{embassy_futures::yield_now, event::KeyboardEvent, macros::input_device};
 
 /// Expected travel distance in physical units.
-const FULL_TRAVEL_UNIT: u16 = 40;
+const FULL_TRAVEL_UNIT: u8 = 40;
 /// Scale factor applied to travel computations.
-const TRAVEL_SCALE: u16 = 6;
+const TRAVEL_SCALE: u8 = 6;
 /// `i64` version of `TRAVEL_SCALE`.
 const TRAVEL_SCALE_I64: i64 = i64::from(TRAVEL_SCALE);
 /// Full travel value after scaling.
-const FULL_TRAVEL_SCALED: i64 = i64::from(FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE));
+const FULL_TRAVEL_SCALED: u8 = FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE);
 /// Default full-range calibration delta.
 const DEFAULT_FULL_RANGE: u16 = 900;
 /// Minimum acceptable raw ADC value.
@@ -29,7 +29,7 @@ const UNCALIBRATED_ZERO: u16 = 3000;
 /// Raw ADC delta below which noise is ignored.
 const NOISE_GATE: u16 = 5;
 /// Number of passes used during calibration.
-const CALIB_PASSES: u32 = 8;
+const CALIB_PASSES: u16 = 8;
 
 /// ADC sample-time type associated with the selected ADC peripheral.
 type AdcSampleTime<ADC> = <<ADC as BasicInstance>::Regs as BasicAdcRegs>::SampleTime;
@@ -38,9 +38,9 @@ type AdcSampleTime<ADC> = <<ADC as BasicInstance>::Regs as BasicAdcRegs>::Sample
 /// Configuration parameters for hall-effect key sensing.
 pub struct HallCfg {
     /// Actuation point in scaled travel units.
-    pub actuation_pt: u16,
+    pub actuation_pt: u8,
     /// Offset from the actuation point required for de-activation.
-    pub deact_offset: u16,
+    pub deact_offset: u8,
     /// Delay after switching a column before sampling the ADC.
     pub settle_after_col_cycles: u32,
 }
@@ -85,7 +85,7 @@ struct KeyState {
     /// Whether the key is currently considered pressed.
     pressed: bool,
     /// Current travel value scaled to internal units.
-    travel_scaled: u16,
+    travel_scaled: u8,
 }
 
 impl KeyState {
@@ -147,7 +147,7 @@ where
     [(); ROW.wrapping_mul(COL)]:,
 {
     /// Actuation threshold in scaled travel units.
-    act_threshold: u16,
+    act_threshold: u8,
     /// ADC peripheral used for sampling hall sensors.
     adc: Adc<'peripherals, ADC>,
     /// Calibration data for each key in the matrix.
@@ -157,7 +157,7 @@ where
     /// Column driver used to select the active column.
     cols: Hc164Cols<'peripherals>,
     /// De-actuation threshold in scaled travel units.
-    deact_threshold: u16,
+    deact_threshold: u8,
     /// Queue of pending keyboard events.
     pending: Deque<KeyboardEvent, 32>,
     /// ADC channels corresponding to each row.
@@ -180,16 +180,23 @@ where
     /// Apply a zero offset to a raw reading and clamp to a valid range.
     #[inline]
     const fn apply_zero_offset(zero: u16, raw: u16) -> Option<u16> {
-        if zero >= REF_ZERO_TRAVEL {
-            raw.checked_sub(zero.saturating_sub(REF_ZERO_TRAVEL))
+        let x = if zero >= REF_ZERO_TRAVEL {
+            match raw.checked_sub(zero.saturating_sub(REF_ZERO_TRAVEL)) {
+                Some(value) => value,
+                None => return None,
+            }
         } else {
-            raw.checked_add(REF_ZERO_TRAVEL.saturating_sub(zero))
-        }
+            match raw.checked_add(REF_ZERO_TRAVEL.saturating_sub(zero)) {
+                Some(value) => value,
+                None => return None,
+            }
+        };
+        if x > REF_ZERO_TRAVEL { None } else { Some(x) }
     }
 
     /// Collect calibration samples to determine zero-travel values.
     fn calibrate_zero_travel(&mut self) {
-        let mut acc: MatrixGrid<u32, ROW, COL> = MatrixGrid::new(|| 0_u32);
+        let mut acc: MatrixGrid<u16, ROW, COL> = MatrixGrid::new(|| 0_u16);
 
         let adc = &mut self.adc;
         let row_adc = &mut self.row_adc;
@@ -203,14 +210,15 @@ where
                 for (row, ch) in row_adc.iter_mut().enumerate() {
                     let value = adc.blocking_read(ch, sample_time.clone());
                     if let Some(cell) = acc.get_mut(row, col) {
-                        *cell = cell.saturating_add(u32::from(value));
+                        *cell = cell.saturating_add(value);
+
                     }
                 }
             }
         }
 
         for ((row, col), acc_cell) in acc.iter_cells() {
-            let avg = u16::try_from((*acc_cell).saturating_div(CALIB_PASSES)).unwrap_or_default();
+            let avg = (*acc_cell).saturating_div(CALIB_PASSES);
 
             if let Some(cal_cell) = self.calib.get_mut(row, col) {
                 *cal_cell = KeyCalib::new(avg, avg.saturating_sub(DEFAULT_FULL_RANGE));
@@ -333,25 +341,17 @@ where
 
     #[inline]
     /// Convert a raw reading into a scaled travel value.
-    fn travel_scaled_from(cal: &KeyCalib, prev: u16, raw: u16) -> u16 {
+    fn travel_scaled_from(cal: &KeyCalib, prev: u8, raw: u16) -> u8 {
         if !(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw) {
             return prev;
         }
-
-        let x = match Self::apply_zero_offset(cal.zero, raw) {
-            Some(x) => x,
-            None => return prev,
-        };
-
-        if x > REF_ZERO_TRAVEL {
+        let Some(x) = Self::apply_zero_offset(cal.zero, raw) else {
             return prev;
-        }
-
+        };
         let delta = i64::from(delta_from_ref(x));
         let prod = delta.saturating_mul(i64::from(cal.scale_factor)).saturating_mul(TRAVEL_SCALE_I64);
         let travel = prod.checked_shr(SCALE_SHIFT).unwrap_or(0);
-
-        u16::try_from(travel.clamp(0, FULL_TRAVEL_SCALED)).unwrap_or_default()
+        u8::try_from(travel.clamp(0_i64, i64::from(FULL_TRAVEL_SCALED))).unwrap_or_default()
     }
 }
 
