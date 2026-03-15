@@ -52,8 +52,6 @@ pub struct SnledLed {
 pub struct Snled27351<'peripherals> {
     /// Chip-select outputs for each SNLED driver instance.
     cs: [Output<'peripherals>; DRIVER_COUNT],
-    /// Global brightness scaling applied to all LEDs.
-    global_brightness: u8,
     /// Static mapping of logical LEDs to driver channels.
     leds: &'static [SnledLed],
     /// Index is the raw SNLED register address (0x00–0xBF).
@@ -140,101 +138,34 @@ impl<'peripherals> Snled27351<'peripherals> {
             cs,
             sdb,
             leds,
-            global_brightness: 255,
             pwm_buf: [[0_u8; PWM_REGISTER_COUNT]; DRIVER_COUNT],
             pwm_dirty: [false; DRIVER_COUNT],
         }
     }
 
-    /// Prepare an RGB value for a given brightness.
-    const fn prepare_color(&mut self, red: u8, green: u8, blue: u8, brightness: u8) -> (u8, u8, u8) {
-        self.set_global_brightness_percent(brightness.clamp(0, 100));
-        self.scaled_rgb(red, green, blue)
+    /// Writes pre-corrected PWM values for all LEDs and flushes immediately.
+    ///
+    /// Expects values that have already had brightness scaling and gamma
+    /// correction applied.
+    pub async fn set_all_leds(&mut self, red: u8, green: u8, blue: u8) {
+        let leds: &'static [SnledLed] = self.leds;
+        for &led in leds {
+            self.stage_led_rgb(led, red, green, blue);
+        }
+        self.flush().await;
     }
 
-    #[inline]
-    /// Scale a value using the global brightness.
-    const fn scale(&self, value: u8) -> u8 {
-        u8::try_from(
-            u16::from(value).saturating_mul(u16::from(self.global_brightness)).saturating_add(127).saturating_div(255),
-        )
-        .unwrap_or_default()
-    }
-
-    #[inline]
-    /// Apply scaling and gamma to an RGB tuple.
-    const fn scaled_rgb(&self, red: u8, green: u8, blue: u8) -> (u8, u8, u8) {
-        let red_scaled = gamma2(self.scale(red));
-        let green_scaled = gamma2(self.scale(green));
-        let blue_scaled = gamma2(self.scale(blue));
-        (red_scaled, green_scaled, blue_scaled)
-    }
-
-    /// Set the color for a single LED by index.
-    pub async fn set_color(&mut self, led_index: usize, red: u8, green: u8, blue: u8, brightness: u8) {
+    /// Writes pre-corrected PWM values for a single LED by index and flushes
+    /// immediately.
+    ///
+    /// Expects values that have already had brightness scaling and gamma
+    /// correction applied. Does nothing if `led_index` is out of bounds.
+    pub async fn set_led(&mut self, led_index: usize, red: u8, green: u8, blue: u8) {
         let Some(&led) = self.leds.get(led_index) else {
             return;
         };
-
-        let (r_scaled, g_scaled, b_scaled) = self.prepare_color(red, green, blue, brightness);
-        self.stage_led_rgb(led, r_scaled, g_scaled, b_scaled);
+        self.stage_led_rgb(led, red, green, blue);
         self.flush().await;
-    }
-
-    /// Set the color for all LEDs.
-    pub async fn set_color_all(&mut self, red: u8, green: u8, blue: u8, brightness: u8) {
-        if self.leds.is_empty() {
-            return;
-        }
-        let brightness_clamped = brightness.clamp(0, 100);
-
-        let (r_scaled, g_scaled, b_scaled) = self.prepare_color(red, green, blue, brightness_clamped);
-
-        for &led in self.leds {
-            self.stage_led_rgb(led, r_scaled, g_scaled, b_scaled);
-        }
-        self.flush().await;
-    }
-
-    /// Set the color for all LEDs with a soft-start ramp.
-    pub async fn set_color_all_softstart(
-        &mut self,
-        red: u8,
-        green: u8,
-        blue: u8,
-        brightness: u8,
-        steps: u8,
-        ramp_time_ms: u32,
-    ) {
-        let target = brightness.clamp(0, 100);
-        if target == 0 || self.leds.is_empty() {
-            self.set_color_all(red, green, blue, target).await;
-            return;
-        }
-
-        let steps_u32 = u32::from(steps.max(1));
-        let delay_ms = match ramp_time_ms.checked_div(steps_u32) {
-            Some(value) if value > 0 => u64::from(value),
-            _ => 1,
-        };
-
-        for step in 0..=steps_u32 {
-            let scaled = u32::from(target).saturating_mul(step);
-            let percent = scaled.checked_div(steps_u32).map_or(0, |value| u8::try_from(value).unwrap_or_default());
-            self.set_color_all(red, green, blue, percent).await;
-            Timer::after_millis(delay_ms).await;
-        }
-    }
-
-    /// Set the global brightness scale (0-255).
-    const fn set_global_brightness(&mut self, brightness: u8) { self.global_brightness = brightness; }
-
-    /// Set the global brightness as a percentage.
-    pub const fn set_global_brightness_percent(&mut self, percent: u8) {
-        let percent_parameter = percent.min(100);
-        let brightness =
-            u8::try_from(u16::from(percent_parameter).saturating_mul(255).saturating_div(100)).unwrap_or_default();
-        self.set_global_brightness(brightness);
     }
 
     /// Write scaled RGB values into the PWM shadow buffer for one LED.
@@ -279,12 +210,4 @@ impl<'peripherals> Snled27351<'peripherals> {
     async fn write_register(&mut self, index: usize, page: u8, reg: u8, data: u8) {
         self.write(index, page, reg, from_ref(&data)).await;
     }
-}
-
-/// Apply a gamma 2.0 correction curve.
-#[inline]
-const fn gamma2(value: u8) -> u8 {
-    // gamma ~2.0
-    let x = u16::from(value);
-    u8::try_from(x.saturating_mul(x).saturating_add(127).saturating_div(255)).unwrap_or_default()
 }
