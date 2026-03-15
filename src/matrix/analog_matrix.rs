@@ -5,7 +5,6 @@ use crate::matrix::{
 use core::array::from_fn;
 use cortex_m::asm::delay;
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, Instance};
-use heapless::Deque;
 use rmk::{embassy_futures::yield_now, event::KeyboardEvent, macros::input_device};
 
 /// Expected travel distance in physical units.
@@ -47,7 +46,7 @@ pub struct HallCfg {
 
 impl Default for HallCfg {
     /// Provide default hall configuration values.
-    fn default() -> Self { Self { settle_after_col_cycles: 84, actuation_pt: 20, deact_offset: 3 } }
+    fn default() -> Self { Self { settle_after_col_cycles: 16, actuation_pt: 20, deact_offset: 3 } }
 }
 
 #[derive(Clone, Copy)]
@@ -158,8 +157,6 @@ where
     cols: Hc164Cols<'peripherals>,
     /// De-actuation threshold in scaled travel units.
     deact_threshold: u8,
-    /// Queue of pending keyboard events.
-    pending: Deque<KeyboardEvent, 32>,
     /// ADC channels corresponding to each row.
     row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
     /// ADC sample time configuration.
@@ -211,7 +208,6 @@ where
                     let value = adc.blocking_read(ch, sample_time.clone());
                     if let Some(cell) = acc.get_mut(row, col) {
                         *cell = cell.saturating_add(value);
-
                     }
                 }
             }
@@ -249,7 +245,6 @@ where
             calib: MatrixGrid::new(KeyCalib::default),
             state: MatrixGrid::new(KeyState::default),
             calibrated: false,
-            pending: Deque::new(),
         }
     }
 
@@ -258,19 +253,16 @@ where
         if !self.calibrated {
             self.calibrate_zero_travel();
         }
-
         loop {
-            if let Some(ev) = self.pending.pop_front() {
+            if let Some(ev) = self.scan_for_next_change() {
                 return ev;
             }
-
-            self.scan_and_enqueue_changes();
             yield_now().await;
         }
     }
 
-    /// Scan the matrix and enqueue any key state changes.
-    fn scan_and_enqueue_changes(&mut self) {
+    /// Scan the matrix and return the first key state change found, if any.
+    fn scan_for_next_change(&mut self) -> Option<KeyboardEvent> {
         let adc = &mut self.adc;
         let row_adc = &mut self.row_adc;
 
@@ -282,61 +274,39 @@ where
             for (row, ch) in row_adc.iter_mut().enumerate() {
                 let raw = adc.blocking_read(ch, sample_time.clone());
 
-                let Some(st) = self.state.get_mut(row, col) else {
-                    continue;
-                };
-
+                let Some(st) = self.state.get_mut(row, col) else { continue };
                 let last_raw = st.last_raw;
 
                 if last_raw != 0 && last_raw.abs_diff(raw) < NOISE_GATE {
                     continue;
                 }
 
-                let Some(&cal) = self.calib.get(row, col) else {
-                    continue;
-                };
-
+                let Some(&cal) = self.calib.get(row, col) else { continue };
                 let prev_travel = st.travel_scaled;
                 let was_pressed = st.pressed;
-
                 let new_travel = Self::travel_scaled_from(&cal, prev_travel, raw);
 
+                st.last_raw = raw;
+
                 if new_travel == prev_travel {
-                    st.last_raw = raw;
                     continue;
                 }
 
+                st.travel_scaled = new_travel;
                 let now_pressed =
                     if was_pressed { new_travel >= self.deact_threshold } else { new_travel >= self.act_threshold };
 
-                st.last_raw = raw;
-                st.travel_scaled = new_travel;
-
                 if now_pressed != st.pressed {
                     st.pressed = now_pressed;
-
-                    let ev = KeyboardEvent::key(
+                    return Some(KeyboardEvent::key(
                         u8::try_from(row).unwrap_or_default(),
                         u8::try_from(col).unwrap_or_default(),
                         now_pressed,
-                    );
-                    if self.pending.push_back(ev).is_err() {
-                        if self.pending.pop_front().is_some() {
-                        } else {
-                            // Queue was unexpectedly empty; nothing to drop
-                        }
-                        match self.pending.push_back(ev) {
-                            Ok(()) => {}
-                            Err(_ev) => {
-                                // Queue still full (or some invariant broke).
-                                // Drop the event.
-                                // Intentionally ignore.
-                            }
-                        }
-                    }
+                    ));
                 }
             }
         }
+        None
     }
 
     #[inline]
