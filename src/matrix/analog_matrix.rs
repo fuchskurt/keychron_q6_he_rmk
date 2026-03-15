@@ -7,7 +7,7 @@ use cortex_m::asm::delay;
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, Instance};
 use rmk::{embassy_futures::yield_now, event::KeyboardEvent, macros::input_device};
 
-/// Expected travel distance in physical units.
+/// Expected travel distance in physical units, represents 4.0 mm.
 const FULL_TRAVEL_UNIT: u8 = 40;
 /// Scale factor applied to travel computations.
 const TRAVEL_SCALE: u8 = 6;
@@ -36,9 +36,9 @@ type AdcSampleTime<ADC> = <<ADC as BasicInstance>::Regs as BasicAdcRegs>::Sample
 #[derive(Clone, Copy)]
 /// Configuration parameters for hall-effect key sensing.
 pub struct HallCfg {
-    /// Actuation point in scaled travel units.
+    /// Actuation point in scaled travel units, where value is mm/10.
     pub actuation_pt: u8,
-    /// Offset from the actuation point required for de-activation.
+    /// Offset from the actuation point required for de-activation in 0.x mm .
     pub deact_offset: u8,
     /// Delay after switching a column before sampling the ADC.
     pub settle_after_col_cycles: u32,
@@ -46,7 +46,7 @@ pub struct HallCfg {
 
 impl Default for HallCfg {
     /// Provide default hall configuration values.
-    fn default() -> Self { Self { settle_after_col_cycles: 16, actuation_pt: 20, deact_offset: 3 } }
+    fn default() -> Self { Self { settle_after_col_cycles: 16, actuation_pt: 15, deact_offset: 3 } }
 }
 
 #[derive(Clone, Copy)]
