@@ -38,7 +38,7 @@ impl<F: ReadNorFlash> ReadNorFlash for Flash16K<F> {
 
 impl<F: NorFlash> NorFlash for Flash16K<F> {
     /// Erase size reported as 16KB for the wrapped flash.
-    const ERASE_SIZE: usize = 16_usize.wrapping_mul(1024);
+    const ERASE_SIZE: usize = 16_usize.saturating_mul(1024);
     /// Write granularity for the underlying flash.
     const WRITE_SIZE: usize = F::WRITE_SIZE;
 
