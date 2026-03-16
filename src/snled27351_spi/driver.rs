@@ -67,7 +67,7 @@ impl SnledBuffers {
     }
 
     /// Write scaled RGB values into the PWM shadow buffer for one LED.
-    pub const fn stage_led(&mut self, led: SnledLed, red: u8, green: u8, blue: u8) {
+    const fn stage_led(&mut self, led: SnledLed, red: u8, green: u8, blue: u8) {
         let drv = usize::from(led.driver);
         let Some(buf) = self.pwm_buf.get_mut(drv) else { return };
 
@@ -102,15 +102,17 @@ impl SnledBus<'_> {
     ///
     /// Takes the buffer slice directly — no stack copy needed because
     /// `buf` and `spi`/`cs` are in separate structs.
-    async fn flush_driver(&mut self, index: usize, buf: &[u8; PWM_REGISTER_COUNT]) {
+    async fn flush_driver(&mut self, index: usize, pwm: &[u8; PWM_REGISTER_COUNT]) {
         let mut tx = [0_u8; SPI_BUF_LEN];
-        if let Some(slot) = tx.get_mut(0) {
-            *slot = WRITE_CMD | PATTERN_CMD | (PAGE_PWM & 0x0F);
-        }
-        if let Some(slot) = tx.get_mut(1) {
-            *slot = 0x00;
-        }
-        tx.get_mut(2..).unwrap_or_default().copy_from_slice(buf);
+
+        let Some(cmd_slot) = tx.get_mut(0) else { return };
+        *cmd_slot = WRITE_CMD | PATTERN_CMD | (PAGE_PWM & 0x0F);
+
+        let Some(reg_slot) = tx.get_mut(1) else { return };
+        *reg_slot = 0x00;
+
+        let Some(payload_slot) = tx.get_mut(2..) else { return };
+        payload_slot.copy_from_slice(pwm);
 
         let Some(cs) = self.cs.get_mut(index) else { return };
         cs.set_low();
@@ -152,19 +154,26 @@ impl SnledBus<'_> {
         let Some(cs) = self.cs.get_mut(index) else { return };
 
         let mut buf = [0_u8; SPI_BUF_LEN];
-        if let Some(slot) = buf.get_mut(0) {
-            *slot = WRITE_CMD | PATTERN_CMD | (page & 0x0F);
-        }
-        if let Some(slot) = buf.get_mut(1) {
-            *slot = reg;
-        }
+
+        let Some(cmd_slot) = buf.get_mut(0) else { return };
+        *cmd_slot = WRITE_CMD | PATTERN_CMD | (page & 0x0F);
+
+        let Some(reg_slot) = buf.get_mut(1) else { return };
+        *reg_slot = reg;
+
         let data_len = data.len().min(PWM_REGISTER_COUNT);
-        buf.get_mut(2..data_len.saturating_add(2))
-            .unwrap_or_default()
-            .copy_from_slice(data.get(..data_len).unwrap_or_default());
+        let payload_end = data_len.saturating_add(2);
+
+        let Some(payload_slot) = buf.get_mut(2..payload_end) else { return };
+        let Some(data_slice) = data.get(..data_len) else { return };
+        payload_slot.copy_from_slice(data_slice);
 
         cs.set_low();
-        if self.spi.write(buf.get(..data_len.saturating_add(2)).unwrap_or_default()).await.is_err() {
+        let Some(out) = buf.get(..payload_end) else {
+            cs.set_high();
+            return;
+        };
+        if self.spi.write(out).await.is_err() {
             cs.set_high();
             return;
         }
