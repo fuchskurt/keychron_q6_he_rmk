@@ -23,7 +23,7 @@
 /// Backlight driver integration.
 mod backlight;
 /// Flash storage wrapper types.
-mod flash;
+mod flash_wrapper;
 /// Default keymap definitions.
 mod keymap;
 /// Matrix scanning components.
@@ -35,7 +35,7 @@ mod vial;
 
 use crate::{
     backlight::{init::backlight_runner, lock_indicator::SnledIndicatorProcessor},
-    flash::Flash16K,
+    flash_wrapper::Flash16K,
     keymap::{COL, ROW},
     matrix::{
         analog_matrix::{AnalogHallMatrix, HallCfg},
@@ -53,6 +53,7 @@ use embassy_stm32::{
     adc::{Adc, AdcChannel as _, AnyAdcChannel, SampleTime},
     bind_interrupts,
     exti::{self, ExtiInput},
+    flash,
     flash::Flash,
     gpio::{Input, Level, Output, Pull, Speed},
     interrupt::typelevel,
@@ -93,6 +94,7 @@ bind_interrupts!(struct Irqs {
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
     EXTI3 => exti::InterruptHandler<typelevel::EXTI3>;
     EXTI15_10 => exti::InterruptHandler<typelevel::EXTI15_10>;
+    FLASH => flash::InterruptHandler;
 });
 
 #[embassy_executor::main]
@@ -143,7 +145,7 @@ async fn main(spawner: Spawner) {
         num_sectors: 2,
         ..Default::default()
     };
-    let flash = async_flash_wrapper(Flash16K(Flash::new_blocking(peripheral.FLASH)));
+    let flash = async_flash_wrapper(Flash16K(Flash::new(peripheral.FLASH, Irqs)));
 
     // Keyboard config
     let rmk_config = RmkConfig {
