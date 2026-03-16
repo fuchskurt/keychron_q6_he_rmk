@@ -17,6 +17,8 @@ use embassy_time::Timer;
 
 /// LED index for the caps lock indicator.
 const CAPS_LOCK_LED_INDEX: usize = 62;
+/// Number of SNLED27351 drivers on this keyboard.
+const DRIVER_COUNT: usize = 2;
 /// LED index for the num lock indicator.
 const NUM_LOCK_LED_INDEX: usize = 37;
 /// Brightness used for indicator LEDs.
@@ -64,7 +66,7 @@ const fn correct(red: u8, green: u8, blue: u8, brightness_percent: u8) -> (u8, u
 /// milliseconds, writing corrected PWM values and flushing each step.
 #[expect(clippy::arithmetic_side_effects, reason = "steps is guaranteed non-zero via .max(1)")]
 async fn softstart(
-    backlight: &mut Snled27351<'static>,
+    backlight: &mut Snled27351<'static, DRIVER_COUNT>,
     base_red: u8,
     base_green: u8,
     base_blue: u8,

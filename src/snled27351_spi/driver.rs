@@ -32,12 +32,6 @@ use embassy_stm32::{
 };
 use embassy_time::Timer;
 
-/// Number of SNLED27351 drivers chained on the SPI bus.
-const DRIVER_COUNT: usize = 2;
-
-/// Maximum SPI payload: 2-byte header + PWM register block.
-const SPI_BUF_LEN: usize = PWM_REGISTER_COUNT.saturating_add(2);
-
 #[derive(Copy, Clone)]
 /// Mapping of an RGB LED to SNLED driver channels.
 pub struct SnledLed {
@@ -53,14 +47,14 @@ pub struct SnledLed {
 
 /// PWM shadow buffers and dirty flags, split from hardware handles so
 /// they can be borrowed independently of `spi` and `cs`.
-struct SnledBuffers {
+struct SnledBuffers<const DRIVER_COUNT: usize> {
     /// PWM shadow buffer per driver; index is the raw register address.
     pwm_buf: [[u8; PWM_REGISTER_COUNT]; DRIVER_COUNT],
     /// Whether each driver's buffer has unsent changes.
     pwm_dirty: [bool; DRIVER_COUNT],
 }
 
-impl SnledBuffers {
+impl<const DRIVER_COUNT: usize> SnledBuffers<DRIVER_COUNT> {
     /// Create zeroed buffers with no pending changes.
     const fn new() -> Self {
         Self { pwm_buf: [[0_u8; PWM_REGISTER_COUNT]; DRIVER_COUNT], pwm_dirty: [false; DRIVER_COUNT] }
@@ -87,8 +81,8 @@ impl SnledBuffers {
     }
 }
 
-/// SNLED27351 SPI bus handle — owns the hardware pins but not the buffers.
-struct SnledBus<'peripherals> {
+/// SNLED27351 SPI bus handle.
+struct SnledBus<'peripherals, const DRIVER_COUNT: usize> {
     /// Chip-select outputs for each SNLED driver instance.
     cs: [Output<'peripherals>; DRIVER_COUNT],
     /// Shutdown (SDB) control pin for enabling or disabling the driver.
@@ -97,13 +91,14 @@ struct SnledBus<'peripherals> {
     spi: Spi<'peripherals, Async, spi::mode::Master>,
 }
 
-impl SnledBus<'_> {
+impl<const DRIVER_COUNT: usize> SnledBus<'_, DRIVER_COUNT> {
     /// Flush one driver's dirty PWM buffer to hardware without copying it.
     ///
     /// Takes the buffer slice directly — no stack copy needed because
     /// `buf` and `spi`/`cs` are in separate structs.
+    /// Maximum SPI payload: 2-byte header + PWM register block.
     async fn flush_driver(&mut self, index: usize, pwm: &[u8; PWM_REGISTER_COUNT]) {
-        let mut tx = [0_u8; SPI_BUF_LEN];
+        let mut tx = [0_u8; PWM_REGISTER_COUNT.saturating_add(2)];
 
         let Some(cmd_slot) = tx.get_mut(0) else { return };
         *cmd_slot = WRITE_CMD | PATTERN_CMD | (PAGE_PWM & 0x0F);
@@ -153,7 +148,7 @@ impl SnledBus<'_> {
     async fn write(&mut self, index: usize, page: u8, reg: u8, data: &[u8]) {
         let Some(cs) = self.cs.get_mut(index) else { return };
 
-        let mut buf = [0_u8; SPI_BUF_LEN];
+        let mut buf = [0_u8; PWM_REGISTER_COUNT.saturating_add(2)];
 
         let Some(cmd_slot) = buf.get_mut(0) else { return };
         *cmd_slot = WRITE_CMD | PATTERN_CMD | (page & 0x0F);
@@ -187,16 +182,16 @@ impl SnledBus<'_> {
 }
 
 /// SNLED27351 driver for RGB LED control.
-pub struct Snled27351<'peripherals> {
+pub struct Snled27351<'peripherals, const DRIVER_COUNT: usize> {
     /// PWM shadow buffers and dirty tracking.
-    bufs: SnledBuffers,
+    bufs: SnledBuffers<DRIVER_COUNT>,
     /// SPI bus and hardware pin handles.
-    bus: SnledBus<'peripherals>,
+    bus: SnledBus<'peripherals, DRIVER_COUNT>,
     /// Static mapping of logical LEDs to driver channels.
     leds: &'static [SnledLed],
 }
 
-impl<'peripherals> Snled27351<'peripherals> {
+impl<'peripherals, const DRIVER_COUNT: usize> Snled27351<'peripherals, DRIVER_COUNT> {
     /// Flush all dirty PWM shadow buffers to hardware.
     pub async fn flush(&mut self) {
         for drv in 0..DRIVER_COUNT {
