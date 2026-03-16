@@ -20,7 +20,7 @@ pub struct EncoderSwitch<'peripherals> {
 impl<'peripherals> EncoderSwitch<'peripherals> {
     /// Create a new encoder switch input wrapper.
     pub const fn new(pin: ExtiInput<'peripherals>, row: u8, col: u8) -> Self {
-        Self { pin, row, col, last_pressed: false, debounce: Duration::from_millis(5) }
+        Self { pin, row, col, last_pressed: false, debounce: Duration::from_millis(1) }
     }
 
     /// Wait for the next debounced encoder switch event.

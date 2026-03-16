@@ -76,6 +76,7 @@ use embassy_stm32::{
     time::Hertz,
     usb::{self, Driver},
 };
+use encoder_switch::EncoderSwitch;
 use rmk::{
     KeymapData,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
@@ -192,7 +193,7 @@ async fn main(spawner: Spawner) {
     let pin_b = ExtiInput::new(peripheral.PB15, peripheral.EXTI15, Pull::None, Irqs);
     let mut encoder = RotaryEncoder::with_resolution(pin_a, pin_b, 4, true, 0);
     let enc_sw_pin = ExtiInput::new(peripheral.PA3, peripheral.EXTI3, Pull::Up, Irqs);
-    let mut enc_switch = encoder_switch::EncoderSwitch::new(enc_sw_pin, 0, 13);
+    let mut enc_switch = EncoderSwitch::new(enc_sw_pin, 0, 13);
 
     // Layer Toggle Switch
     let layer_toggle_pin = ExtiInput::new(peripheral.PB12, peripheral.EXTI12, Pull::Up, Irqs);
