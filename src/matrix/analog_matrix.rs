@@ -127,7 +127,7 @@ where
     fn iter_cells(&self) -> impl Iterator<Item = ((usize, usize), &T)> {
         self.cells.iter().enumerate().map(|(idx, cell)| {
             let row = idx.saturating_div(COL);
-            let col = idx.saturating_div(COL);
+            let col = idx.wrapping_rem_euclid(COL);
             ((row, col), cell)
         })
     }

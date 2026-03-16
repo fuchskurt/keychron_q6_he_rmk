@@ -48,12 +48,18 @@ fn generate_vial_config() {
     let mut keyboard_def_compressed: Vec<u8> = Vec::new();
     XzEncoder::new(vial_cfg.as_bytes(), 6).read_to_end(&mut keyboard_def_compressed).unwrap();
 
-    let keyboard_id: Vec<u8> = vec![0xB9, 0xBC, 0x09, 0xB2, 0x9D, 0x37, 0x4C, 0xEA];
+    let keyboard_id: Vec<u8> = vec![0x36, 0x3B, 0x06, 0xF5, 0x13, 0x9F, 0xE4, 0x46];
+
+    let vial_serial =
+        format!("vial:{:02x}{:02x}{:02x}{:02x}:000001", keyboard_id[0], keyboard_id[1], keyboard_id[2], keyboard_id[3]);
+
     let const_declarations = [
         const_declaration!(pub VIAL_KEYBOARD_DEF = keyboard_def_compressed),
         const_declaration!(pub VIAL_KEYBOARD_ID = keyboard_id),
+        format!("pub const VIAL_SERIAL: &str = \"{vial_serial}\";"),
     ]
-    .map(|s| "#[allow(clippy::redundant_static_lifetimes)]\n".to_owned() + s.as_str())
+    .map(|s| "#[expect(clippy::redundant_static_lifetimes)]\n".to_owned() + s.as_str())
     .join("\n");
+
     fs::write(out_file, const_declarations).unwrap();
 }

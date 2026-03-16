@@ -43,6 +43,7 @@ use crate::{
         hc164_cols::Hc164Cols,
         layer_toggle::{LayerToggle, MatrixPos},
     },
+    vial::VIAL_SERIAL,
 };
 use core::panic::PanicInfo;
 use cortex_m::{asm, peripheral::SCB};
@@ -152,7 +153,7 @@ async fn main(spawner: Spawner) {
             product_name: "Q6 HE",
             vid: 0x3434,
             pid: 0x0B60,
-            serial_number: "vial:f64c2b3c:000001",
+            serial_number: VIAL_SERIAL,
         },
         ..Default::default()
     };
