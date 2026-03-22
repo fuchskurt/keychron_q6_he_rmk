@@ -22,6 +22,8 @@
 )]
 /// Backlight driver integration.
 mod backlight;
+/// External I2C EEPROM calibration storage.
+mod eeprom_storage;
 /// Flash storage wrapper types.
 mod flash_wrapper;
 /// Default keymap definitions.
@@ -35,6 +37,7 @@ mod vial;
 
 use crate::{
     backlight::{init::backlight_runner, lock_indicator::SnledIndicatorProcessor},
+    eeprom_storage::EepromStorage,
     flash_wrapper::Flash16K,
     keymap::{COL, ROW},
     matrix::{
@@ -56,6 +59,7 @@ use embassy_stm32::{
     flash,
     flash::Flash,
     gpio::{Input, Level, Output, Pull, Speed},
+    i2c::{self, I2c},
     interrupt::typelevel,
     peripherals::{self, ADC1},
     rcc::{
@@ -187,6 +191,28 @@ async fn main(spawner: Spawner) {
         cols,
         HallCfg { settle_after_col_cycles: 84, ..HallCfg::default() },
     );
+
+    // External EEPROM (I2C3): load calibration if present, otherwise calibrate
+    // and persist so subsequent boots skip the ADC sweep.
+    //
+    // PA8 = I2C3_SCL (AF4), PC9 = I2C3_SDA (AF4), PB10 = WP (HIGH = protected)
+    let i2c3 = I2c::new_blocking(peripheral.I2C3, peripheral.PA8, peripheral.PC9, Hertz(400_000), i2c::Config::default());
+    let eeprom_wp = Output::new(peripheral.PB10, Level::High, Speed::Low);
+    let mut eeprom = EepromStorage::new(i2c3, eeprom_wp);
+
+    match eeprom.load_calibration::<ROW, COL>() {
+        Some(zeros) => {
+            // Stored calibration found: skip the 8-pass ADC sweep on boot.
+            matrix.load_from_zeros(&zeros);
+        }
+        None => {
+            // No valid calibration in EEPROM: run the sweep and save the result.
+            matrix.calibrate_now();
+            if let Some(zeros) = matrix.get_zeros() {
+                eeprom.save_calibration::<ROW, COL>(&zeros).ok();
+            }
+        }
+    }
 
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
