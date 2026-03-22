@@ -179,6 +179,12 @@ where
         }
     }
 
+    /// Run the calibration ADC sweep immediately and mark as calibrated.
+    ///
+    /// Call this during initialization when no stored calibration is available.
+    /// After calling, use [`Self::get_zeros`] to retrieve values for EEPROM.
+    pub fn calibrate_now(&mut self) { self.calibrate_zero_travel(); }
+
     /// Collect calibration samples to determine zero-travel values.
     fn calibrate_zero_travel(&mut self) {
         let mut acc: MatrixGrid<u16, ROW, COL> = MatrixGrid::new(|| 0_u16);
@@ -205,30 +211,6 @@ where
         self.calibrated = true;
     }
 
-    /// Load calibration from previously stored zero-travel ADC values.
-    ///
-    /// Call this during initialisation if [`crate::eeprom_storage::EepromStorage`]
-    /// returned valid data. Sets `calibrated = true` so the boot-time ADC sweep
-    /// is skipped entirely.
-    pub fn load_from_zeros(&mut self, zeros: &[[u16; COL]; ROW]) {
-        for row in 0..ROW {
-            for col in 0..COL {
-                if let Some(cal) = self.calib.get_mut(row, col) {
-                    let zero = zeros[row][col];
-                    let full = zero.saturating_sub(DEFAULT_FULL_RANGE);
-                    *cal = KeyCalib::new(zero, full);
-                }
-            }
-        }
-        self.calibrated = true;
-    }
-
-    /// Run the calibration ADC sweep immediately and mark as calibrated.
-    ///
-    /// Call this during initialisation when no stored calibration is available.
-    /// After calling, use [`Self::get_zeros`] to retrieve values for EEPROM.
-    pub fn calibrate_now(&mut self) { self.calibrate_zero_travel(); }
-
     /// Return per-key zero-travel ADC values for EEPROM storage.
     ///
     /// Returns `None` if the matrix has not yet been calibrated.
@@ -236,9 +218,24 @@ where
         if !self.calibrated {
             return None;
         }
-        Some(core::array::from_fn(|row| {
-            core::array::from_fn(|col| self.calib.get(row, col).map_or(0, |cal| cal.zero))
-        }))
+        Some(from_fn(|row| from_fn(|col| self.calib.get(row, col).map_or(0, |cal| cal.zero))))
+    }
+
+    /// Load calibration from previously stored zero-travel ADC values.
+    ///
+    /// Call this during initialisation if
+    /// [`crate::eeprom_storage::EepromStorage`] returned valid data. Sets
+    /// `calibrated = true` so the boot-time ADC sweep is skipped entirely.
+    pub fn load_from_zeros(&mut self, zeros: &[[u16; COL]; ROW]) {
+        for (row, row_slice) in zeros.iter().enumerate() {
+            for (col, &zero) in row_slice.iter().enumerate() {
+                if let Some(cal) = self.calib.get_mut(row, col) {
+                    let full = zero.saturating_sub(DEFAULT_FULL_RANGE);
+                    *cal = KeyCalib::new(zero, full);
+                }
+            }
+        }
+        self.calibrated = true;
     }
 
     /// Create a new hall matrix scanner instance.

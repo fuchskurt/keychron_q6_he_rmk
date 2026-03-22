@@ -196,20 +196,21 @@ async fn main(spawner: Spawner) {
     // and persist so subsequent boots skip the ADC sweep.
     //
     // PA8 = I2C3_SCL (AF4), PC9 = I2C3_SDA (AF4), PB10 = WP (HIGH = protected)
-    let i2c3 = I2c::new_blocking(peripheral.I2C3, peripheral.PA8, peripheral.PC9, Hertz(400_000), i2c::Config::default());
+    let mut i2c_config = i2c::Config::default();
+    i2c_config.frequency = Hertz(400_000);
+    let i2c3 = I2c::new_blocking(peripheral.I2C3, peripheral.PA8, peripheral.PC9, i2c_config);
     let eeprom_wp = Output::new(peripheral.PB10, Level::High, Speed::Low);
     let mut eeprom = EepromStorage::new(i2c3, eeprom_wp);
 
-    match eeprom.load_calibration::<ROW, COL>() {
-        Some(zeros) => {
-            // Stored calibration found: skip the 8-pass ADC sweep on boot.
-            matrix.load_from_zeros(&zeros);
-        }
-        None => {
-            // No valid calibration in EEPROM: run the sweep and save the result.
-            matrix.calibrate_now();
-            if let Some(zeros) = matrix.get_zeros() {
-                eeprom.save_calibration::<ROW, COL>(&zeros).ok();
+    if let Some(zeros) = eeprom.load_calibration::<ROW, COL>() {
+        // Stored calibration found: skip the 8-pass ADC sweep on boot.
+        matrix.load_from_zeros(&zeros);
+    } else {
+        // No valid calibration in EEPROM: run the sweep and save the result.
+        matrix.calibrate_now();
+        if let Some(zeros) = matrix.get_zeros() {
+            match eeprom.save_calibration::<ROW, COL>(&zeros) {
+                Ok(()) | Err(_) => {}
             }
         }
     }
