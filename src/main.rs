@@ -55,6 +55,7 @@ use embassy_stm32::{
     Config,
     adc::{Adc, AdcChannel as _, AnyAdcChannel, SampleTime},
     bind_interrupts,
+    dma,
     exti::{self, ExtiInput},
     flash,
     flash::Flash,
@@ -96,10 +97,12 @@ use static_cell::StaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 bind_interrupts!(struct Irqs {
-    OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
+    DMA2_STREAM3 => dma::InterruptHandler<peripherals::DMA2_CH3>;
+    DMA2_STREAM2 => dma::InterruptHandler<peripherals::DMA2_CH2>;
     EXTI3 => exti::InterruptHandler<typelevel::EXTI3>;
     EXTI15_10 => exti::InterruptHandler<typelevel::EXTI15_10>;
     FLASH => flash::InterruptHandler;
+    OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
 });
 
 #[embassy_executor::main]
@@ -238,6 +241,7 @@ async fn main(spawner: Spawner) {
         peripheral.PA6,      // MISO
         peripheral.DMA2_CH3, // TX DMA
         peripheral.DMA2_CH2, // RX DMA
+        Irqs,                // IRQ binding
         spi_config,
     );
     let cs0 = Output::new(peripheral.PB8, Level::High, Speed::VeryHigh);

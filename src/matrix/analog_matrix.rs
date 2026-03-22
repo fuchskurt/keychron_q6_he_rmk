@@ -182,12 +182,6 @@ where
         }
     }
 
-    /// Run the calibration ADC sweep immediately and mark as calibrated.
-    ///
-    /// Call this during initialization when no stored calibration is available.
-    /// After calling, use [`Self::get_zeros`] to retrieve values for EEPROM.
-    pub fn calibrate_now(&mut self) { self.calibrate_zero_travel(); }
-
     /// Collect calibration samples to determine zero-travel values.
     fn calibrate_zero_travel(&mut self) {
         let mut acc: MatrixGrid<u16, ROW, COL> = MatrixGrid::new(|| 0_u16);
@@ -219,6 +213,7 @@ where
     /// Called once inside [`Self::new`]. Tries the EEPROM first; on a miss it
     /// calibrates and writes the result back so the next boot is instant.
     fn init_calibration(&mut self, eeprom: &mut EepromStorage<'_>) {
+        delay(1_000);
         if let Some(zeros) = eeprom.load_calibration::<ROW, COL>() {
             for (row, row_slice) in zeros.iter().enumerate() {
                 for (col, &zero) in row_slice.iter().enumerate() {
@@ -231,8 +226,10 @@ where
         } else {
             self.calibrate_zero_travel();
             let zeros: [[u16; COL]; ROW] =
-                from_fn(|row| from_fn(|col| self.calib.get(row, col).map_or(0, |c| c.zero)));
-            eeprom.save_calibration::<ROW, COL>(&zeros).ok();
+                from_fn(|row| from_fn(|col| self.calib.get(row, col).map_or(0, |col_slice| col_slice.zero)));
+            match eeprom.save_calibration::<ROW, COL>(&zeros) {
+                Ok(()) | Err(_) => {}
+            }
         }
     }
 

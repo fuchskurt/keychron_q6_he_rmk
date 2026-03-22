@@ -1,5 +1,5 @@
 use cortex_m::asm::delay;
-use embassy_stm32::exti::ExtiInput;
+use embassy_stm32::{exti::ExtiInput, mode::Async};
 use rmk::{event::KeyboardEvent, macros::input_device};
 
 #[derive(Copy, Clone)]
@@ -25,7 +25,7 @@ pub struct LayerToggle<'peripherals> {
     /// Matrix position pending release after a level change.
     pending_release: Option<MatrixPos>,
     /// External interrupt input pin used to read the switch state.
-    pin: ExtiInput<'peripherals>,
+    pin: ExtiInput<'peripherals, Async>,
 }
 
 impl<'peripherals> LayerToggle<'peripherals> {
@@ -40,7 +40,7 @@ impl<'peripherals> LayerToggle<'peripherals> {
 
     /// Create a new layer toggle with a provided debounce duration.
     pub const fn new(
-        pin: ExtiInput<'peripherals>,
+        pin: ExtiInput<'peripherals, Async>,
         high_pos: MatrixPos,
         low_pos: MatrixPos,
         debounce_cycles: u32,
@@ -50,7 +50,7 @@ impl<'peripherals> LayerToggle<'peripherals> {
 
     /// Create a new layer toggle with the default debounce.
     pub const fn new_with_default_debounce(
-        pin: ExtiInput<'peripherals>,
+        pin: ExtiInput<'peripherals, Async>,
         high_pos: MatrixPos,
         low_pos: MatrixPos,
     ) -> Self {
