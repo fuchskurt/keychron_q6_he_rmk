@@ -1,6 +1,9 @@
-use crate::matrix::{
-    hc164_cols::Hc164Cols,
-    travel_helpers::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
+use crate::{
+    eeprom_storage::EepromStorage,
+    matrix::{
+        hc164_cols::Hc164Cols,
+        travel_helpers::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
+    },
 };
 use core::array::from_fn;
 use cortex_m::asm::delay;
@@ -211,45 +214,44 @@ where
         self.calibrated = true;
     }
 
-    /// Return per-key zero-travel ADC values for EEPROM storage.
+    /// Apply per-key zero values from EEPROM or run a live ADC sweep.
     ///
-    /// Returns `None` if the matrix has not yet been calibrated.
-    pub fn get_zeros(&self) -> Option<[[u16; COL]; ROW]> {
-        if !self.calibrated {
-            return None;
-        }
-        Some(from_fn(|row| from_fn(|col| self.calib.get(row, col).map_or(0, |cal| cal.zero))))
-    }
-
-    /// Load calibration from previously stored zero-travel ADC values.
-    ///
-    /// Call this during initialisation if
-    /// [`crate::eeprom_storage::EepromStorage`] returned valid data. Sets
-    /// `calibrated = true` so the boot-time ADC sweep is skipped entirely.
-    pub fn load_from_zeros(&mut self, zeros: &[[u16; COL]; ROW]) {
-        for (row, row_slice) in zeros.iter().enumerate() {
-            for (col, &zero) in row_slice.iter().enumerate() {
-                if let Some(cal) = self.calib.get_mut(row, col) {
-                    let full = zero.saturating_sub(DEFAULT_FULL_RANGE);
-                    *cal = KeyCalib::new(zero, full);
+    /// Called once inside [`Self::new`]. Tries the EEPROM first; on a miss it
+    /// calibrates and writes the result back so the next boot is instant.
+    fn init_calibration(&mut self, eeprom: &mut EepromStorage<'_>) {
+        if let Some(zeros) = eeprom.load_calibration::<ROW, COL>() {
+            for (row, row_slice) in zeros.iter().enumerate() {
+                for (col, &zero) in row_slice.iter().enumerate() {
+                    if let Some(cal) = self.calib.get_mut(row, col) {
+                        *cal = KeyCalib::new(zero, zero.saturating_sub(DEFAULT_FULL_RANGE));
+                    }
                 }
             }
+            self.calibrated = true;
+        } else {
+            self.calibrate_zero_travel();
+            let zeros: [[u16; COL]; ROW] =
+                from_fn(|row| from_fn(|col| self.calib.get(row, col).map_or(0, |c| c.zero)));
+            eeprom.save_calibration::<ROW, COL>(&zeros).ok();
         }
-        self.calibrated = true;
     }
 
     /// Create a new hall matrix scanner instance.
+    ///
+    /// Calibration is resolved immediately: if valid data exists in `eeprom` it
+    /// is loaded; otherwise a blocking ADC sweep runs and the result is saved.
     pub fn new(
         adc: Adc<'peripherals, ADC>,
         row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
         sample_time: AdcSampleTime<ADC>,
         cols: Hc164Cols<'peripherals>,
         cfg: HallCfg,
+        eeprom: &mut EepromStorage<'_>,
     ) -> Self {
         let settle_after_col_cycles = cfg.settle_after_col_cycles;
         let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
         let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
-        Self {
+        let mut this = Self {
             adc,
             row_adc,
             sample_time,
@@ -260,14 +262,13 @@ where
             calib: MatrixGrid::new(KeyCalib::default),
             state: MatrixGrid::new(KeyState::default),
             calibrated: false,
-        }
+        };
+        this.init_calibration(eeprom);
+        this
     }
 
     /// Read the next debounced `KeyboardEvent` from the analog hall matrix.
     async fn read_keyboard_event(&mut self) -> KeyboardEvent {
-        if !self.calibrated {
-            self.calibrate_zero_travel();
-        }
         loop {
             if let Some(ev) = self.scan_for_next_change() {
                 return ev;

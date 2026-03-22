@@ -184,36 +184,22 @@ async fn main(spawner: Spawner) {
         peripheral.PA1.degrade_adc(),
     ];
 
-    let mut matrix = AnalogHallMatrix::<_, ROW, COL>::new(
-        adc,
-        row_channels,
-        SampleTime::CYCLES3,
-        cols,
-        HallCfg { settle_after_col_cycles: 84, ..HallCfg::default() },
-    );
-
-    // External EEPROM (I2C3): load calibration if present, otherwise calibrate
-    // and persist so subsequent boots skip the ADC sweep.
-    //
-    // PA8 = I2C3_SCL (AF4), PC9 = I2C3_SDA (AF4), PB10 = WP (HIGH = protected)
+    // External EEPROM (I2C3): PA8 = SCL, PC9 = SDA, PB10 = WP (HIGH = protected).
+    // Calibration load/save is handled inside AnalogHallMatrix::new().
     let mut i2c_config = i2c::Config::default();
     i2c_config.frequency = Hertz(400_000);
     let i2c3 = I2c::new_blocking(peripheral.I2C3, peripheral.PA8, peripheral.PC9, i2c_config);
     let eeprom_wp = Output::new(peripheral.PB10, Level::High, Speed::Low);
     let mut eeprom = EepromStorage::new(i2c3, eeprom_wp);
 
-    if let Some(zeros) = eeprom.load_calibration::<ROW, COL>() {
-        // Stored calibration found: skip the 8-pass ADC sweep on boot.
-        matrix.load_from_zeros(&zeros);
-    } else {
-        // No valid calibration in EEPROM: run the sweep and save the result.
-        matrix.calibrate_now();
-        if let Some(zeros) = matrix.get_zeros() {
-            match eeprom.save_calibration::<ROW, COL>(&zeros) {
-                Ok(()) | Err(_) => {}
-            }
-        }
-    }
+    let mut matrix = AnalogHallMatrix::<_, ROW, COL>::new(
+        adc,
+        row_channels,
+        SampleTime::CYCLES3,
+        cols,
+        HallCfg { settle_after_col_cycles: 84, ..HallCfg::default() },
+        &mut eeprom,
+    );
 
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
