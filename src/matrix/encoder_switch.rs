@@ -1,4 +1,4 @@
-use embassy_stm32::exti::ExtiInput;
+use embassy_stm32::{exti::ExtiInput, mode::Async};
 use embassy_time::{Duration, Timer};
 use rmk::{event::KeyboardEvent, macros::input_device};
 
@@ -12,14 +12,14 @@ pub struct EncoderSwitch<'peripherals> {
     /// Last debounced logical state of the switch.
     last_pressed: bool,
     /// External interrupt–backed input pin for the switch.
-    pin: ExtiInput<'peripherals>,
+    pin: ExtiInput<'peripherals, Async>,
     /// Logical row index reported to the input system.
     row: u8,
 }
 
 impl<'peripherals> EncoderSwitch<'peripherals> {
     /// Create a new encoder switch input wrapper.
-    pub const fn new(pin: ExtiInput<'peripherals>, row: u8, col: u8) -> Self {
+    pub const fn new(pin: ExtiInput<'peripherals, Async>, row: u8, col: u8) -> Self {
         Self { pin, row, col, last_pressed: false, debounce: Duration::from_millis(1) }
     }
 

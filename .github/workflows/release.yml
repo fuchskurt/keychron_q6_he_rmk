@@ -1,0 +1,102 @@
+name: Release Firmware
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7em-none-eabihf
+          components: rust-src
+
+      - name: Cache Cargo registry & build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install flip-link
+        run: cargo install flip-link
+
+      - name: Install cargo-binutils + llvm-tools
+        run: |
+          cargo install cargo-binutils
+          rustup component add llvm-tools
+
+      - name: Install cargo-make
+        run: cargo install cargo-make
+
+      - name: Build firmware (release)
+        run: cargo build --release
+
+      - name: Produce .bin artifact
+        run: |
+          cargo objcopy --release -- -O binary rmk.bin
+
+      - name: Produce .hex artifact
+        run: |
+          cargo objcopy --release -- -O ihex rmk.hex
+
+      - name: Install cargo-hex-to-uf2
+        run: cargo install cargo-hex-to-uf2
+
+      - name: Produce .uf2 artifact
+        run: |
+          cargo hex-to-uf2 \
+            --input-path rmk.hex \
+            --output-path rmk.uf2 \
+            --family stm32f4
+
+      - name: Rename artifacts with version tag
+        run: |
+          TAG="${{ github.ref_name }}"
+          mv rmk.bin "rmk-q6_he_ansi-${TAG}.bin"
+          mv rmk.hex "rmk-q6_he_ansi-${TAG}.hex"
+          mv rmk.uf2 "rmk-q6_he_ansi-${TAG}.uf2"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Q6 HE ANSI ${{ github.ref_name }}"
+          body: |
+            ## Keychron Q6 HE ANSI Firmware ${{ github.ref_name }}
+
+            ### Flashing
+
+            **DFU (recommended):**
+            ```sh
+            dfu-util -l  # note the serial number
+            dfu-util -a 0 -s 0x08000000:mass-erase:force:leave \
+              -D rmk-q6_he_ansi-${{ github.ref_name }}.bin \
+              -S <SerialNumber>
+            ```
+
+            **probe-rs (debug probe):**
+            ```sh
+            probe-rs run --chip stm32f401rc rmk-q6_he_ansi-${{ github.ref_name }}.elf
+            ```
+          files: |
+            rmk-q6_he_ansi-${{ github.ref_name }}.bin
+            rmk-q6_he_ansi-${{ github.ref_name }}.hex
+            rmk-q6_he_ansi-${{ github.ref_name }}.uf2
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
