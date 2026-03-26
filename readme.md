@@ -1,23 +1,179 @@
-# Keychron Q6 HE
+# Keychron Q6 HE ANSI — RMK Firmware
 
 ![Keychron Q6 HE](https://cdn.shopify.com/s/files/1/0059/0630/1017/files/Keychron-Q6-HE-Wireless-QMK-Custom-Magnetic-Switch-Keyboard-White.jpg)
 
-A customizable 100% hall effect keyboard.
+Custom firmware for the Keychron Q6 HE ANSI, written in Rust using the
+[RMK](https://github.com/HaoboGu/rmk) keyboard framework and
+[Embassy](https://embassy.dev) async runtime. Replaces the stock QMK firmware
+with a fully open, Rust-native implementation that retains Vial compatibility
+for keymap editing.
 
-* Keyboard Maintainer: [Kurt Fuchs](https://github.com/fuchskurt)
-* Hardware Supported: Keychron Q6 HE
-* Hardware
-  Availability: [Keychron Q6 HE QMK/VIA Wireless Custom Mechanical Keyboard](https://www.keychron.com/products/keychron-q6-he-qmk-wireless-custom-keyboard)
+- **Keyboard Maintainer:** [Kurt Fuchs](https://github.com/fuchskurt)
+- **Hardware:** Keychron Q6 HE ANSI
+- **MCU:** STM32F401RC (Cortex-M4F, 84 MHz, 256K Flash, 64K RAM)
+- **Availability:
+  ** [Keychron Q6 HE QMK/VIA Wireless Custom Mechanical Keyboard](https://www.keychron.com/products/keychron-q6-he-qmk-wireless-custom-keyboard)
 
-Make example for this keyboard (after setting up your build environment):
+---
+
+## How it works
+
+### Hall effect matrix scanning
+
+Unlike traditional keyboards that use mechanical contacts, the Q6 HE uses
+hall effect magnetic switches. Each key contains a magnet whose field strength
+changes as the key is pressed, and the MCU measures this via ADC rather than
+detecting a simple on/off contact closure. This enables analog actuation point
+control and rapid trigger functionality.
+
+The key matrix is scanned using an HC164 shift register as a walking-ones
+column selector. For each column the firmware:
+
+1. Selects the column via the HC164
+2. Performs a single dummy ADC read to allow the analog lines to settle
+3. Reads all 6 row ADC channels
+4. Compares each reading against the previous value via a noise gate
+5. If a change exceeds the noise gate, computes travel distance and checks
+   for actuation threshold crossings
+
+Travel distance is computed using a degree-3 Chebyshev polynomial
+approximation of the hall sensor transfer curve, evaluated via Clenshaw
+recurrence on the Cortex-M4F FPU. This avoids a large lookup table while
+remaining accurate to within 0.004 mm.
+
+### Calibration
+
+On boot, before the async executor starts, the firmware performs a blocking
+zero-travel calibration pass. It reads each key 64 times and averages the
+results, establishing a per-key resting ADC value. This compensates for
+manufacturing variation in magnet strength and sensor placement across keys.
+The calibration takes approximately 7.7 ms and is invisible behind USB
+enumeration time.
+
+### STM32F401 errata workarounds
+
+The firmware applies STM32 AN4073 Option 2 (`ADC1DC2`) to reduce ADC noise
+coupling from simultaneous USB activity. On the STM32F401, digital supply
+noise from the USB peripheral can couple into ADC readings when both are
+active. Setting bit 16 of `SYSCFG_PMC` enables an internal decoupling
+capacitor that suppresses this, improving reading stability.
+
+### Backlight
+
+RGB backlighting is driven by two SNLED27351 LED driver chips over SPI, each
+controlling half the keyboard. The firmware applies gamma 2.2 correction and
+brightness scaling to all LED writes. Lock indicator LEDs (Caps Lock, Num Lock)
+are driven as distinct colours via an async channel from the key event
+processor to the backlight task.
+
+### Layers and input devices
+
+The firmware supports two layers (Mac and Windows base layers) switchable via
+a physical panel toggle switch. A rotary encoder with a push button provides
+volume control. Both use async edge-interrupt input with debouncing.
+
+---
+
+## Building
+
+Requires a nightly Rust toolchain and the `thumbv7em-none-eabihf` target.
+
+```sh
+rustup toolchain install nightly
+rustup target add thumbv7em-none-eabihf
+rustup component add rust-src
+cargo install flip-link
+```
+
+Build the firmware:
+
+```sh
+cargo build --release
+```
+
+Produce a `.bin` artifact:
+
+```sh
+cargo make objcopy
+```
+
+---
+
+## Flashing
+
+### DFU (recommended)
+
+Put the keyboard into DFU mode by holding the reset button, then:
+
+```sh
+dfu-util -l  # note the serial number
+dfu-util -a 0 -s 0x08000000:mass-erase:force:leave \
+  -D rmk.bin \
+  -S <SerialNumber>
+```
+
+### probe-rs (debug probe)
+
+```sh
+probe-rs run --chip stm32f401rc target/thumbv7em-none-eabihf/release/rmk-q6_he_ansi
+```
+
+---
+
+## Keymap editing
+
+The firmware is Vial-compatible. Download [Vial](https://get.vial.today) and
+connect the keyboard to remap keys, adjust actuation points, and configure
+rapid trigger behaviour without reflashing.
+
+---
+
+## Memory layout
+
+The STM32F401RC has 256K of flash. The firmware uses the following layout:
+
+| Region      | Start        | Size | Purpose                     |
+|-------------|--------------|------|-----------------------------|
+| Sector 0    | `0x08000000` | 16K  | Bootloader (DFU)            |
+| Sectors 1–2 | `0x08004000` | 32K  | Keymap and settings storage |
+| Sectors 3–7 | `0x0800C000` | 208K | Firmware                    |
+
+The linker script places firmware text at `0x0800C000` to avoid overwriting
+the storage sectors used for keymap persistence.
+
+---
+
+## Project structure
 
 ```
-    cargo make objcopy
+src/
+├── main.rs                  # Entry point, peripheral init, task startup
+├── keymap.rs                # Default keymap and encoder map
+├── flash_wrapper.rs         # 16KB erase-size wrapper for STM32F4 flash sectors
+├── vial.rs                  # Generated Vial keyboard definition
+├── matrix/
+│   ├── analog_matrix.rs     # Hall effect ADC matrix scanner
+│   ├── hc164_cols.rs        # HC164 shift register column driver
+│   ├── travel_helpers.rs    # Chebyshev polynomial travel computation
+│   ├── encoder_switch.rs    # Rotary encoder push button
+│   └── layer_toggle.rs      # Physical layer toggle switch
+├── backlight/
+│   ├── init.rs              # Backlight task and soft-start ramp
+│   ├── gamma_correction.rs  # Gamma 2.2 LUT
+│   ├── lock_indicator.rs    # Caps/Num lock indicator processor
+│   └── mapping.rs           # LED index to SNLED channel mapping
+└── snled27351_spi/
+    ├── driver.rs            # SNLED27351 SPI driver
+    ├── led_address.rs       # LED channel address constants
+    └── registers.rs         # SNLED27351 register definitions
+poly_gen/
+├── cheby.py                 # Generates Chebyshev coefficients for travel_helpers.rs
+└── lut.py                   # Alternative LUT-based travel computation (reference)
 ```
 
-Flashing example for this keyboard:
+---
 
-```
-    dfu-util -l # Note the serial Number of the MCU.
-    dfu-util -a 0 -s 0x08000000:mass-erase:force:leave -D rmk.bin -S <SerialNumber>
-```
+## License
+
+Licensed under either of [MIT](LICENSE-MIT) or
+[Apache 2.0](LICENSE-APACHE) at your option.
