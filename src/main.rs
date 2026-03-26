@@ -1,15 +1,17 @@
 #![no_main]
 #![no_std]
-#![feature(const_trait_impl)]
-#![feature(const_cmp)]
-#![feature(const_option_ops)]
-#![feature(const_index)]
-#![feature(const_convert)]
-#![feature(const_result_trait_fn)]
-#![feature(const_ops)]
-#![feature(generic_const_exprs)]
-#![warn(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
 #![deny(warnings)]
+#![warn(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
+#![feature(
+    const_trait_impl,
+    const_cmp,
+    const_option_ops,
+    const_index,
+    const_convert,
+    const_result_trait_fn,
+    const_ops,
+    generic_const_exprs
+)]
 #![expect(
     clippy::implicit_return,
     clippy::blanket_clippy_restriction_lints,
