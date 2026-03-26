@@ -9,7 +9,6 @@
     const_index,
     const_convert,
     const_result_trait_fn,
-    const_ops,
     generic_const_exprs
 )]
 #![expect(
