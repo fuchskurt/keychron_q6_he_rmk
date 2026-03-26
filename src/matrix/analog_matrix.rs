@@ -205,12 +205,17 @@ where
     }
 
     /// Read one ADC sample per row for the currently selected column.
+    ///
+    /// Performs a single dummy read on the first row before the real pass to
+    /// allow the analog lines to settle after column selection. The ADC sample
+    /// time provides the active settling window; one read is sufficient since
+    /// all rows share the same column bus.
     fn read_row_samples(
         adc: &mut Adc<'peripherals, ADC>,
         row_adc: &mut [AnyAdcChannel<'peripherals, ADC>; ROW],
         sample_time: AdcSampleTime<ADC>,
     ) -> [u16; ROW] {
-        for ch in row_adc.iter_mut() {
+        if let Some(ch) = row_adc.get_mut(0) {
             let _: u16 = adc.blocking_read(ch, sample_time.clone());
         }
         from_fn(|row| row_adc.get_mut(row).map_or(0, |ch| adc.blocking_read(ch, sample_time.clone())))
