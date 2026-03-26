@@ -5,7 +5,8 @@
 //! bit. Each subsequent column is selected by clocking in a low bit, which
 //! shifts the high bit one position along the chain.
 //!
-//! All column transitions go through [`Hc164Cols::select`], which tracks the
+//! All column transitions go through
+//! [`crate::matrix::hc164_cols::Hc164Cols::select`], which tracks the
 //! last column and handles both cases transparently. The scan loop only needs
 //! to call `select(col)` — there is no separate `advance` step.
 
