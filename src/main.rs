@@ -14,6 +14,7 @@
     clippy::implicit_return,
     clippy::blanket_clippy_restriction_lints,
     clippy::separated_literal_suffix,
+    clippy::semicolon_inside_block,
     clippy::single_call_fn,
     clippy::self_named_module_files,
     clippy::future_not_send,
@@ -45,7 +46,7 @@ use crate::{
     },
     vial::VIAL_SERIAL,
 };
-use core::panic::PanicInfo;
+use core::{panic::PanicInfo, ptr::with_exposed_provenance_mut};
 use cortex_m::{asm, peripheral::SCB};
 use embassy_executor::Spawner;
 use embassy_stm32::{
@@ -174,6 +175,7 @@ async fn main(spawner: Spawner) {
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(peripheral.ADC1);
+    apply_adc_usb_decoupling();
     let row_channels: [AnyAdcChannel<'_, ADC1>; ROW] = [
         peripheral.PC0.degrade_adc(),
         peripheral.PC1.degrade_adc(),
@@ -239,6 +241,30 @@ async fn main(spawner: Spawner) {
         backlight_runner(spi_backlight, cs0, cs1, sdb),
     )
     .await;
+}
+
+/// Apply STM32 AN4073 Option 2 workaround to reduce ADC noise coupling from
+/// USB activity on STM32F401.
+///
+/// When USB and ADC run simultaneously, digital supply noise couples into
+/// analog readings via the shared power supply. Setting ADC1DC2 (bit 16) in
+/// `SYSCFG_PMC` enables an internal decoupling capacitor that suppresses this.
+///
+/// Not exposed in embassy-stm32 metapac as it is an errata workaround rather
+/// than a documented peripheral feature. Must be called after
+/// [`embassy_stm32::init`] and before any ADC scanning begins.
+fn apply_adc_usb_decoupling() {
+    let syscfg_pmc_addr = with_exposed_provenance_mut::<u32>(0x4001_3804_usize);
+
+    // SAFETY: 0x40013804 is the valid memory-mapped address of SYSCFG_PMC on
+    // STM32F401RC (base 0x40013800, offset 0x04). Only bit 16 (ADC1DC2) is
+    // modified; all other bits are preserved via read-modify-write. Called
+    // once at init on a single core before any tasks start, so there are no
+    // concurrent access hazards.
+    let current = unsafe { syscfg_pmc_addr.read_volatile() };
+    // SAFETY: 0x40013804 is the valid memory-mapped address of SYSCFG_PMC on
+    // STM32F401RC (base 0x40013800, offset 0x04).
+    unsafe { syscfg_pmc_addr.write_volatile(current | (1_u32 << 16_u32)) };
 }
 
 #[panic_handler]
