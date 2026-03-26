@@ -183,13 +183,8 @@ async fn main(spawner: Spawner) {
         peripheral.PA1.degrade_adc(),
     ];
 
-    let mut matrix = AnalogHallMatrix::<_, ROW, COL>::new(
-        adc,
-        row_channels,
-        SampleTime::CYCLES3,
-        cols,
-        HallCfg { settle_after_col_cycles: 84, ..HallCfg::default() },
-    );
+    let mut matrix =
+        AnalogHallMatrix::<_, ROW, COL>::new(adc, row_channels, SampleTime::CYCLES15, cols, HallCfg::default());
 
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);

@@ -11,7 +11,6 @@ use core::ops::{Add as _, Mul as _, Sub as _};
 const X_MID: f32 = 2350.0_f32;
 
 /// Reciprocal of the half-width, used in place of division.
-/// 1.0 / 1150.0 in f32 — LLVM folds this to a VMUL constant at compile time.
 const X_HALF_RECIP: f32 = 1.0_f32 / 1150.0_f32;
 
 /// Chebyshev coefficients for the degree-3 approximation of the hall sensor

@@ -1,5 +1,5 @@
-use cortex_m::asm::delay;
 use embassy_stm32::{exti::ExtiInput, mode::Async};
+use embassy_time::{Duration, Timer};
 use rmk::{event::KeyboardEvent, macros::input_device};
 
 #[derive(Copy, Clone)]
@@ -15,7 +15,7 @@ pub struct MatrixPos {
 #[input_device(publish = KeyboardEvent)]
 pub struct LayerToggle<'peripherals> {
     /// Debounce duration applied to input level changes.
-    debounce: u32,
+    debounce: Duration,
     /// Matrix position activated when the input is at a high logic level.
     high_pos: MatrixPos,
     /// Last observed logic level of the input pin.
@@ -43,9 +43,9 @@ impl<'peripherals> LayerToggle<'peripherals> {
         pin: ExtiInput<'peripherals, Async>,
         high_pos: MatrixPos,
         low_pos: MatrixPos,
-        debounce_cycles: u32,
+        debounce: Duration,
     ) -> Self {
-        Self { pin, high_pos, low_pos, last_level: None, pending_release: None, debounce: debounce_cycles }
+        Self { pin, high_pos, low_pos, last_level: None, pending_release: None, debounce }
     }
 
     /// Create a new layer toggle with the default debounce.
@@ -54,7 +54,7 @@ impl<'peripherals> LayerToggle<'peripherals> {
         high_pos: MatrixPos,
         low_pos: MatrixPos,
     ) -> Self {
-        Self::new(pin, high_pos, low_pos, 42)
+        Self::new(pin, high_pos, low_pos, Duration::from_millis(15))
     }
 
     #[inline]
@@ -84,7 +84,7 @@ impl<'peripherals> LayerToggle<'peripherals> {
 
         loop {
             self.pin.wait_for_any_edge().await;
-            let level = self.read_level_debounced();
+            let level = self.read_level_debounced().await;
 
             if let Some(evt) = self.maybe_emit_for_level(level) {
                 return evt;
@@ -93,8 +93,8 @@ impl<'peripherals> LayerToggle<'peripherals> {
     }
 
     /// Read the switch level after a debounce delay.
-    fn read_level_debounced(&self) -> bool {
-        delay(self.debounce);
+    async fn read_level_debounced(&self) -> bool {
+        Timer::after(self.debounce).await;
         self.pin.is_high()
     }
 }
