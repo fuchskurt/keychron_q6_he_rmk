@@ -45,39 +45,48 @@ pub struct SnledLed {
     pub red: u8,
 }
 
-/// PWM shadow buffers and dirty flags, split from hardware handles so
-/// they can be borrowed independently of `spi` and `cs`.
+/// PWM shadow buffer and dirty flag for a single SNLED27351 driver.
+struct SnledDriverBuf {
+    /// Whether this driver's buffer has unsent changes.
+    dirty: bool,
+    /// PWM shadow buffer; index is the raw register address.
+    pwm: [u8; PWM_REGISTER_COUNT],
+}
+
+impl SnledDriverBuf {
+    /// Write scaled RGB values into the PWM shadow buffer for one LED.
+    const fn stage_led(&mut self, led: SnledLed, red: u8, green: u8, blue: u8) {
+        if let Some(slot) = self.pwm.get_mut(usize::from(led.red)) {
+            *slot = red;
+        }
+        if let Some(slot) = self.pwm.get_mut(usize::from(led.green)) {
+            *slot = green;
+        }
+        if let Some(slot) = self.pwm.get_mut(usize::from(led.blue)) {
+            *slot = blue;
+        }
+        self.dirty = true;
+    }
+}
+
+/// PWM shadow buffers and dirty flags for all drivers, split from hardware
+/// handles so they can be borrowed independently of `spi` and `cs`.
 struct SnledBuffers<const DRIVER_COUNT: usize> {
-    /// PWM shadow buffer per driver; index is the raw register address.
-    pwm_buf: [[u8; PWM_REGISTER_COUNT]; DRIVER_COUNT],
-    /// Whether each driver's buffer has unsent changes.
-    pwm_dirty: [bool; DRIVER_COUNT],
+    /// Per-driver PWM buffer and dirty flag.
+    drivers: [SnledDriverBuf; DRIVER_COUNT],
 }
 
 impl<const DRIVER_COUNT: usize> SnledBuffers<DRIVER_COUNT> {
     /// Create zeroed buffers with no pending changes.
     const fn new() -> Self {
-        Self { pwm_buf: [[0_u8; PWM_REGISTER_COUNT]; DRIVER_COUNT], pwm_dirty: [false; DRIVER_COUNT] }
+        Self { drivers: [const { SnledDriverBuf { pwm: [0_u8; PWM_REGISTER_COUNT], dirty: false } }; DRIVER_COUNT] }
     }
 
     /// Write scaled RGB values into the PWM shadow buffer for one LED.
     const fn stage_led(&mut self, led: SnledLed, red: u8, green: u8, blue: u8) {
         let drv = usize::from(led.driver);
-        let Some(buf) = self.pwm_buf.get_mut(drv) else { return };
-
-        if let Some(slot) = buf.get_mut(usize::from(led.red)) {
-            *slot = red;
-        }
-        if let Some(slot) = buf.get_mut(usize::from(led.green)) {
-            *slot = green;
-        }
-        if let Some(slot) = buf.get_mut(usize::from(led.blue)) {
-            *slot = blue;
-        }
-
-        if let Some(dirty) = self.pwm_dirty.get_mut(drv) {
-            *dirty = true;
-        }
+        let Some(buf) = self.drivers.get_mut(drv) else { return };
+        buf.stage_led(led, red, green, blue);
     }
 }
 
@@ -194,18 +203,12 @@ pub struct Snled27351<'peripherals, const DRIVER_COUNT: usize> {
 impl<'peripherals, const DRIVER_COUNT: usize> Snled27351<'peripherals, DRIVER_COUNT> {
     /// Flush all dirty PWM shadow buffers to hardware.
     pub async fn flush(&mut self) {
-        for drv in 0..DRIVER_COUNT {
-            let dirty = self.bufs.pwm_dirty.get(drv).copied().unwrap_or(false);
-            if !dirty {
+        for (drv, buf) in self.bufs.drivers.iter_mut().enumerate() {
+            if !buf.dirty {
                 continue;
             }
-            let Some(buf) = self.bufs.pwm_buf.get(drv) else { continue };
-            // `buf` is a reference into `self.bufs`; `flush_driver` only
-            // touches `self.bus` — the borrow checker sees these as disjoint.
-            self.bus.flush_driver(drv, buf).await;
-            if let Some(flag) = self.bufs.pwm_dirty.get_mut(drv) {
-                *flag = false;
-            }
+            self.bus.flush_driver(drv, &buf.pwm).await;
+            buf.dirty = false;
         }
     }
 
