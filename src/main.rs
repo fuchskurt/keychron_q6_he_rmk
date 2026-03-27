@@ -47,7 +47,7 @@ use crate::{
     vial::VIAL_SERIAL,
 };
 use core::panic::PanicInfo;
-use cortex_m::{asm, peripheral::SCB};
+use cortex_m::{asm::delay, peripheral::SCB};
 use embassy_executor::{Spawner, main};
 use embassy_stm32::{
     Config,
@@ -250,6 +250,6 @@ async fn main(spawner: Spawner) {
 #[panic_handler]
 /// Panic handler that triggers a restart.
 fn panic(_info: &PanicInfo) -> ! {
-    asm::delay(10_000);
+    delay(10_000);
     SCB::sys_reset();
 }
