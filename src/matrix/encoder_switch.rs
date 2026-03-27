@@ -29,15 +29,11 @@ impl<'peripherals> EncoderSwitch<'peripherals> {
             self.pin.wait_for_any_edge().await;
             Timer::after(self.debounce).await;
 
-            let pressed = self.sample_pressed();
+            let pressed = self.pin.is_low();
             if pressed != self.last_pressed {
                 self.last_pressed = pressed;
                 return KeyboardEvent::key(self.row, self.col, pressed);
             }
         }
     }
-
-    #[inline]
-    /// Sample the switch state.
-    fn sample_pressed(&self) -> bool { self.pin.is_low() }
 }

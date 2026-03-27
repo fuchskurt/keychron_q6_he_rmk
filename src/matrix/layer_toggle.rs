@@ -84,17 +84,12 @@ impl<'peripherals> LayerToggle<'peripherals> {
 
         loop {
             self.pin.wait_for_any_edge().await;
-            let level = self.read_level_debounced().await;
+            Timer::after(self.debounce).await;
+            let level = self.pin.is_high();
 
             if let Some(evt) = self.maybe_emit_for_level(level) {
                 return evt;
             }
         }
-    }
-
-    /// Read the switch level after a debounce delay.
-    async fn read_level_debounced(&self) -> bool {
-        Timer::after(self.debounce).await;
-        self.pin.is_high()
     }
 }

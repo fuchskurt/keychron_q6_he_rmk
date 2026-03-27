@@ -109,33 +109,34 @@ bind_interrupts!(struct Irqs {
 async fn main(spawner: Spawner) {
     // Explicitly drop spawner.
     let _: Spawner = spawner;
-    // RCC config
-    let mut config = Config::default();
-
-    config.rcc.hse = Some(Hse { freq: Hertz(16_000_000), mode: HseMode::Oscillator });
-    config.rcc.hsi = false;
-    config.rcc.pll_src = PllSource::HSE;
-    config.rcc.pll = Some(Pll {
-        prediv: PllPreDiv::DIV8,   // 16/8 = 2 MHz
-        mul: PllMul::MUL168,       // 2*168 = 336 MHz (VCO)
-        divp: Some(PllPDiv::DIV4), // 336/4 = 84 MHz (SYSCLK)
-        divq: Some(PllQDiv::DIV7), // 336/7 = 48 MHz
-        divr: None,
-    });
-
-    config.rcc.ahb_pre = AHBPrescaler::DIV1; // 84
-    config.rcc.apb1_pre = APBPrescaler::DIV2; // 36
-    config.rcc.apb2_pre = APBPrescaler::DIV1; // 84
-    config.rcc.sys = Sysclk::PLL1_P;
-    config.rcc.mux.clk48sel = Clk48sel::PLL1_Q;
-
     // Initialize peripherals
-    let peripheral = embassy_stm32::init(config);
+    let peripheral = embassy_stm32::init({
+        let mut config = Config::default();
+        config.rcc.hse = Some(Hse { freq: Hertz(16_000_000), mode: HseMode::Oscillator });
+        config.rcc.hsi = false;
+        config.rcc.pll_src = PllSource::HSE;
+        config.rcc.pll = Some(Pll {
+            prediv: PllPreDiv::DIV8,   // 16/8 = 2 MHz
+            mul: PllMul::MUL168,       // 2*168 = 336 MHz (VCO)
+            divp: Some(PllPDiv::DIV4), // 336/4 = 84 MHz (SYSCLK)
+            divq: Some(PllQDiv::DIV7), // 336/7 = 48 MHz
+            divr: None,
+        });
+        config.rcc.ahb_pre = AHBPrescaler::DIV1; // 84 MHz
+        config.rcc.apb1_pre = APBPrescaler::DIV2; // 42 MHz
+        config.rcc.apb2_pre = APBPrescaler::DIV1; // 84 MHz
+        config.rcc.sys = Sysclk::PLL1_P;
+        config.rcc.mux.clk48sel = Clk48sel::PLL1_Q;
+        config
+    });
 
     // Usb config
     static EP_OUT_BUFFER: ConstStaticCell<[u8; 1024]> = ConstStaticCell::new([0; 1024]);
-    let mut usb_config = usb::Config::default();
-    usb_config.vbus_detection = false;
+    let usb_config = {
+        let mut usb_config = usb::Config::default();
+        usb_config.vbus_detection = false;
+        usb_config
+    };
     let driver = Driver::new_fs(
         peripheral.USB_OTG_FS,
         Irqs,
@@ -219,9 +220,12 @@ async fn main(spawner: Spawner) {
     let mut keyboard = Keyboard::new(&keymap);
 
     // LED backlight (SNLED27351)
-    let mut spi_config = spi::Config::default();
-    spi_config.frequency = Hertz(3_500_000);
-    spi_config.mode = spi::MODE_0;
+    let spi_config = {
+        let mut spi_config = spi::Config::default();
+        spi_config.frequency = Hertz(3_500_000);
+        spi_config.mode = spi::MODE_0;
+        spi_config
+    };
     let spi_backlight = spi::Spi::new(
         peripheral.SPI1,     // SPI1
         peripheral.PA5,      // SCK
