@@ -1,5 +1,9 @@
 # Keychron Q6 HE ANSI — RMK Firmware
 
+[![Docs](https://img.shields.io/badge/docs-latest-blue?style=flat-square)](https://fuchskurt.github.io/keychron_q1_pro_rmk/rmk_q1_pro/)
+[![Release](https://img.shields.io/github/v/release/fuchskurt/keychron_q1_pro_rmk?style=flat-square)](https://github.com/fuchskurt/keychron_q1_pro_rmk/releases)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square)](#license)
+
 ![Keychron Q6 HE](https://cdn.shopify.com/s/files/1/0059/0630/1017/files/Keychron-Q6-HE-Wireless-QMK-Custom-Magnetic-Switch-Keyboard-White.jpg)
 
 Custom firmware for the Keychron Q6 HE ANSI, written in Rust using the
