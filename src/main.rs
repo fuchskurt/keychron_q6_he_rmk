@@ -80,6 +80,7 @@ use embassy_stm32::{
     usb::{self, Driver},
 };
 use encoder_switch::EncoderSwitch;
+use pac::SYSCFG;
 use rmk::{
     KeymapData,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
@@ -176,7 +177,9 @@ async fn main(spawner: Spawner) {
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(peripheral.ADC1);
-    apply_adc_usb_decoupling();
+    // Apply STM32 AN4073 Option 2 workaround to reduce ADC noise coupling from USB
+    // activity on STM32F401.
+    SYSCFG.pmc().modify(|w| w.set_adc1dc2(true));
     let row_channels: [AnyAdcChannel<'_, ADC1>; ROW] = [
         peripheral.PC0.degrade_adc(),
         peripheral.PC1.degrade_adc(),
@@ -243,14 +246,6 @@ async fn main(spawner: Spawner) {
     )
     .await;
 }
-
-/// Apply STM32 AN4073 Option 2 workaround to reduce ADC noise coupling from
-/// USB activity on STM32F401.
-///
-/// When USB and ADC run simultaneously, digital supply noise couples into
-/// analog readings via the shared power supply. Setting ADC1DC2 (bit 16) in
-/// `SYSCFG_PMC` enables an internal decoupling capacitor that suppresses this.
-fn apply_adc_usb_decoupling() { pac::SYSCFG.pmc().modify(|w| w.set_adc1dc2(true)); }
 
 #[panic_handler]
 /// Panic handler that triggers a restart.
