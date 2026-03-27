@@ -203,17 +203,11 @@ static LUT_DELTA: [i16; LUT_LEN] = [
 
 /// Returns (f(raw) − f(3121)) as a Q8 fixed-point value (scaled by 256).
 ///
-/// Clamps `raw` to [`VALID_RAW_MIN`, `VALID_RAW_MAX`] before lookup,
-/// matching the behaviour of the previous polynomial implementation.
+/// Clamps `raw` to [`VALID_RAW_MIN`].=[`VALID_RAW_MAX`] before lookup,
+/// matching the behavior of the previous polynomial implementation.
 #[inline]
 pub const fn delta_from_ref(raw: u16) -> i32 {
-    let clamped = if raw < VALID_RAW_MIN {
-        VALID_RAW_MIN
-    } else if raw > VALID_RAW_MAX {
-        VALID_RAW_MAX
-    } else {
-        raw
-    };
+    let clamped = raw.clamp(VALID_RAW_MIN, VALID_RAW_MAX);
     let index = usize::from(clamped.saturating_sub(VALID_RAW_MIN));
     match LUT_DELTA.get(index) {
         Some(&val) => i32::from(val),
