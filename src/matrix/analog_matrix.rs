@@ -146,21 +146,18 @@ where
             for col in 0..COL {
                 self.cols.select(col);
                 let samples = Self::read_row_samples(&mut self.adc, &mut self.row_adc, self.sample_time.clone());
-                for (row, value) in samples.iter().enumerate() {
-                    if let Some(cell) = acc.get_mut(row).and_then(|row_slice| row_slice.get_mut(col)) {
-                        *cell = cell.saturating_add(u32::from(*value));
+                for (acc_row, &sample) in acc.iter_mut().zip(samples.iter()) {
+                    if let Some(cell) = acc_row.get_mut(col) {
+                        *cell = cell.saturating_add(u32::from(sample));
                     }
                 }
             }
         }
 
-        for row in 0..ROW {
-            for col in 0..COL {
-                let Some(acc_cell) = acc.get(row).and_then(|row_slice| row_slice.get(col)) else { continue };
+        for (calib_row, acc_row) in self.calib.iter_mut().zip(acc.iter()) {
+            for (cal_cell, &acc_cell) in calib_row.iter_mut().zip(acc_row.iter()) {
                 let avg = u16::try_from(acc_cell.saturating_div(CALIB_PASSES)).unwrap_or(UNCALIBRATED_ZERO);
-                if let Some(cal_cell) = self.calib.get_mut(row).and_then(|row_slice| row_slice.get_mut(col)) {
-                    *cal_cell = KeyCalib::new(avg, avg.saturating_sub(DEFAULT_FULL_RANGE));
-                }
+                *cal_cell = KeyCalib::new(avg, avg.saturating_sub(DEFAULT_FULL_RANGE));
             }
         }
     }
