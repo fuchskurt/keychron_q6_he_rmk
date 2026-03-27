@@ -91,7 +91,7 @@ use rmk::{
     run_rmk,
     storage::async_flash_wrapper,
 };
-use static_cell::StaticCell;
+use static_cell::ConstStaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 bind_interrupts!(struct Irqs {
@@ -132,7 +132,7 @@ async fn main(spawner: Spawner) {
     let peripheral = embassy_stm32::init(config);
 
     // Usb config
-    static EP_OUT_BUFFER: StaticCell<[u8; 1024]> = StaticCell::new();
+    static EP_OUT_BUFFER: ConstStaticCell<[u8; 1024]> = ConstStaticCell::new([0; 1024]);
     let mut usb_config = usb::Config::default();
     usb_config.vbus_detection = false;
     let driver = Driver::new_fs(
@@ -140,7 +140,7 @@ async fn main(spawner: Spawner) {
         Irqs,
         peripheral.PA12,
         peripheral.PA11,
-        &mut EP_OUT_BUFFER.init([0; 1024])[..],
+        &mut EP_OUT_BUFFER.take()[..],
         usb_config,
     );
 
