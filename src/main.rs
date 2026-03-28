@@ -9,7 +9,8 @@
     const_index,
     const_convert,
     const_result_trait_fn,
-    generic_const_exprs
+    optimize_attribute,
+    likely_unlikely
 )]
 #![expect(
     clippy::implicit_return,
@@ -18,7 +19,6 @@
     clippy::single_call_fn,
     clippy::self_named_module_files,
     clippy::future_not_send,
-    incomplete_features,
     reason = "Implementation specific ignored lints"
 )]
 /// Backlight driver integration.
@@ -104,8 +104,8 @@ bind_interrupts!(struct Irqs {
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
 });
 
-#[main]
 /// Entry point for the firmware.
+#[main]
 async fn main(spawner: Spawner) {
     // Explicitly drop spawner.
     let _: Spawner = spawner;
@@ -251,8 +251,8 @@ async fn main(spawner: Spawner) {
     .await;
 }
 
-#[panic_handler]
 /// Panic handler that triggers a restart.
+#[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     delay(10_000);
     SCB::sys_reset();

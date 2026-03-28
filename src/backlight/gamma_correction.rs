@@ -1,3 +1,5 @@
+use core::hint::cold_path;
+
 /// Gamma 2.2 correction lookup table for 8-bit LED PWM values.
 ///
 /// Maps a linear 8-bit intensity value (0–255) to a perceptually linearised
@@ -20,4 +22,11 @@ const GAMMA_LUT: [u8; 256] = [
 /// Looks up `value` in [`GAMMA_LUT`], mapping a linear PWM intensity to a
 /// perceptually linear brightness.
 #[inline]
-pub const fn gamma_correction(value: u8) -> u8 { *GAMMA_LUT.get(usize::from(value)).unwrap_or(&255) }
+pub const fn gamma_correction(value: u8) -> u8 {
+    if let Some(&temp_value) = GAMMA_LUT.get(usize::from(value)) {
+        temp_value
+    } else {
+        cold_path();
+        255
+    }
+}

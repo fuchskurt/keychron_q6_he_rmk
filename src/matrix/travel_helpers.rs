@@ -206,6 +206,7 @@ static LUT_DELTA: [i16; LUT_LEN] = [
 /// Clamps `raw` to [`VALID_RAW_MIN`].=[`VALID_RAW_MAX`] before lookup,
 /// matching the behavior of the previous polynomial implementation.
 #[inline]
+#[optimize(speed)]
 pub const fn delta_from_ref(raw: u16) -> i32 {
     let clamped = raw.clamp(VALID_RAW_MIN, VALID_RAW_MAX);
     let index = usize::from(clamped.saturating_sub(VALID_RAW_MIN));

@@ -42,7 +42,8 @@ const SOFTSTART_RAMP_MS: u32 = 1000;
 const fn scale(value: u8, brightness_percent: u8) -> u8 {
     let value_scaled = u16::from(value);
     let percent_scaled = u16::from(brightness_percent.min(100));
-    u8::try_from(value_scaled.saturating_mul(percent_scaled).saturating_add(50).saturating_div(100)).unwrap_or(255)
+    u8::try_from(value_scaled.saturating_mul(percent_scaled).saturating_add(50).checked_div(100).unwrap_or_default())
+        .unwrap_or(255)
 }
 
 /// Applies brightness scaling and gamma 2.2 correction to an RGB triplet.
@@ -64,7 +65,6 @@ const fn correct(red: u8, green: u8, blue: u8, brightness_percent: u8) -> (u8, u
 /// Steps brightness from 0 up to `target_brightness` over
 /// [`SOFTSTART_STEPS`] increments across [`SOFTSTART_RAMP_MS`]
 /// milliseconds, writing corrected PWM values and flushing each step.
-#[expect(clippy::arithmetic_side_effects, reason = "steps is guaranteed non-zero via .max(1)")]
 async fn softstart(
     backlight: &mut Snled27351<'static, DRIVER_COUNT>,
     base_red: u8,
@@ -74,10 +74,10 @@ async fn softstart(
 ) {
     let target = u32::from(target_brightness.min(100));
     let steps = u32::from(SOFTSTART_STEPS.max(1));
-    let delay_ms = u64::from(SOFTSTART_RAMP_MS.saturating_div(steps));
+    let delay_ms = u64::from(SOFTSTART_RAMP_MS.checked_div(steps).unwrap_or(0));
 
     for step in 0..=steps {
-        let percent = u8::try_from(target.saturating_mul(step).saturating_div(steps)).unwrap_or(0);
+        let percent = u8::try_from(target.saturating_mul(step).checked_div(steps).unwrap_or(0)).unwrap_or(0);
         let (scaled_red, scaled_green, scaled_blue) = correct(base_red, base_green, base_blue, percent);
         backlight.set_all_leds(scaled_red, scaled_green, scaled_blue).await;
         Timer::after_millis(delay_ms).await;

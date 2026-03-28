@@ -10,6 +10,7 @@
 //! last column and handles both cases transparently. The scan loop only needs
 //! to call `select(col)` — there is no separate `advance` step.
 
+use core::hint::unlikely;
 use cortex_m::asm::delay;
 use embassy_stm32::gpio::Output;
 
@@ -50,7 +51,7 @@ impl<'peripherals> Hc164Cols<'peripherals> {
     /// to the next position. Must be called in strictly ascending order
     /// starting from 0 each scan.
     pub fn select(&mut self, col: usize) {
-        if col == 0 {
+        if unlikely(col == 0) {
             // Clear all outputs by pulsing MR low. The HC164 datasheet
             // specifies a minimum MR low pulse width of 18 ns
             self.mr.set_low();

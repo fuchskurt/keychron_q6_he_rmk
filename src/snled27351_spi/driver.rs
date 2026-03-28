@@ -24,7 +24,10 @@ use crate::snled27351_spi::registers::{
     SOFTWARE_SLEEP_DISABLE,
     WRITE_CMD,
 };
-use core::slice::from_ref;
+use core::{
+    hint::{cold_path, likely},
+    slice::from_ref,
+};
 use embassy_stm32::{
     gpio::Output,
     mode::Async,
@@ -56,14 +59,17 @@ struct SnledDriverBuf {
 impl SnledDriverBuf {
     /// Write scaled RGB values into the PWM shadow buffer for one LED.
     const fn stage_led(&mut self, led: SnledLed, red: u8, green: u8, blue: u8) {
-        if let Some(slot) = self.pwm.get_mut(usize::from(led.red)) {
-            *slot = red;
+        match self.pwm.get_mut(usize::from(led.red)) {
+            Some(slot) => *slot = red,
+            None => cold_path(),
         }
-        if let Some(slot) = self.pwm.get_mut(usize::from(led.green)) {
-            *slot = green;
+        match self.pwm.get_mut(usize::from(led.green)) {
+            Some(slot) => *slot = green,
+            None => cold_path(),
         }
-        if let Some(slot) = self.pwm.get_mut(usize::from(led.blue)) {
-            *slot = blue;
+        match self.pwm.get_mut(usize::from(led.blue)) {
+            Some(slot) => *slot = blue,
+            None => cold_path(),
         }
         self.dirty = true;
     }
@@ -204,7 +210,7 @@ impl<'peripherals, const DRIVER_COUNT: usize> Snled27351<'peripherals, DRIVER_CO
     /// Flush all dirty PWM shadow buffers to hardware.
     pub async fn flush(&mut self) {
         for (drv, buf) in self.bufs.drivers.iter_mut().enumerate() {
-            if !buf.dirty {
+            if likely(!buf.dirty) {
                 continue;
             }
             self.bus.flush_driver(drv, &buf.pwm).await;

@@ -2,7 +2,10 @@ use crate::matrix::{
     hc164_cols::Hc164Cols,
     travel_helpers::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
 };
-use core::array::from_fn;
+use core::{
+    array::from_fn,
+    hint::{cold_path, likely, unlikely},
+};
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, Instance};
 use rmk::{embassy_futures::yield_now, event::KeyboardEvent, macros::input_device};
 
@@ -156,7 +159,8 @@ where
 
         for (calib_row, acc_row) in self.calib.iter_mut().zip(acc.iter()) {
             for (cal_cell, &acc_cell) in calib_row.iter_mut().zip(acc_row.iter()) {
-                let avg = u16::try_from(acc_cell.saturating_div(CALIB_PASSES)).unwrap_or(UNCALIBRATED_ZERO);
+                let avg =
+                    u16::try_from(acc_cell.checked_div(CALIB_PASSES).unwrap_or_default()).unwrap_or(UNCALIBRATED_ZERO);
                 *cal_cell = KeyCalib::new(avg, avg.saturating_sub(DEFAULT_FULL_RANGE));
             }
         }
@@ -219,6 +223,7 @@ where
     }
 
     /// Scan the matrix and return the first key state change found, if any.
+    #[optimize(speed)]
     fn scan_for_next_change(&mut self) -> Option<KeyboardEvent> {
         for col in 0..COL {
             self.cols.select(col);
@@ -228,7 +233,7 @@ where
                 let Some(st) = self.state.get_mut(row).and_then(|row_slice| row_slice.get_mut(col)) else { continue };
                 let last_raw = st.last_raw;
 
-                if last_raw.abs_diff(raw) < NOISE_GATE {
+                if likely(last_raw.abs_diff(raw) < NOISE_GATE) {
                     continue;
                 }
 
@@ -260,16 +265,17 @@ where
         None
     }
 
-    #[inline]
     /// Convert a raw reading into a scaled travel value, returning `None` on
     /// out-of-range or offset failure so the caller decides the fallback.
+    #[inline]
+    #[optimize(speed)]
     fn travel_scaled_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
-        if !(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw) {
+        if unlikely(!(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw)) {
             return None;
         }
-        let x = match Self::apply_zero_offset(cal.zero, raw) {
-            Some(x) => x,
-            None => return None,
+        let Some(x) = Self::apply_zero_offset(cal.zero, raw) else {
+            cold_path();
+            return None;
         };
         let delta = i64::from(delta_from_ref(x));
         let prod = delta.saturating_mul(i64::from(cal.scale_factor)).saturating_mul(TRAVEL_SCALE_I64);
