@@ -21,7 +21,7 @@ static_cell = "2.1"
 
 [build-dependencies]
 lzma-rust2 = "*"
-json = "*"
+serde_json = { version = "*", features = ["preserve_order"] }
 
 [[bin]]
 name = "rmk-q6_he_ansi"

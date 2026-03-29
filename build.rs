@@ -3,7 +3,9 @@
 //! Generates Vial keyboard configuration constants from `vial.json` and
 //! sets the required linker arguments for the Cortex-M4 target.
 
+use fs::read_to_string;
 use lzma_rust2::{XzOptions, XzWriter};
+use serde_json::{Value, from_str, to_string};
 use std::{env, fmt::Write as _, fs, io::Write, path::Path};
 
 /// Entry point for the build script.
@@ -44,10 +46,15 @@ fn generate_vial_config() {
 /// compression. Prints a diagnostic message to stderr if the file cannot
 /// be opened, and returns an empty string so compression can still proceed.
 fn read_vial_json() -> String {
-    fs::read_to_string("vial.json").map(|content| json::stringify(json::parse(&content).unwrap())).unwrap_or_else(|e| {
-        eprintln!("Cannot find vial.json: {e}");
-        String::new()
-    })
+    read_to_string("vial.json")
+        .map(|content| {
+            let value: Value = from_str(&content).unwrap();
+            to_string(&value).unwrap()
+        })
+        .unwrap_or_else(|e| {
+            eprintln!("Cannot find vial.json: {e}");
+            String::new()
+        })
 }
 
 /// Compresses a Vial config string using XZ at compression level 6.
