@@ -1,65 +1,97 @@
-//! This build script copies the `memory.x` file from the crate root into
-//! a directory where the linker can always find it at build time.
-//! For many projects this is optional, as the linker always searches the
-//! project root directory -- wherever `Cargo.toml` is. However, if you
-//! are using a workspace or have a more complicated build setup, this
-//! build script becomes required. Additionally, by requesting that
-//! Cargo re-run the build script whenever `memory.x` is changed,
-//! updating `memory.x` ensures a rebuild of the application with the
-//! new memory settings.
+//! Build script for the RMK Q6 HE ANSI firmware.
 //!
-//! The build script also sets the linker flags to tell it which link script to
-//! use.
+//! Generates Vial keyboard configuration constants from `vial.json` and
+//! sets the required linker arguments for the Cortex-M4 target.
 
-use const_gen::*;
-use std::{env, fs, fs::File, io::Read, path::Path};
-use xz2::read::XzEncoder;
+use lzma_rs::xz_compress;
+use std::{env, fmt::Write, fs, path::Path};
 
+/// Entry point for the build script.
+///
+/// Registers change detection for `vial.json` and `memory.x`, sets the
+/// required linker arguments, and triggers Vial config generation.
 fn main() {
-    // Generate vial config at the root of project
     println!("cargo:rerun-if-changed=vial.json");
-    generate_vial_config();
-
-    // Specify linker arguments.
-
-    // `--nmagic` is required if memory section addresses are not aligned to
-    // 0x10000, for example the FLASH and RAM sections in your `memory.x`.
-    // See https://github.com/rust-embedded/cortex-m-quickstart/pull/95
+    println!("cargo:rerun-if-changed=memory.x");
     println!("cargo:rustc-link-arg=--nmagic");
-
-    // Set the linker script to the one provided by cortex-m-rt.
     println!("cargo:rustc-link-arg=-Tlink.x");
+
+    generate_vial_config();
 }
 
+/// Generates the Vial keyboard configuration constants and writes them to
+/// `config_generated.rs` in the Cargo output directory.
+///
+/// The generated file contains:
+/// - `VIAL_KEYBOARD_DEF`: XZ-compressed keyboard definition derived from
+///   `vial.json`.
+/// - `VIAL_KEYBOARD_ID`: Unique 8-byte keyboard identifier.
+/// - `VIAL_SERIAL`: Vial serial string derived from the first 4 bytes of the
+///   keyboard ID.
 fn generate_vial_config() {
-    // Generated vial config file
     let out_file = Path::new(&env::var_os("OUT_DIR").unwrap()).join("config_generated.rs");
 
-    let p = Path::new("vial.json");
-    let mut content = String::new();
-    match File::open(p) {
-        Ok(mut file) => {
-            file.read_to_string(&mut content).expect("Cannot read vial.json");
+    let vial_cfg = read_vial_json();
+    let compressed = compress_vial_cfg(&vial_cfg);
+    let keyboard_id: [u8; 8] = [0x36, 0x3B, 0x06, 0xF5, 0x13, 0x9F, 0xE4, 0x46];
+
+    fs::write(out_file, format_constants(&compressed, &keyboard_id)).unwrap();
+}
+
+/// Reads and minifies `vial.json` from the crate root.
+///
+/// Parses the JSON and re-stringifies it to strip whitespace before
+/// compression. Prints a diagnostic message to stderr if the file cannot
+/// be opened, and returns an empty string so compression can still proceed.
+fn read_vial_json() -> String {
+    fs::read_to_string("vial.json").map(|content| json::stringify(json::parse(&content).unwrap())).unwrap_or_else(|e| {
+        eprintln!("Cannot find vial.json: {e}");
+        String::new()
+    })
+}
+
+/// Compresses a Vial config string using XZ at compression level 6.
+///
+/// Returns the compressed bytes as a `Vec<u8>` ready to be embedded as a
+/// constant in the generated source file.
+fn compress_vial_cfg(vial_cfg: &str) -> Vec<u8> {
+    let mut compressed = Vec::new();
+    xz_compress(&mut vial_cfg.as_bytes(), &mut compressed).unwrap();
+    compressed
+}
+
+/// Formats all Vial configuration constants into a Rust source string.
+///
+/// Derives `VIAL_SERIAL` from the first 4 bytes of `keyboard_id` and
+/// delegates byte array formatting to [`format_byte_array`].
+fn format_constants(compressed: &[u8], keyboard_id: &[u8; 8]) -> String {
+    let id = |i: usize| keyboard_id.get(i).copied().unwrap_or(0);
+    let vial_serial = format!("vial:{:02x}{:02x}{:02x}{:02x}:000001", id(0), id(1), id(2), id(3),);
+
+    let def_bytes = format_byte_array(compressed);
+    let id_bytes = format_byte_array(keyboard_id);
+
+    format!(
+        "/// XZ-compressed Vial keyboard definition, derived from `vial.json`.\n\
+         pub const VIAL_KEYBOARD_DEF: &[u8] = &[{def_bytes}];\n\
+         /// Unique 8-byte identifier for this keyboard, used by the Vial protocol.\n\
+         pub const VIAL_KEYBOARD_ID: &[u8] = &[{id_bytes}];\n\
+         /// Vial serial string derived from the first 4 bytes of [`VIAL_KEYBOARD_ID`].\n\
+         pub const VIAL_SERIAL: &str = \"{vial_serial}\";\n"
+    )
+}
+
+/// Formats a byte slice as a comma-separated list of Rust `u8` hex literals.
+///
+/// Each byte is emitted as `0xNN_u8` to satisfy the
+/// `clippy::unseparated_literal_suffix` lint without requiring any allow
+/// attributes in the generated file.
+fn format_byte_array(bytes: &[u8]) -> String {
+    bytes.iter().enumerate().fold(String::new(), |mut acc, (i, b)| {
+        if i > 0 {
+            acc.push_str(", ");
         }
-        Err(e) => println!("Cannot find vial.json {:?}: {}", p, e),
-    };
-
-    let vial_cfg = json::stringify(json::parse(&content).unwrap());
-    let mut keyboard_def_compressed: Vec<u8> = Vec::new();
-    XzEncoder::new(vial_cfg.as_bytes(), 6).read_to_end(&mut keyboard_def_compressed).unwrap();
-
-    let keyboard_id: Vec<u8> = vec![0x36, 0x3B, 0x06, 0xF5, 0x13, 0x9F, 0xE4, 0x46];
-
-    let vial_serial =
-        format!("vial:{:02x}{:02x}{:02x}{:02x}:000001", keyboard_id[0], keyboard_id[1], keyboard_id[2], keyboard_id[3]);
-
-    let const_declarations = [
-        const_declaration!(pub VIAL_KEYBOARD_DEF = keyboard_def_compressed),
-        const_declaration!(pub VIAL_KEYBOARD_ID = keyboard_id),
-        format!("pub const VIAL_SERIAL: &str = \"{vial_serial}\";"),
-    ]
-    .map(|s| "#[expect(clippy::redundant_static_lifetimes)]\n".to_owned() + s.as_str())
-    .join("\n");
-
-    fs::write(out_file, const_declarations).unwrap();
+        write!(acc, "0x{b:02X}_u8").unwrap();
+        acc
+    })
 }
