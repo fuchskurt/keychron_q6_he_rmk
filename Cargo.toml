@@ -20,7 +20,7 @@ rmk = { version = "*", default-features = false, features = ["async_matrix", "st
 static_cell = "2.1"
 
 [build-dependencies]
-lzma-rs = "*"
+lzma-rust2 = "*"
 json = "*"
 
 [[bin]]

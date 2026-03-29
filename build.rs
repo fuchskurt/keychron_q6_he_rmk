@@ -3,8 +3,8 @@
 //! Generates Vial keyboard configuration constants from `vial.json` and
 //! sets the required linker arguments for the Cortex-M4 target.
 
-use lzma_rs::xz_compress;
-use std::{env, fmt::Write, fs, path::Path};
+use lzma_rust2::{XzOptions, XzWriter};
+use std::{env, fmt::Write as _, fs, io::Write, path::Path};
 
 /// Entry point for the build script.
 ///
@@ -56,7 +56,11 @@ fn read_vial_json() -> String {
 /// constant in the generated source file.
 fn compress_vial_cfg(vial_cfg: &str) -> Vec<u8> {
     let mut compressed = Vec::new();
-    xz_compress(&mut vial_cfg.as_bytes(), &mut compressed).unwrap();
+    XzWriter::new(&mut compressed, XzOptions::with_preset(9))
+        .unwrap()
+        .auto_finish()
+        .write_all(vial_cfg.as_bytes())
+        .unwrap();
     compressed
 }
 
