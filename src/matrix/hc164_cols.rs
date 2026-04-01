@@ -11,14 +11,7 @@
 //! to call `select(col)` — there is no separate `advance` step.
 
 use core::hint::unlikely;
-use cortex_m::asm::delay;
 use embassy_stm32::gpio::Output;
-
-/// Cycle count for each bit-level delay inserted around clock transitions.
-///
-/// The HC164 requires tsu(DS) ≥ 20 ns and th(DS) ≥ 5 ns before/after the
-/// CP rising edge. At 84 MHz, 4 cycles ≈ 48 ns.
-const BIT_DELAY_CYCLES: u32 = 4;
 
 /// Column selector driven by an HC164 shift register.
 pub struct Hc164Cols<'peripherals> {
@@ -39,9 +32,7 @@ impl<'peripherals> Hc164Cols<'peripherals> {
     /// Pulse the clock pin for one shift step.
     fn pulse_cp(&mut self) {
         self.cp.set_high();
-        delay(BIT_DELAY_CYCLES);
         self.cp.set_low();
-        delay(BIT_DELAY_CYCLES);
     }
 
     /// Select the given column.
@@ -54,22 +45,17 @@ impl<'peripherals> Hc164Cols<'peripherals> {
     /// starting from 0 each scan.
     pub fn select(&mut self, col: usize) {
         if unlikely(col == 0) {
-            // Clear all outputs by pulsing MR low. The HC164 datasheet
-            // specifies a minimum MR low pulse width of 18 ns
+            // Clear all outputs by pulsing MR low.
             self.mr.set_low();
-            delay(BIT_DELAY_CYCLES);
             self.mr.set_high();
-            delay(BIT_DELAY_CYCLES);
 
             // Clock in the walking-one at position 0.
             self.ds.set_high();
-            delay(BIT_DELAY_CYCLES);
             self.pulse_cp();
             self.ds.set_low();
         } else {
             // Shift the walking-one to the next position.
             self.ds.set_low();
-            delay(BIT_DELAY_CYCLES);
             self.pulse_cp();
         }
     }
