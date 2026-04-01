@@ -144,7 +144,6 @@ async fn main(spawner: Spawner) {
         usb_config,
     );
 
-
     // Use internal flash to emulate eeprom
     let storage_config = StorageConfig {
         // Start at sector 1, 0x4000 from the start of the FLASH region

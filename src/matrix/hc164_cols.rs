@@ -12,7 +12,7 @@
 
 use core::hint::unlikely;
 use cortex_m::asm::delay;
-use embassy_stm32::gpio::{Flex, Pull, Speed};
+use embassy_stm32::gpio::Output;
 
 /// Cycle count for each bit-level delay inserted around clock transitions.
 ///
@@ -23,34 +23,16 @@ const BIT_DELAY_CYCLES: u32 = 4;
 /// Column selector driven by an HC164 shift register.
 pub struct Hc164Cols<'peripherals> {
     /// Clock input (`CP`) for shifting data into the register.
-    cp: Flex<'peripherals>,
+    cp: Output<'peripherals>,
     /// Serial data input (`DS`) for the shift register.
-    ds: Flex<'peripherals>,
+    ds: Output<'peripherals>,
     /// Master reset (`MR`) input for clearing the register.
-    mr: Flex<'peripherals>,
+    mr: Output<'peripherals>,
 }
 
 impl<'peripherals> Hc164Cols<'peripherals> {
-
-    /// Float all shift-register pins as inputs with pull-down.
-    pub fn enter_low_power(&mut self) {
-        self.ds.set_as_input(Pull::Down);
-        self.cp.set_as_input(Pull::Down);
-        self.mr.set_as_input(Pull::Down);
-    }
-
-    /// Restore all shift-register pins as outputs (normal scan state).
-    pub fn exit_low_power(&mut self) {
-        self.ds.set_low();
-        self.ds.set_as_output(Speed::VeryHigh);
-        self.cp.set_low();
-        self.cp.set_as_output(Speed::VeryHigh);
-        self.mr.set_low();
-        self.mr.set_as_output(Speed::VeryHigh);
-    }
-
     /// Create a new column selector for the HC164.
-    pub const fn new(ds: Flex<'peripherals>, cp: Flex<'peripherals>, mr: Flex<'peripherals>) -> Self {
+    pub const fn new(ds: Output<'peripherals>, cp: Output<'peripherals>, mr: Output<'peripherals>) -> Self {
         Self { ds, cp, mr }
     }
 
