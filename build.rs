@@ -51,13 +51,10 @@ fn read_vial_json() -> String {
             let value: Value = from_str(&content).unwrap();
             to_string(&value).unwrap()
         })
-        .unwrap_or_else(|e| {
-            eprintln!("Cannot find vial.json: {e}");
-            String::new()
-        })
+        .expect("failed to read vial.json")
 }
 
-/// Compresses a Vial config string using XZ at compression level 6.
+/// Compresses a Vial config string using XZ at compression level 9.
 ///
 /// Returns the compressed bytes as a `Vec<u8>` ready to be embedded as a
 /// constant in the generated source file.

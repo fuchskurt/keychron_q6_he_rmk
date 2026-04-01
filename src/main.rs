@@ -105,7 +105,7 @@ bind_interrupts!(struct Irqs {
 /// Entry point for the firmware.
 #[main]
 async fn main(spawner: Spawner) {
-    // Explicitly drop spawner.
+    // Tasks run inline via join4; spawner is unused.
     let _: Spawner = spawner;
     // Initialize peripherals
     let peripheral = embassy_stm32::init({
@@ -144,6 +144,7 @@ async fn main(spawner: Spawner) {
         usb_config,
     );
 
+
     // Use internal flash to emulate eeprom
     let storage_config = StorageConfig {
         // Start at sector 1, 0x4000 from the start of the FLASH region
@@ -165,7 +166,12 @@ async fn main(spawner: Spawner) {
         },
         ..Default::default()
     };
+    // PC13 must be driven high for the duration of main to keep the analog
+    // matrix powered. Dropping this binding would return the pin to its reset
+    // state and cut power to the hall-effect sensors.
     let _analog_matrix_power = Output::new(peripheral.PC13, Level::High, Speed::Low);
+    // PC5 must be held low via pull-down so it does not float and trigger a
+    // spurious wakeup from the MCU's wakeup-pin logic.
     let _analog_matrix_wakeup = Input::new(peripheral.PC5, Pull::Down);
 
     // HC164 columns

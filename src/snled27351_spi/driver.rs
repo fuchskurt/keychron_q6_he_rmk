@@ -112,25 +112,25 @@ impl<const DRIVER_COUNT: usize> SnledBus<'_, DRIVER_COUNT> {
     /// Takes the buffer slice directly — no stack copy needed because
     /// `buf` and `spi`/`cs` are in separate structs.
     /// Maximum SPI payload: 2-byte header + PWM register block.
-    async fn flush_driver(&mut self, index: usize, pwm: &[u8; PWM_REGISTER_COUNT]) {
+    ///
+    /// Returns `true` if succeeded, `false` on any error.
+    async fn flush_driver(&mut self, index: usize, pwm: &[u8; PWM_REGISTER_COUNT]) -> bool {
         let mut tx = [0_u8; PWM_REGISTER_COUNT.saturating_add(2)];
 
-        let Some(cmd_slot) = tx.get_mut(0) else { return };
+        let Some(cmd_slot) = tx.get_mut(0) else { return false };
         *cmd_slot = WRITE_CMD | PATTERN_CMD | (PAGE_PWM & 0x0F);
 
-        let Some(reg_slot) = tx.get_mut(1) else { return };
+        let Some(reg_slot) = tx.get_mut(1) else { return false };
         *reg_slot = 0x00;
 
-        let Some(payload_slot) = tx.get_mut(2..) else { return };
+        let Some(payload_slot) = tx.get_mut(2..) else { return false };
         payload_slot.copy_from_slice(pwm);
 
-        let Some(cs) = self.cs.get_mut(index) else { return };
+        let Some(cs) = self.cs.get_mut(index) else { return false };
         cs.set_low();
-        if self.spi.write(&tx).await.is_err() {
-            cs.set_high();
-            return;
-        }
+        let ok = self.spi.write(&tx).await.is_ok();
         cs.set_high();
+        ok
     }
 
     /// Initialise a single SNLED27351 driver chip.
@@ -213,8 +213,9 @@ impl<'peripherals, const DRIVER_COUNT: usize> Snled27351<'peripherals, DRIVER_CO
             if likely(!buf.dirty) {
                 continue;
             }
-            self.bus.flush_driver(drv, &buf.pwm).await;
-            buf.dirty = false;
+            if self.bus.flush_driver(drv, &buf.pwm).await {
+                buf.dirty = false;
+            }
         }
     }
 

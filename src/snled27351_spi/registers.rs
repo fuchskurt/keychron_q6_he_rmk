@@ -1,6 +1,6 @@
 //! SNLED27351 register and command constants.
 /// Register or command constant `WRITE_CMD`.
-pub const WRITE_CMD: u8 = 0 << 7;
+pub const WRITE_CMD: u8 = 0x00;
 /// Register or command constant `PATTERN_CMD`.
 pub const PATTERN_CMD: u8 = 2 << 4;
 

@@ -80,7 +80,9 @@ async fn softstart(
         let percent = u8::try_from(target.saturating_mul(step).checked_div(steps).unwrap_or(0)).unwrap_or(0);
         let (scaled_red, scaled_green, scaled_blue) = correct(base_red, base_green, base_blue, percent);
         backlight.set_all_leds(scaled_red, scaled_green, scaled_blue).await;
-        Timer::after_millis(delay_ms).await;
+        if step < steps {
+            Timer::after_millis(delay_ms).await;
+        }
     }
 }
 

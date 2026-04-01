@@ -7,6 +7,7 @@ use core::{
     hint::{cold_path, likely, unlikely},
 };
 use embassy_stm32::adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, Instance};
+use embassy_stm32::gpio::Output;
 use rmk::{embassy_futures::yield_now, event::KeyboardEvent, macros::input_device};
 
 /// Expected travel distance in physical units, represents 4.0 mm.
@@ -121,6 +122,8 @@ where
     sample_time: AdcSampleTime<ADC>,
     /// Dynamic per-key state for the matrix.
     state: [[KeyState; COL]; ROW],
+    /// Optional matrix power rail control pin (PC13 on Q6 HE).
+    power_pin: Option<Output<'peripherals>>,
 }
 
 impl<'peripherals, ADC, const ROW: usize, const COL: usize> AnalogHallMatrix<'peripherals, ADC, ROW, COL>
@@ -176,6 +179,7 @@ where
         sample_time: AdcSampleTime<ADC>,
         cols: Hc164Cols<'peripherals>,
         cfg: HallCfg,
+        power_pin: Option<Output<'peripherals>>,
     ) -> Self {
         let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
         let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
@@ -189,6 +193,7 @@ where
             deact_threshold,
             calib: [[KeyCalib::uncalibrated(); COL]; ROW],
             state: [[KeyState::new(); COL]; ROW],
+            power_pin,
         };
 
         matrix.calibrate_zero_travel();
@@ -240,7 +245,13 @@ where
                 let Some(&cal) = self.calib.get(row).and_then(|row_slice| row_slice.get(col)) else { continue };
                 let prev_travel = st.travel_scaled;
                 let was_pressed = st.pressed;
-                let new_travel = Self::travel_scaled_from(&cal, raw).unwrap_or(prev_travel);
+                let Some(new_travel) = Self::travel_scaled_from(&cal, raw) else {
+                    // Raw reading is out of the valid ADC range. Do not update
+                    // last_raw so the noise gate baseline stays at the last
+                    // known-good value.
+                    cold_path();
+                    continue;
+                };
 
                 st.last_raw = raw;
 
