@@ -94,6 +94,7 @@ use static_cell::ConstStaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 bind_interrupts!(struct Irqs {
+    DMA2_STREAM0 => dma::InterruptHandler<peripherals::DMA2_CH0>;
     DMA2_STREAM3 => dma::InterruptHandler<peripherals::DMA2_CH3>;
     DMA2_STREAM2 => dma::InterruptHandler<peripherals::DMA2_CH2>;
     EXTI3 => exti::InterruptHandler<typelevel::EXTI3>;
@@ -108,7 +109,7 @@ async fn main(spawner: Spawner) {
     // Tasks run inline via join4; spawner is unused.
     let _: Spawner = spawner;
     // Initialize peripherals
-    let peripheral = embassy_stm32::init({
+    let mut peripheral = embassy_stm32::init({
         let mut config = Config::default();
         config.rcc.hse = Some(Hse { freq: Hertz(16_000_000), mode: HseMode::Oscillator });
         config.rcc.hsi = false;
@@ -193,8 +194,16 @@ async fn main(spawner: Spawner) {
         peripheral.PA1.degrade_adc(),
     ];
 
-    let mut matrix =
-        AnalogHallMatrix::<_, ROW, COL>::new(adc, row_channels, SampleTime::CYCLES15, cols, HallCfg::default());
+    let mut matrix = AnalogHallMatrix::<_, _, _, ROW, COL>::new(
+        adc,
+        row_channels,
+        peripheral.DMA2_CH0,
+        Irqs,
+        SampleTime::CYCLES15,
+        cols,
+        HallCfg::default(),
+    )
+    .await;
 
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
