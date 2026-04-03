@@ -24,7 +24,7 @@
 /// Backlight driver integration.
 mod backlight;
 /// Flash storage wrapper types.
-mod flash_wrapper;
+mod flash_wrapper_async;
 /// Default keymap definitions.
 mod keymap;
 /// Matrix scanning components.
@@ -36,7 +36,7 @@ mod vial;
 
 use crate::{
     backlight::{init::backlight_runner, lock_indicator::SnledIndicatorProcessor},
-    flash_wrapper::Flash16K,
+    flash_wrapper_async::Flash16K,
     keymap::{COL, ROW},
     matrix::{
         analog_matrix::{AnalogHallMatrix, HallCfg},
@@ -88,7 +88,6 @@ use rmk::{
     keyboard::Keyboard,
     run_all,
     run_rmk,
-    storage::async_flash_wrapper,
 };
 use static_cell::ConstStaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
@@ -152,7 +151,7 @@ async fn main(spawner: Spawner) {
         num_sectors: 2,
         ..Default::default()
     };
-    let flash = async_flash_wrapper(Flash16K(Flash::new(peripheral.FLASH, Irqs)));
+    let flash = Flash16K(Flash::new(peripheral.FLASH, Irqs));
 
     // Keyboard config
     let rmk_config = RmkConfig {

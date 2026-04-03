@@ -15,7 +15,7 @@ cortex-m-rt = "0.7"
 embassy-time = { features = ["tick-hz-32_768"], git = "https://github.com/fuchskurt/embassy.git" }
 embassy-stm32 = { features = ["stm32f401rc", "memory-x", "time-driver-any", "exti", "unstable-pac"], git = "https://github.com/fuchskurt/embassy.git" }
 embassy-executor = { features = ["platform-cortex-m", "executor-thread"], git = "https://github.com/fuchskurt/embassy.git" }
-embedded-storage = "0.3"
+embedded-storage-async = "0.4"
 rmk = { default-features = false, features = ["async_matrix", "storage", "vial", "vial_lock"], git = "https://github.com/HaoboGu/rmk.git" }
 static_cell = "2.1"
 
