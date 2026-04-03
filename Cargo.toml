@@ -36,14 +36,6 @@ name = "rmk-q6_he_ansi"
 test = false
 bench = false
 
-[profile.dev]
-codegen-units = 1
-debug = true
-opt-level = 1
-overflow-checks = true
-lto = false
-panic = "unwind"
-
 [profile.release]
 codegen-units = 1
 debug = false
