@@ -236,7 +236,7 @@ where
         let st = self.sample_time.clone();
         let _ = self
             .adc
-            .read_seq(self.dma.reborrow(), self.irq, self.row_adc.iter_mut().map(|ch| (ch, st.clone())), &mut buf)
+            .read(self.dma.reborrow(), self.irq, self.row_adc.iter_mut().map(|ch| (ch, st.clone())), &mut buf)
             .await;
         buf
     }
