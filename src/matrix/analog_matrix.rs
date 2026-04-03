@@ -29,10 +29,6 @@ const VALID_RAW_MAX: u16 = 3500;
 const REF_ZERO_TRAVEL: u16 = 3121;
 /// Fallback zero value when uncalibrated.
 const UNCALIBRATED_ZERO: u16 = 3000;
-/// Raw ADC delta below which noise is ignored.
-const NOISE_GATE: u16 = 2;
-/// Number of passes used during calibration.
-const CALIB_PASSES: u32 = 64;
 
 /// ADC sample-time type associated with the selected ADC peripheral.
 type AdcSampleTime<ADC> = <<ADC as BasicInstance>::Regs as BasicAdcRegs>::SampleTime;
@@ -42,13 +38,17 @@ type AdcSampleTime<ADC> = <<ADC as BasicInstance>::Regs as BasicAdcRegs>::Sample
 pub struct HallCfg {
     /// Actuation point in scaled travel units, where value is mm/10.
     pub actuation_pt: u8,
+    /// Number of passes used during calibration.
+    pub calib_passes: u32,
     /// Offset from the actuation point required for de-activation in 0.x mm.
     pub deact_offset: u8,
+    /// Raw ADC delta below which readings are treated as noise (default: 2).
+    pub noise_gate: u16,
 }
 
 impl Default for HallCfg {
     /// Provide default hall configuration values.
-    fn default() -> Self { Self { actuation_pt: 15, deact_offset: 3 } }
+    fn default() -> Self { Self { actuation_pt: 15, deact_offset: 3, noise_gate: 2, calib_passes: 64 } }
 }
 
 #[derive(Clone, Copy)]
@@ -115,6 +115,8 @@ where
     adc: Adc<'peripherals, ADC>,
     /// Calibration data for each key in the matrix.
     calib: [[KeyCalib; COL]; ROW],
+    /// Number of passes used during calibration.
+    calib_passes: u32,
     /// Column driver used to select the active column.
     cols: Hc164Cols<'peripherals>,
     /// De-actuation threshold in scaled travel units.
@@ -123,6 +125,8 @@ where
     dma: embassy_stm32::Peri<'peripherals, D>,
     /// DMA interrupt binding used for ADC sequence reads.
     irq: IRQ,
+    /// Raw ADC delta below which readings are treated as noise.
+    noise_gate: u16,
     /// ADC channels corresponding to each row.
     row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
     /// ADC sample time configuration.
@@ -156,7 +160,7 @@ where
     async fn calibrate_zero_travel(&mut self) {
         let mut acc: [[u32; COL]; ROW] = [[0_u32; COL]; ROW];
 
-        for _ in 0..CALIB_PASSES {
+        for _ in 0..self.calib_passes {
             for col in 0..COL {
                 self.cols.select(col);
                 let buf = self.read_row_samples().await;
@@ -170,8 +174,8 @@ where
 
         for (calib_row, acc_row) in self.calib.iter_mut().zip(acc.iter()) {
             for (cal_cell, &acc_cell) in calib_row.iter_mut().zip(acc_row.iter()) {
-                let avg =
-                    u16::try_from(acc_cell.checked_div(CALIB_PASSES).unwrap_or_default()).unwrap_or(UNCALIBRATED_ZERO);
+                let avg = u16::try_from(acc_cell.checked_div(self.calib_passes).unwrap_or_default())
+                    .unwrap_or(UNCALIBRATED_ZERO);
                 *cal_cell = KeyCalib::new(avg, avg.saturating_sub(DEFAULT_FULL_RANGE));
             }
         }
@@ -203,6 +207,8 @@ where
             cols,
             act_threshold,
             deact_threshold,
+            noise_gate: cfg.noise_gate,
+            calib_passes: cfg.calib_passes,
             calib: [[KeyCalib::uncalibrated(); COL]; ROW],
             state: [[KeyState::new(); COL]; ROW],
         };
@@ -248,7 +254,7 @@ where
                 };
                 let last_raw = st.last_raw;
 
-                if likely(last_raw.abs_diff(raw) < NOISE_GATE) {
+                if likely(last_raw.abs_diff(raw) < self.noise_gate) {
                     continue;
                 }
 
