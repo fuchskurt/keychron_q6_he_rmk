@@ -154,7 +154,7 @@ where
 
     /// Perform zero-travel calibration using DMA-backed ADC reads.
     ///
-    /// Samples each key [`CALIB_PASSES`] times and averages the results to
+    /// Samples each key `calib_passes` times and averages the results to
     /// establish a per-key resting ADC value. Called once inside [`Self::new`]
     /// before the matrix enters the scan loop.
     async fn calibrate_zero_travel(&mut self) {
