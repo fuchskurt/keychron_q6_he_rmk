@@ -4,6 +4,7 @@ use crate::matrix::{
 };
 use core::hint::{cold_path, likely, unlikely};
 use embassy_stm32::{
+    Peri,
     adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, ConfiguredSequence, Instance, RxDma},
     dma,
     interrupt::typelevel,
@@ -55,7 +56,7 @@ impl Default for HallCfg {
         Self {
             actuation_pt: 15,
             calib_passes: 64,
-            col_settle_us: Duration::from_micros(10),
+            col_settle_us: Duration::from_micros(15),
             deact_offset: 3,
             noise_gate: 2,
         }
@@ -118,7 +119,7 @@ where
     /// ADC peripheral used for sampling hall sensors.
     adc: Adc<'peripherals, ADC>,
     /// DMA channel used for non-blocking ADC sequence reads.
-    dma: embassy_stm32::Peri<'peripherals, D>,
+    dma: Peri<'peripherals, D>,
     /// ADC channels corresponding to each row.
     row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
     /// ADC sample time configuration.
@@ -237,7 +238,7 @@ where
     pub async fn new(
         adc: Adc<'peripherals, ADC>,
         row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
-        dma: embassy_stm32::Peri<'peripherals, D>,
+        dma: Peri<'peripherals, D>,
         irq: IRQ,
         sample_time: AdcSampleTime<ADC>,
         cols: Hc164Cols<'peripherals>,
