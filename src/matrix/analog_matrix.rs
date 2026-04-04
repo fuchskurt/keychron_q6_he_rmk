@@ -4,11 +4,12 @@ use crate::matrix::{
 };
 use core::hint::{cold_path, likely, unlikely};
 use embassy_stm32::{
-    adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, Instance, RxDma},
+    adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, ConfiguredSequence, Instance, RxDma},
     dma,
     interrupt::typelevel,
     pac::adc,
 };
+use embassy_time::{Duration, Timer};
 use rmk::{event::KeyboardEvent, macros::input_device};
 
 /// Expected travel distance in physical units, represents 4.0 mm.
@@ -40,6 +41,8 @@ pub struct HallCfg {
     pub actuation_pt: u8,
     /// Number of passes used during calibration.
     pub calib_passes: u32,
+    /// Column settle time in microseconds after selecting a new column.
+    pub col_settle_us: Duration,
     /// Offset from the actuation point required for de-activation in 0.x mm.
     pub deact_offset: u8,
     /// Raw ADC delta below which readings are treated as noise (default: 2).
@@ -48,7 +51,15 @@ pub struct HallCfg {
 
 impl Default for HallCfg {
     /// Provide default hall configuration values.
-    fn default() -> Self { Self { actuation_pt: 15, deact_offset: 3, noise_gate: 2, calib_passes: 64 } }
+    fn default() -> Self {
+        Self {
+            actuation_pt: 15,
+            calib_passes: 64,
+            col_settle_us: Duration::from_micros(10),
+            deact_offset: 3,
+            noise_gate: 2,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -96,6 +107,42 @@ impl Default for KeyState {
     fn default() -> Self { Self::new() }
 }
 
+/// ADC-related peripherals grouped to allow split borrows when constructing
+/// a [`ConfiguredSequence`].
+struct AdcPart<'peripherals, ADC, D, const ROW: usize>
+where
+    ADC: Instance<Regs = adc::Adc> + BasicInstance,
+    D: RxDma<ADC>,
+    AdcSampleTime<ADC>: Clone,
+{
+    /// ADC peripheral used for sampling hall sensors.
+    adc: Adc<'peripherals, ADC>,
+    /// DMA channel used for non-blocking ADC sequence reads.
+    dma: embassy_stm32::Peri<'peripherals, D>,
+    /// ADC channels corresponding to each row.
+    row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
+    /// ADC sample time configuration.
+    sample_time: AdcSampleTime<ADC>,
+}
+
+impl<'peripherals, ADC, D, const ROW: usize> AdcPart<'peripherals, ADC, D, ROW>
+where
+    ADC: Instance<Regs = adc::Adc> + BasicInstance,
+    D: RxDma<ADC>,
+    AdcSampleTime<ADC>: Clone,
+{
+    /// Create a [`ConfiguredSequence`] over all row channels, programming the
+    /// ADC sequence registers once. The returned reader can be triggered
+    /// repeatedly without reprogramming the sequence registers.
+    fn configured_sequence<'reader>(
+        &'reader mut self,
+        buf: &'reader mut [u16; ROW],
+    ) -> ConfiguredSequence<'reader, 'peripherals, ADC, D> {
+        let st = self.sample_time.clone();
+        self.adc.configured_sequence(self.dma.reborrow(), self.row_adc.iter_mut().map(|ch| (ch, st.clone())), buf)
+    }
+}
+
 /// Hall-effect analog matrix scanner.
 ///
 /// Uses DMA-backed ADC reads for all sampling including the initial
@@ -111,26 +158,22 @@ where
 {
     /// Actuation threshold in scaled travel units.
     act_threshold: u8,
-    /// ADC peripheral used for sampling hall sensors.
-    adc: Adc<'peripherals, ADC>,
+    /// ADC peripherals and channels grouped for split-borrow compatibility.
+    adc_part: AdcPart<'peripherals, ADC, D, ROW>,
     /// Calibration data for each key in the matrix.
     calib: [[KeyCalib; COL]; ROW],
     /// Number of passes used during calibration.
     calib_passes: u32,
+    /// Column settle time in microseconds after selecting a new column.
+    col_settle_us: Duration,
     /// Column driver used to select the active column.
     cols: Hc164Cols<'peripherals>,
     /// De-actuation threshold in scaled travel units.
     deact_threshold: u8,
-    /// DMA channel used for non-blocking ADC sequence reads.
-    dma: embassy_stm32::Peri<'peripherals, D>,
     /// DMA interrupt binding used for ADC sequence reads.
     irq: IRQ,
     /// Raw ADC delta below which readings are treated as noise.
     noise_gate: u16,
-    /// ADC channels corresponding to each row.
-    row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
-    /// ADC sample time configuration.
-    sample_time: AdcSampleTime<ADC>,
     /// Dynamic per-key state for the matrix.
     state: [[KeyState; COL]; ROW],
 }
@@ -155,16 +198,21 @@ where
     /// Perform zero-travel calibration using DMA-backed ADC reads.
     ///
     /// Samples each key `calib_passes` times and averages the results to
-    /// establish a per-key resting ADC value. Called once inside [`Self::new`]
-    /// before the matrix enters the scan loop.
+    /// establish a per-key resting ADC value. The ADC sequence is programmed
+    /// once for the entire calibration and reused across all passes and
+    /// columns. Called once inside [`Self::new`] before the matrix enters
+    /// the scan loop.
     async fn calibrate_zero_travel(&mut self) {
         let mut acc: [[u32; COL]; ROW] = [[0_u32; COL]; ROW];
+        let mut buf = [0_u16; ROW];
+        let mut seq = self.adc_part.configured_sequence(&mut buf);
 
         for _ in 0..self.calib_passes {
             for col in 0..COL {
                 self.cols.select(col);
-                let buf = self.read_row_samples().await;
-                for (row, &sample) in buf.iter().enumerate() {
+                Timer::after(self.col_settle_us).await;
+                let samples = seq.read(self.irq).await;
+                for (row, &sample) in samples.iter().enumerate() {
                     if let Some(cell) = acc.get_mut(row).and_then(|r| r.get_mut(col)) {
                         *cell = cell.saturating_add(u32::from(sample));
                     }
@@ -199,16 +247,14 @@ where
         let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
 
         let mut matrix = Self {
-            adc,
-            row_adc,
-            dma,
+            adc_part: AdcPart { adc, dma, row_adc, sample_time },
             irq,
-            sample_time,
             cols,
             act_threshold,
             deact_threshold,
-            noise_gate: cfg.noise_gate,
             calib_passes: cfg.calib_passes,
+            col_settle_us: cfg.col_settle_us,
+            noise_gate: cfg.noise_gate,
             calib: [[KeyCalib::uncalibrated(); COL]; ROW],
             state: [[KeyState::new(); COL]; ROW],
         };
@@ -226,27 +272,19 @@ where
         }
     }
 
-    /// Read all ROW channels via DMA for the currently selected column.
-    ///
-    /// The ADC sample time (15 cycles at 42 MHz ≈ 357 ns) exceeds the
-    /// HC164 propagation delay (~20–50 ns), so no separate analog settling
-    /// step is required before the DMA transfer.
-    async fn read_row_samples(&mut self) -> [u16; ROW] {
-        let mut buf = [0_u16; ROW];
-        let st = self.sample_time.clone();
-        let _ = self
-            .adc
-            .read(self.dma.reborrow(), self.irq, self.row_adc.iter_mut().map(|ch| (ch, st.clone())), &mut buf)
-            .await;
-        buf
-    }
-
     /// Scan the matrix and return the first key state change found, if any.
+    ///
+    /// The ADC sequence is programmed once per scan pass and reused across
+    /// all columns, avoiding per-column sequence register writes.
     #[optimize(speed)]
     async fn scan_for_next_change(&mut self) -> Option<KeyboardEvent> {
+        let mut buf = [0_u16; ROW];
+        let mut seq = self.adc_part.configured_sequence(&mut buf);
+
         for col in 0..COL {
             self.cols.select(col);
-            let samples = self.read_row_samples().await;
+            Timer::after(self.col_settle_us).await;
+            let samples = seq.read(self.irq).await;
 
             for (row, &raw) in samples.iter().enumerate() {
                 let Some(st) = self.state.get_mut(row).and_then(|row_slice| row_slice.get_mut(col)) else {
