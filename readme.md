@@ -52,7 +52,7 @@ The key matrix is scanned using an HC164 shift register as a walking-ones
 column selector. For each column the firmware:
 
 1. Selects the column via the HC164
-2. Waits a configurable column settle time (`HallCfg::col_settle_us`, default 15 µs)
+2. Waits a configurable column settle time (`HallCfg::col_settle_us`, default 35 µs)
 3. Reads all 6 row ADC channels in a single non-blocking DMA burst
 4. Compares each reading against the previous value via a noise gate
 5. If a change exceeds the noise gate, computes travel distance and checks
@@ -60,7 +60,7 @@ column selector. For each column the firmware:
 
 All ADC sampling is performed via `ConfiguredSequence`.
 The ADC channel sequence registers are programmed once at construction and
-reused across all columns and calibration passes, avoiding the ~5 µs per-call
+reused across all columns and calibration passes, avoiding the per-call
 overhead of reprogramming them on every read. Both the settle delay and the
 DMA transfer are fully async: the executor is free to run other tasks (USB HID,
 RMK event processing) during both waits.
@@ -78,7 +78,7 @@ array in `src/matrix/travel_helpers.rs`.
 
 On construction, before the matrix enters the scan loop, the firmware performs
 an async zero-travel calibration pass using the same DMA-backed `ConfiguredSequence`
-path as normal scanning. It reads each key 64 times and averages the results,
+path as normal scanning. It reads each key 512 times and averages the results,
 establishing a per-key resting ADC value. This compensates for manufacturing
 variation in magnet strength and sensor placement across keys.
 

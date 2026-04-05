@@ -65,8 +65,8 @@ impl Default for HallCfg {
     fn default() -> Self {
         Self {
             actuation_pt: 15,
-            calib_passes: 64,
-            col_settle_us: Duration::from_micros(40),
+            calib_passes: 512,
+            col_settle_us: Duration::from_micros(35),
             deact_offset: 3,
             noise_gate: 2,
             shifter_delay_cycles: 5,
