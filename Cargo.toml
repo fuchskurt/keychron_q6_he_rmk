@@ -2,7 +2,7 @@ cargo-features = ["panic-immediate-abort"]
 
 [package]
 name = "rmk-q6_he_ansi"
-version = "1.0.0"
+version = "1.1.1"
 description = "Keychron Q6 HE ANSI keyboard firmware written in Rust using RMK and Embassy"
 homepage = "https://github.com/fuchskurt/keychron_q6_he_rmk"
 repository = "https://github.com/fuchskurt/keychron_q6_he_rmk"
