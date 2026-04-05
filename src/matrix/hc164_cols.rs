@@ -54,8 +54,7 @@ impl<'peripherals> Hc164Cols<'peripherals> {
             self.pulse_cp();
             self.ds.set_low();
         } else {
-            // Shift the walking-one to the next position.
-            self.ds.set_low();
+            // clock the walking-one to the next position.
             self.pulse_cp();
         }
     }
