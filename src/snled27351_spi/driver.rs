@@ -224,9 +224,9 @@ impl<'peripherals, const DRIVER_COUNT: usize> Snled27351<'peripherals, DRIVER_CO
             cs.set_high();
         }
         self.bus.sdb.set_low();
-        Timer::after_millis(5).await;
+        Timer::after_micros(250).await;
         self.bus.sdb.set_high();
-        Timer::after_millis(5).await;
+        Timer::after_micros(500).await;
 
         for index in 0..DRIVER_COUNT {
             self.bus.init_driver(index, chip_current_tune).await;

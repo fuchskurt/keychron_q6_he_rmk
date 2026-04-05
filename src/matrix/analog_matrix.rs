@@ -69,7 +69,7 @@ impl Default for HallCfg {
             col_settle_us: Duration::from_micros(35),
             deact_offset: 3,
             noise_gate: 2,
-            shifter_delay_cycles: 5,
+            shifter_delay_cycles: 8,
         }
     }
 }
