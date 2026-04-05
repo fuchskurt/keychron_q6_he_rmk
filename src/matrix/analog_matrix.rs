@@ -2,7 +2,10 @@ use crate::matrix::{
     hc164_cols::Hc164Cols,
     travel_helpers::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
 };
-use core::hint::{cold_path, likely, unlikely};
+use core::{
+    future::pending,
+    hint::{likely, unlikely},
+};
 use embassy_stm32::{
     Peri,
     adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, ConfiguredSequence, Instance, RxDma},
@@ -11,7 +14,10 @@ use embassy_stm32::{
     pac::adc,
 };
 use embassy_time::{Duration, Timer};
-use rmk::{event::KeyboardEvent, macros::input_device};
+use rmk::{
+    event::KeyboardEvent,
+    input_device::{InputDevice, Runnable},
+};
 
 /// Expected travel distance in physical units, represents 4.0 mm.
 const FULL_TRAVEL_UNIT: u8 = 40;
@@ -23,6 +29,8 @@ const TRAVEL_SCALE_I64: i64 = i64::from(TRAVEL_SCALE);
 const FULL_TRAVEL_SCALED: u8 = FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE);
 /// Default full-range calibration delta.
 const DEFAULT_FULL_RANGE: u16 = 900;
+/// Maximum acceptable distance from Ref Zero Travel on calibration.
+const CALIB_ZERO_TOLERANCE: u16 = 500;
 /// Minimum acceptable raw ADC value.
 const VALID_RAW_MIN: u16 = 1200;
 /// Maximum acceptable raw ADC value.
@@ -48,6 +56,8 @@ pub struct HallCfg {
     pub deact_offset: u8,
     /// Raw ADC delta below which readings are treated as noise (default: 2).
     pub noise_gate: u16,
+    /// CPU cycles between HC164 pin transitions.
+    pub shifter_delay_cycles: u32,
 }
 
 impl Default for HallCfg {
@@ -55,10 +65,11 @@ impl Default for HallCfg {
     fn default() -> Self {
         Self {
             actuation_pt: 15,
-            calib_passes: 64,
-            col_settle_us: Duration::from_micros(15),
+            calib_passes: 512,
+            col_settle_us: Duration::from_micros(35),
             deact_offset: 3,
             noise_gate: 2,
+            shifter_delay_cycles: 8,
         }
     }
 }
@@ -68,18 +79,24 @@ impl Default for HallCfg {
 struct KeyCalib {
     /// Fixed-point scale factor used to convert raw delta to travel units.
     scale_factor: i32,
+    /// Whether this position has a valid hall effect sensor.
+    used: bool,
     /// Raw ADC value corresponding to zero travel.
     zero: u16,
 }
 
 impl KeyCalib {
     /// Build calibration data from zero and full travel values.
-    const fn new(zero: u16, full: u16) -> Self { Self { scale_factor: compute_scale_factor(zero, full), zero } }
+    const fn new(zero: u16, full: u16) -> Self {
+        Self {
+            scale_factor: compute_scale_factor(zero, full),
+            used: zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE,
+            zero,
+        }
+    }
 
     /// Build an uncalibrated placeholder calibration.
-    pub const fn uncalibrated() -> Self {
-        Self::new(UNCALIBRATED_ZERO, UNCALIBRATED_ZERO.saturating_sub(DEFAULT_FULL_RANGE))
-    }
+    pub const fn uncalibrated() -> Self { Self { scale_factor: SCALE_Q_FACTOR, used: false, zero: UNCALIBRATED_ZERO } }
 }
 
 impl Default for KeyCalib {
@@ -110,20 +127,20 @@ impl Default for KeyState {
 
 /// ADC-related peripherals grouped to allow split borrows when constructing
 /// a [`ConfiguredSequence`].
-struct AdcPart<'peripherals, ADC, D, const ROW: usize>
+pub struct AdcPart<'peripherals, ADC, D, const ROW: usize>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
     AdcSampleTime<ADC>: Clone,
 {
     /// ADC peripheral used for sampling hall sensors.
-    adc: Adc<'peripherals, ADC>,
+    pub adc: Adc<'peripherals, ADC>,
     /// DMA channel used for non-blocking ADC sequence reads.
-    dma: Peri<'peripherals, D>,
+    pub dma: Peri<'peripherals, D>,
     /// ADC channels corresponding to each row.
-    row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
+    pub row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
     /// ADC sample time configuration.
-    sample_time: AdcSampleTime<ADC>,
+    pub sample_time: AdcSampleTime<ADC>,
 }
 
 impl<'peripherals, ADC, D, const ROW: usize> AdcPart<'peripherals, ADC, D, ROW>
@@ -139,8 +156,18 @@ where
         &'reader mut self,
         buf: &'reader mut [u16; ROW],
     ) -> ConfiguredSequence<'reader, 'peripherals, ADC, D> {
-        let st = self.sample_time.clone();
-        self.adc.configured_sequence(self.dma.reborrow(), self.row_adc.iter_mut().map(|ch| (ch, st.clone())), buf)
+        let st = self.sample_time;
+        self.adc.configured_sequence(self.dma.reborrow(), self.row_adc.iter_mut().map(|ch| (ch, st)), buf)
+    }
+
+    /// Create a new [`AdcPart`] from the given peripherals.
+    pub fn new(
+        adc: Adc<'peripherals, ADC>,
+        row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
+        dma: Peri<'peripherals, D>,
+        sample_time: AdcSampleTime<ADC>,
+    ) -> Self {
+        Self { adc, dma, row_adc, sample_time }
     }
 }
 
@@ -149,7 +176,6 @@ where
 /// Uses DMA-backed ADC reads for all sampling including the initial
 /// zero-travel calibration, keeping the firmware fully non-blocking
 /// from construction onwards.
-#[input_device(publish = KeyboardEvent)]
 pub struct AnalogHallMatrix<'peripherals, ADC, D, IRQ, const ROW: usize, const COL: usize>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
@@ -157,24 +183,16 @@ where
     IRQ: typelevel::Binding<D::Interrupt, dma::InterruptHandler<D>> + Copy,
     AdcSampleTime<ADC>: Clone,
 {
-    /// Actuation threshold in scaled travel units.
-    act_threshold: u8,
     /// ADC peripherals and channels grouped for split-borrow compatibility.
     adc_part: AdcPart<'peripherals, ADC, D, ROW>,
     /// Calibration data for each key in the matrix.
     calib: [[KeyCalib; COL]; ROW],
-    /// Number of passes used during calibration.
-    calib_passes: u32,
-    /// Column settle time in microseconds after selecting a new column.
-    col_settle_us: Duration,
+    /// Sensing and scanning configuration.
+    cfg: HallCfg,
     /// Column driver used to select the active column.
     cols: Hc164Cols<'peripherals>,
-    /// De-actuation threshold in scaled travel units.
-    deact_threshold: u8,
     /// DMA interrupt binding used for ADC sequence reads.
     irq: IRQ,
-    /// Raw ADC delta below which readings are treated as noise.
-    noise_gate: u16,
     /// Dynamic per-key state for the matrix.
     state: [[KeyState; COL]; ROW],
 }
@@ -187,32 +205,25 @@ where
     IRQ: typelevel::Binding<D::Interrupt, dma::InterruptHandler<D>> + Copy,
     AdcSampleTime<ADC>: Clone,
 {
-    /// Apply a zero offset to a raw reading and clamp to a valid range.
-    #[inline]
-    const fn apply_zero_offset(zero: u16, raw: u16) -> Option<u16> {
-        match apply_ref_offset(zero, raw) {
-            Some(x) if x <= REF_ZERO_TRAVEL => Some(x),
-            _ => None,
-        }
-    }
-
-    /// Perform zero-travel calibration using DMA-backed ADC reads.
+    /// Perform zero-travel calibration using a shared [`ConfiguredSequence`].
     ///
-    /// Samples each key `calib_passes` times and averages the results to
-    /// establish a per-key resting ADC value. The ADC sequence is programmed
-    /// once for the entire calibration and reused across all passes and
-    /// columns. Called once inside [`Self::new`] before the matrix enters
-    /// the scan loop.
-    async fn calibrate_zero_travel(&mut self) {
+    /// Uses the same sequence as scanning to avoid ADC/DMA reconfiguration
+    /// between calibration and the scan loop.
+    async fn calibrate_zero_travel(
+        cols: &mut Hc164Cols<'peripherals>,
+        calib: &mut [[KeyCalib; COL]; ROW],
+        seq: &mut ConfiguredSequence<'_, 'peripherals, ADC, D>,
+        irq: IRQ,
+        col_settle_us: Duration,
+        calib_passes: u32,
+    ) {
         let mut acc: [[u32; COL]; ROW] = [[0_u32; COL]; ROW];
-        let mut buf = [0_u16; ROW];
-        let mut seq = self.adc_part.configured_sequence(&mut buf);
 
-        for _ in 0..self.calib_passes {
+        for _ in 0..calib_passes {
             for col in 0..COL {
-                self.cols.select(col);
-                Timer::after(self.col_settle_us).await;
-                let samples = seq.read(self.irq).await;
+                cols.select(col);
+                Timer::after(col_settle_us).await;
+                let samples = seq.read(irq).await;
                 for (acc_row, &sample) in acc.iter_mut().zip(samples.iter()) {
                     if let Some(cell) = acc_row.get_mut(col) {
                         *cell = cell.saturating_add(u32::from(sample));
@@ -221,55 +232,33 @@ where
             }
         }
 
-        for (calib_row, acc_row) in self.calib.iter_mut().zip(acc.iter()) {
+        for (calib_row, acc_row) in calib.iter_mut().zip(acc.iter()) {
             for (cal_cell, &acc_cell) in calib_row.iter_mut().zip(acc_row.iter()) {
-                let avg = u16::try_from(acc_cell.checked_div(self.calib_passes).unwrap_or_default())
-                    .unwrap_or(UNCALIBRATED_ZERO);
+                let avg =
+                    u16::try_from(acc_cell.checked_div(calib_passes).unwrap_or_default()).unwrap_or(UNCALIBRATED_ZERO);
                 *cal_cell = KeyCalib::new(avg, avg.saturating_sub(DEFAULT_FULL_RANGE));
             }
         }
     }
 
-    /// Create a new matrix scanner and perform zero-travel calibration.
+    /// Create a new matrix scanner without calibration.
     ///
-    /// Calibration uses DMA-backed ADC reads and runs asynchronously.
-    /// The calibration takes approximately 7.7 ms and is invisible behind
-    /// USB enumeration time. After this returns the matrix is ready to scan.
-    pub async fn new(
-        adc: Adc<'peripherals, ADC>,
-        row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
-        dma: Peri<'peripherals, D>,
+    /// Calibration runs inside [`Runnable::run`] using the same
+    /// [`ConfiguredSequence`] as the scan loop, avoiding any ADC/DMA
+    /// reconfiguration between calibration and scanning.
+    pub const fn new(
+        adc_part: AdcPart<'peripherals, ADC, D, ROW>,
         irq: IRQ,
-        sample_time: AdcSampleTime<ADC>,
         cols: Hc164Cols<'peripherals>,
         cfg: HallCfg,
     ) -> Self {
-        let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
-        let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
-
-        let mut matrix = Self {
-            adc_part: AdcPart { adc, dma, row_adc, sample_time },
+        Self {
+            adc_part,
             irq,
             cols,
-            act_threshold,
-            deact_threshold,
-            calib_passes: cfg.calib_passes,
-            col_settle_us: cfg.col_settle_us,
-            noise_gate: cfg.noise_gate,
+            cfg,
             calib: [[KeyCalib::uncalibrated(); COL]; ROW],
             state: [[KeyState::new(); COL]; ROW],
-        };
-
-        matrix.calibrate_zero_travel().await;
-        matrix
-    }
-
-    /// Read the next `KeyboardEvent` from the analog hall matrix.
-    async fn read_keyboard_event(&mut self) -> KeyboardEvent {
-        loop {
-            if let Some(ev) = self.scan_for_next_change().await {
-                return ev;
-            }
         }
     }
 
@@ -278,22 +267,29 @@ where
     /// The ADC sequence is programmed once per scan pass and reused across
     /// all columns, avoiding per-column sequence register writes.
     #[optimize(speed)]
-    async fn scan_for_next_change(&mut self) -> Option<KeyboardEvent> {
-        let mut buf = [0_u16; ROW];
-        let mut seq = self.adc_part.configured_sequence(&mut buf);
+    async fn scan_for_next_change(
+        cols: &mut Hc164Cols<'peripherals>,
+        state: &mut [[KeyState; COL]; ROW],
+        calib: &[[KeyCalib; COL]; ROW],
+        seq: &mut ConfiguredSequence<'_, 'peripherals, ADC, D>,
+        irq: IRQ,
+        cfg: HallCfg,
+    ) -> Option<KeyboardEvent> {
+        let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
+        let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
 
         for col in 0..COL {
-            self.cols.select(col);
-            Timer::after(self.col_settle_us).await;
-            let samples = seq.read(self.irq).await;
+            cols.select(col);
+            Timer::after(cfg.col_settle_us).await;
+            let samples = seq.read(irq).await;
 
             for (row, ((state_row, calib_row), &raw)) in
-                self.state.iter_mut().zip(self.calib.iter()).zip(samples.iter()).enumerate()
+                state.iter_mut().zip(calib.iter()).zip(samples.iter()).enumerate()
             {
                 let Some(st) = state_row.get_mut(col) else { continue };
                 let last_raw = st.last_raw;
 
-                if likely(last_raw.abs_diff(raw) < self.noise_gate) {
+                if likely(last_raw.abs_diff(raw) < cfg.noise_gate) {
                     continue;
                 }
 
@@ -301,10 +297,6 @@ where
                 let prev_travel = st.travel_scaled;
                 let was_pressed = st.pressed;
                 let Some(new_travel) = Self::travel_scaled_from(&cal, raw) else {
-                    // Raw reading is out of the valid ADC range. Do not update
-                    // last_raw so the noise gate baseline stays at the last
-                    // known-good value.
-                    cold_path();
                     continue;
                 };
 
@@ -315,8 +307,7 @@ where
                 }
 
                 st.travel_scaled = new_travel;
-                let now_pressed =
-                    if was_pressed { new_travel >= self.deact_threshold } else { new_travel >= self.act_threshold };
+                let now_pressed = if was_pressed { new_travel >= deact_threshold } else { new_travel >= act_threshold };
 
                 if now_pressed != st.pressed {
                     st.pressed = now_pressed;
@@ -336,13 +327,15 @@ where
     #[inline]
     #[optimize(speed)]
     fn travel_scaled_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
+        if !cal.used {
+            return None;
+        }
+
         if unlikely(!(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw)) {
             return None;
         }
-        let Some(x) = Self::apply_zero_offset(cal.zero, raw) else {
-            cold_path();
-            return None;
-        };
+        let x = apply_ref_offset(cal.zero, raw).min(REF_ZERO_TRAVEL);
+
         let delta = i64::from(delta_from_ref(x));
         let prod = delta.saturating_mul(i64::from(cal.scale_factor)).saturating_mul(TRAVEL_SCALE_I64);
         let travel = prod.checked_shr(SCALE_SHIFT).unwrap_or(0);
@@ -350,26 +343,69 @@ where
     }
 }
 
+impl<ADC, D, IRQ, const ROW: usize, const COL: usize> InputDevice for AnalogHallMatrix<'_, ADC, D, IRQ, ROW, COL>
+where
+    ADC: Instance<Regs = adc::Adc> + BasicInstance,
+    D: RxDma<ADC>,
+    IRQ: typelevel::Binding<D::Interrupt, dma::InterruptHandler<D>> + Copy,
+    AdcSampleTime<ADC>: Clone,
+{
+    type Event = KeyboardEvent;
+
+    async fn read_event(&mut self) -> Self::Event { pending().await }
+}
+
+impl<ADC, D, IRQ, const ROW: usize, const COL: usize> Runnable for AnalogHallMatrix<'_, ADC, D, IRQ, ROW, COL>
+where
+    ADC: Instance<Regs = adc::Adc> + BasicInstance,
+    D: RxDma<ADC>,
+    IRQ: typelevel::Binding<D::Interrupt, dma::InterruptHandler<D>> + Copy,
+    AdcSampleTime<ADC>: Clone,
+{
+    async fn run(&mut self) -> ! {
+        use ::rmk::event::publish_event_async;
+
+        let mut buf = [0_u16; ROW];
+        let mut seq = self.adc_part.configured_sequence(&mut buf);
+
+        // Calibrate using the same ConfiguredSequence as the scan loop —
+        // no ADC/DMA reconfiguration occurs between calibration and scanning.
+        Self::calibrate_zero_travel(
+            &mut self.cols,
+            &mut self.calib,
+            &mut seq,
+            self.irq,
+            self.cfg.col_settle_us,
+            self.cfg.calib_passes,
+        )
+        .await;
+
+        // Scan forever with the same seq.
+        loop {
+            if let Some(ev) =
+                Self::scan_for_next_change(&mut self.cols, &mut self.state, &self.calib, &mut seq, self.irq, self.cfg)
+                    .await
+            {
+                publish_event_async(ev).await;
+            }
+        }
+    }
+}
+
 /// Adjust a raw ADC value by the offset between `zero` and [`REF_ZERO_TRAVEL`].
-///
-/// Returns `None` if the adjustment overflows or the result exceeds
-/// [`REF_ZERO_TRAVEL`].
 #[inline]
-const fn apply_ref_offset(zero: u16, raw: u16) -> Option<u16> {
+const fn apply_ref_offset(zero: u16, raw: u16) -> u16 {
     if zero >= REF_ZERO_TRAVEL {
-        raw.checked_sub(zero.saturating_sub(REF_ZERO_TRAVEL))
+        raw.saturating_sub(zero.saturating_sub(REF_ZERO_TRAVEL))
     } else {
-        raw.checked_add(REF_ZERO_TRAVEL.saturating_sub(zero))
+        raw.saturating_add(REF_ZERO_TRAVEL.saturating_sub(zero)).min(REF_ZERO_TRAVEL)
     }
 }
 
 /// Compute a scale factor from zero and full-travel calibration values.
 #[inline]
 const fn compute_scale_factor(zero: u16, full: u16) -> i32 {
-    let x_full: u16 = match apply_ref_offset(zero, full) {
-        Some(value) => value,
-        None => return SCALE_Q_FACTOR,
-    };
+    let x_full = apply_ref_offset(zero, full);
 
     let full_travel: i64 = i64::from(delta_from_ref(x_full));
     if full_travel == 0 {

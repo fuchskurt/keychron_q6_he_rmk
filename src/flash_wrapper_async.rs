@@ -40,6 +40,7 @@ impl<F: ReadNorFlash> ReadNorFlash for Flash16K<F> {
     fn capacity(&self) -> usize { self.0.capacity() }
 }
 
+#[rustfmt::skip]
 impl<F: NorFlash> NorFlash for Flash16K<F> {
     /// Write granularity for the underlying flash.
     const WRITE_SIZE: usize = F::WRITE_SIZE;
