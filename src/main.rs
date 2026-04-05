@@ -56,6 +56,7 @@ use embassy_stm32::{
     flash,
     flash::Flash,
     gpio::{Input, Level, Output, Pull, Speed},
+    init,
     interrupt::typelevel,
     pac,
     peripherals::{self, ADC1},
@@ -108,7 +109,7 @@ async fn main(spawner: Spawner) {
     // Tasks run inline via join4; spawner is unused.
     let _: Spawner = spawner;
     // Initialize peripherals
-    let mut peripheral = embassy_stm32::init({
+    let mut peripheral = init({
         let mut config = Config::default();
         config.rcc.hse = Some(Hse { freq: Hertz(16_000_000), mode: HseMode::Oscillator });
         config.rcc.hsi = false;
@@ -177,7 +178,7 @@ async fn main(spawner: Spawner) {
     let ds = Output::new(peripheral.PB3, Level::Low, Speed::VeryHigh);
     let cp = Output::new(peripheral.PB5, Level::Low, Speed::VeryHigh);
     let mr = Output::new(peripheral.PD2, Level::Low, Speed::VeryHigh);
-    let cols = Hc164Cols::new(ds, cp, mr);
+    let cols = Hc164Cols::new(ds, cp, mr, HallCfg::default().shifter_delay_cycles);
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(peripheral.ADC1);
@@ -198,11 +199,10 @@ async fn main(spawner: Spawner) {
         row_channels,
         peripheral.DMA2_CH0,
         Irqs,
-        SampleTime::CYCLES15,
+        SampleTime::CYCLES56,
         cols,
         HallCfg::default(),
-    )
-    .await;
+    );
 
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
