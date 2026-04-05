@@ -213,8 +213,8 @@ where
                 self.cols.select(col);
                 Timer::after(self.col_settle_us).await;
                 let samples = seq.read(self.irq).await;
-                for (row, &sample) in samples.iter().enumerate() {
-                    if let Some(cell) = acc.get_mut(row).and_then(|r| r.get_mut(col)) {
+                for (acc_row, &sample) in acc.iter_mut().zip(samples.iter()) {
+                    if let Some(cell) = acc_row.get_mut(col) {
                         *cell = cell.saturating_add(u32::from(sample));
                     }
                 }
@@ -287,19 +287,17 @@ where
             Timer::after(self.col_settle_us).await;
             let samples = seq.read(self.irq).await;
 
-            for (row, &raw) in samples.iter().enumerate() {
-                let Some(st) = self.state.get_mut(row).and_then(|row_slice| row_slice.get_mut(col)) else {
-                    continue;
-                };
+            for (row, ((state_row, calib_row), &raw)) in
+                self.state.iter_mut().zip(self.calib.iter()).zip(samples.iter()).enumerate()
+            {
+                let Some(st) = state_row.get_mut(col) else { continue };
                 let last_raw = st.last_raw;
 
                 if likely(last_raw.abs_diff(raw) < self.noise_gate) {
                     continue;
                 }
 
-                let Some(&cal) = self.calib.get(row).and_then(|row_slice| row_slice.get(col)) else {
-                    continue;
-                };
+                let Some(&cal) = calib_row.get(col) else { continue };
                 let prev_travel = st.travel_scaled;
                 let was_pressed = st.pressed;
                 let Some(new_travel) = Self::travel_scaled_from(&cal, raw) else {

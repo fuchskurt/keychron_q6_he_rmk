@@ -120,9 +120,8 @@ impl<const DRIVER_COUNT: usize> SnledBus<'_, DRIVER_COUNT> {
         let Some(cmd_slot) = tx.get_mut(0) else { return false };
         *cmd_slot = WRITE_CMD | PATTERN_CMD | (PAGE_PWM & 0x0F);
 
-        let Some(reg_slot) = tx.get_mut(1) else { return false };
-        *reg_slot = 0x00;
-
+        // tx[1] is the register address (0x00 = start of PWM page); already zero from
+        // init.
         let Some(payload_slot) = tx.get_mut(2..) else { return false };
         payload_slot.copy_from_slice(pwm);
 
