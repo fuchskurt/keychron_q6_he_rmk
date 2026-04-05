@@ -39,7 +39,7 @@ use crate::{
     flash_wrapper_async::Flash16K,
     keymap::{COL, ROW},
     matrix::{
-        analog_matrix::{AnalogHallMatrix, HallCfg},
+        analog_matrix::{AdcPart, AnalogHallMatrix, HallCfg},
         encoder_switch,
         hc164_cols::Hc164Cols,
         layer_toggle::{LayerToggle, MatrixPos},
@@ -193,16 +193,8 @@ async fn main(spawner: Spawner) {
         peripheral.PA0.degrade_adc(),
         peripheral.PA1.degrade_adc(),
     ];
-
-    let mut matrix = AnalogHallMatrix::<_, _, _, ROW, COL>::new(
-        adc,
-        row_channels,
-        peripheral.DMA2_CH0,
-        Irqs,
-        SampleTime::CYCLES56,
-        cols,
-        HallCfg::default(),
-    );
+    let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::CYCLES56);
+    let mut matrix = AnalogHallMatrix::<_, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default());
 
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);

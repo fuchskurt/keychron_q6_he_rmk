@@ -127,20 +127,20 @@ impl Default for KeyState {
 
 /// ADC-related peripherals grouped to allow split borrows when constructing
 /// a [`ConfiguredSequence`].
-struct AdcPart<'peripherals, ADC, D, const ROW: usize>
+pub struct AdcPart<'peripherals, ADC, D, const ROW: usize>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
     AdcSampleTime<ADC>: Clone,
 {
     /// ADC peripheral used for sampling hall sensors.
-    adc: Adc<'peripherals, ADC>,
+    pub adc: Adc<'peripherals, ADC>,
     /// DMA channel used for non-blocking ADC sequence reads.
-    dma: Peri<'peripherals, D>,
+    pub dma: Peri<'peripherals, D>,
     /// ADC channels corresponding to each row.
-    row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
+    pub row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
     /// ADC sample time configuration.
-    sample_time: AdcSampleTime<ADC>,
+    pub sample_time: AdcSampleTime<ADC>,
 }
 
 impl<'peripherals, ADC, D, const ROW: usize> AdcPart<'peripherals, ADC, D, ROW>
@@ -159,6 +159,16 @@ where
         let st = self.sample_time;
         self.adc.configured_sequence(self.dma.reborrow(), self.row_adc.iter_mut().map(|ch| (ch, st)), buf)
     }
+
+    /// Create a new [`AdcPart`] from the given peripherals.
+    pub fn new(
+        adc: Adc<'peripherals, ADC>,
+        row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
+        dma: Peri<'peripherals, D>,
+        sample_time: AdcSampleTime<ADC>,
+    ) -> Self {
+        Self { adc, dma, row_adc, sample_time }
+    }
 }
 
 /// Hall-effect analog matrix scanner.
@@ -173,24 +183,16 @@ where
     IRQ: typelevel::Binding<D::Interrupt, dma::InterruptHandler<D>> + Copy,
     AdcSampleTime<ADC>: Clone,
 {
-    /// Actuation threshold in scaled travel units.
-    act_threshold: u8,
     /// ADC peripherals and channels grouped for split-borrow compatibility.
     adc_part: AdcPart<'peripherals, ADC, D, ROW>,
     /// Calibration data for each key in the matrix.
     calib: [[KeyCalib; COL]; ROW],
-    /// Number of passes used during calibration.
-    calib_passes: u32,
-    /// Column settle time in microseconds after selecting a new column.
-    col_settle_us: Duration,
+    /// Sensing and scanning configuration.
+    cfg: HallCfg,
     /// Column driver used to select the active column.
     cols: Hc164Cols<'peripherals>,
-    /// De-actuation threshold in scaled travel units.
-    deact_threshold: u8,
     /// DMA interrupt binding used for ADC sequence reads.
     irq: IRQ,
-    /// Raw ADC delta below which readings are treated as noise.
-    noise_gate: u16,
     /// Dynamic per-key state for the matrix.
     state: [[KeyState; COL]; ROW],
 }
@@ -245,26 +247,16 @@ where
     /// [`ConfiguredSequence`] as the scan loop, avoiding any ADC/DMA
     /// reconfiguration between calibration and scanning.
     pub const fn new(
-        adc: Adc<'peripherals, ADC>,
-        row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
-        dma: Peri<'peripherals, D>,
+        adc_part: AdcPart<'peripherals, ADC, D, ROW>,
         irq: IRQ,
-        sample_time: AdcSampleTime<ADC>,
         cols: Hc164Cols<'peripherals>,
         cfg: HallCfg,
     ) -> Self {
-        let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
-        let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
-
         Self {
-            adc_part: AdcPart { adc, dma, row_adc, sample_time },
+            adc_part,
             irq,
             cols,
-            act_threshold,
-            deact_threshold,
-            calib_passes: cfg.calib_passes,
-            col_settle_us: cfg.col_settle_us,
-            noise_gate: cfg.noise_gate,
+            cfg,
             calib: [[KeyCalib::uncalibrated(); COL]; ROW],
             state: [[KeyState::new(); COL]; ROW],
         }
@@ -281,14 +273,14 @@ where
         calib: &[[KeyCalib; COL]; ROW],
         seq: &mut ConfiguredSequence<'_, 'peripherals, ADC, D>,
         irq: IRQ,
-        col_settle_us: Duration,
-        noise_gate: u16,
-        act_threshold: u8,
-        deact_threshold: u8,
+        cfg: HallCfg,
     ) -> Option<KeyboardEvent> {
+        let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
+        let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
+
         for col in 0..COL {
             cols.select(col);
-            Timer::after(col_settle_us).await;
+            Timer::after(cfg.col_settle_us).await;
             let samples = seq.read(irq).await;
 
             for (row, ((state_row, calib_row), &raw)) in
@@ -297,7 +289,7 @@ where
                 let Some(st) = state_row.get_mut(col) else { continue };
                 let last_raw = st.last_raw;
 
-                if likely(last_raw.abs_diff(raw) < noise_gate) {
+                if likely(last_raw.abs_diff(raw) < cfg.noise_gate) {
                     continue;
                 }
 
@@ -383,25 +375,16 @@ where
             &mut self.calib,
             &mut seq,
             self.irq,
-            self.col_settle_us,
-            self.calib_passes,
+            self.cfg.col_settle_us,
+            self.cfg.calib_passes,
         )
         .await;
 
         // Scan forever with the same seq.
         loop {
-            if let Some(ev) = Self::scan_for_next_change(
-                &mut self.cols,
-                &mut self.state,
-                &self.calib,
-                &mut seq,
-                self.irq,
-                self.col_settle_us,
-                self.noise_gate,
-                self.act_threshold,
-                self.deact_threshold,
-            )
-            .await
+            if let Some(ev) =
+                Self::scan_for_next_change(&mut self.cols, &mut self.state, &self.calib, &mut seq, self.irq, self.cfg)
+                    .await
             {
                 publish_event_async(ev).await;
             }
@@ -410,16 +393,11 @@ where
 }
 
 /// Adjust a raw ADC value by the offset between `zero` and [`REF_ZERO_TRAVEL`].
-///
-/// Returns `None` if the adjustment overflows or the result exceeds
-/// [`REF_ZERO_TRAVEL`].
 #[inline]
 const fn apply_ref_offset(zero: u16, raw: u16) -> u16 {
     if zero >= REF_ZERO_TRAVEL {
-        // raw below adjusted minimum → clamp to 0 (maximum travel)
         raw.saturating_sub(zero.saturating_sub(REF_ZERO_TRAVEL))
     } else {
-        // raw above adjusted maximum → clamp to REF_ZERO_TRAVEL (zero travel)
         raw.saturating_add(REF_ZERO_TRAVEL.saturating_sub(zero)).min(REF_ZERO_TRAVEL)
     }
 }
