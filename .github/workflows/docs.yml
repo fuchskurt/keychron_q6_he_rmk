@@ -2,7 +2,7 @@ name: Deploy Docs
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -57,7 +57,7 @@ jobs:
             > target/thumbv7em-none-eabihf/doc/index.html
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: target/thumbv7em-none-eabihf/doc
 
