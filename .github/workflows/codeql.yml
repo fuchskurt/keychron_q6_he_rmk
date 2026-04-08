@@ -28,6 +28,9 @@ jobs:
           components: rust-src
           targets: thumbv7em-none-eabihf
 
+      - name: Install flip-link
+        run: cargo install flip-link
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
