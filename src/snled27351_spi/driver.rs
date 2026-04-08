@@ -10,14 +10,17 @@ use crate::snled27351_spi::registers::{
     PATTERN_CMD,
     PULLDOWNUP_ALL_ENABLED,
     PWM_REGISTER_COUNT,
+    READ_CMD,
     REG_PULLDOWNUP,
     REG_SCAN_PHASE,
     REG_SLEW_RATE_CONTROL_MODE_1,
     REG_SLEW_RATE_CONTROL_MODE_2,
     REG_SOFTWARE_SHUTDOWN,
     REG_SOFTWARE_SLEEP,
+    REG_THERMAL,
     SCAN_PHASE_12_CHANNEL,
     SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE,
+    SLEW_RATE_CONTROL_MODE_2_DSL_ENABLE,
     SLEW_RATE_CONTROL_MODE_2_SSL_ENABLE,
     SOFTWARE_SHUTDOWN_SSD_NORMAL,
     SOFTWARE_SHUTDOWN_SSD_SHUTDOWN,
@@ -33,7 +36,9 @@ use embassy_stm32::{
     mode::Async,
     spi::{self, Spi},
 };
-use embassy_time::Timer;
+use embassy_time::{Duration, Timer};
+
+const DRIVER_INIT_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Copy, Clone)]
 /// Mapping of an RGB LED to SNLED driver channels.
@@ -132,15 +137,20 @@ impl<const DRIVER_COUNT: usize> SnledBus<'_, DRIVER_COUNT> {
         ok
     }
 
-    /// Initialise a single SNLED27351 driver chip.
+    /// Initialize a single SNLED27351 driver chip.
     async fn init_driver(&mut self, index: usize, chip_current_tune: u8) {
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_SHUTDOWN).await;
         self.write_register(index, PAGE_FUNCTION, REG_PULLDOWNUP, PULLDOWNUP_ALL_ENABLED).await;
         self.write_register(index, PAGE_FUNCTION, REG_SCAN_PHASE, SCAN_PHASE_12_CHANNEL).await;
         self.write_register(index, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_1, SLEW_RATE_CONTROL_MODE_1_PDP_ENABLE)
             .await;
-        self.write_register(index, PAGE_FUNCTION, REG_SLEW_RATE_CONTROL_MODE_2, SLEW_RATE_CONTROL_MODE_2_SSL_ENABLE)
-            .await;
+        self.write_register(
+            index,
+            PAGE_FUNCTION,
+            REG_SLEW_RATE_CONTROL_MODE_2,
+            SLEW_RATE_CONTROL_MODE_2_DSL_ENABLE | SLEW_RATE_CONTROL_MODE_2_SSL_ENABLE,
+        )
+        .await;
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SLEEP, SOFTWARE_SLEEP_DISABLE).await;
 
         let led_control = [0xFF_u8; LED_CONTROL_REGISTER_COUNT];
@@ -153,6 +163,22 @@ impl<const DRIVER_COUNT: usize> SnledBus<'_, DRIVER_COUNT> {
         self.write(index, PAGE_CURRENT_TUNE, 0x00, &current_tune).await;
 
         self.write_register(index, PAGE_FUNCTION, REG_SOFTWARE_SHUTDOWN, SOFTWARE_SHUTDOWN_SSD_NORMAL).await;
+    }
+
+    /// Read a single register byte from a driver chip.
+    ///
+    /// Sends the read header (READ_CMD | PATTERN_CMD | page) followed by the
+    /// register address, then receives one byte. Returns `None` on SPI error.
+    async fn read_register(&mut self, index: usize, page: u8, reg: u8) -> Option<u8> {
+        let tx: [u8; 3] = [READ_CMD | PATTERN_CMD | (page & 0x0F), reg, 0x00];
+        let mut rx = [0_u8; 3];
+
+        let Some(cs) = self.cs.get_mut(index) else { return None };
+        cs.set_low();
+        let ok = self.spi.transfer(&mut rx, &tx).await.is_ok();
+        cs.set_high();
+
+        if ok { rx.get(2).copied() } else { None }
     }
 
     /// Write a register page in a single CS-asserted SPI burst.
@@ -224,13 +250,21 @@ impl<'peripherals, const DRIVER_COUNT: usize> Snled27351<'peripherals, DRIVER_CO
             cs.set_high();
         }
         self.bus.sdb.set_low();
-        Timer::after_micros(250).await;
+        Timer::after(DRIVER_INIT_DELAY).await;
         self.bus.sdb.set_high();
-        Timer::after_micros(500).await;
+        Timer::after(DRIVER_INIT_DELAY).await;
 
         for index in 0..DRIVER_COUNT {
             self.bus.init_driver(index, chip_current_tune).await;
         }
+    }
+
+    /// Read the thermal flag from driver `index`.
+    ///
+    /// Returns `true` if the chip reports temperature ≥ 70 °C (TDF bit set),
+    /// `false` if below threshold or if the read fails.
+    pub async fn check_thermal_flag_set(&mut self, index: usize) -> bool {
+        self.bus.read_register(index, PAGE_FUNCTION, REG_THERMAL).await.map(|v| v & 0x01 != 0).unwrap_or(false)
     }
 
     /// Create a new SNLED27351 driver with the provided LED map.

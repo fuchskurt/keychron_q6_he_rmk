@@ -13,44 +13,46 @@ use embassy_stm32::{
     mode::Async,
     spi::{self, Spi},
 };
-use embassy_time::Timer;
+use embassy_time::{Duration, Ticker, Timer};
+use rmk::embassy_futures::select::{Either, select};
 
-/// LED index for the caps lock indicator.
+/// LED index for the Caps Lock indicator key.
 const CAPS_LOCK_LED_INDEX: usize = 62;
-/// Number of SNLED27351 drivers on this keyboard.
+/// Number of SNLED27351 driver chips on this keyboard.
 const DRIVER_COUNT: usize = 2;
-/// LED index for the num lock indicator.
+/// LED index for the Num Lock indicator key.
 const NUM_LOCK_LED_INDEX: usize = 37;
-/// Brightness used for indicator LEDs.
+/// Brightness percentage applied to indicator LEDs (0–100).
 const INDICATOR_BRIGHTNESS: u8 = 100;
-/// RGB value for the red indicator state.
+/// RGB color for the active-lock indicator state (red).
 const INDICATOR_RED: (u8, u8, u8) = (255, 0, 0);
-/// RGB value for the white indicator state.
+/// RGB color for the inactive-lock indicator state (white).
 const INDICATOR_WHITE: (u8, u8, u8) = (255, 255, 255);
-/// RGB value for the off indicator state.
+/// RGB color for a disabled indicator (off).
 const INDICATOR_OFF: (u8, u8, u8) = (0, 0, 0);
 
-/// Number of steps in the soft-start ramp.
+/// Number of brightness steps in the soft-start ramp.
 const SOFTSTART_STEPS: u8 = 50;
-/// Duration of the soft-start ramp in milliseconds.
+/// Total duration of the soft-start ramp in milliseconds.
 const SOFTSTART_RAMP_MS: u32 = 1000;
+/// Brightness percentage applied when a driver chip reports temperature ≥ 70
+/// °C.
+const THERMAL_THROTTLE_BRIGHTNESS: u8 = 50;
+/// Interval in milliseconds between thermal register polls.
+const THERMAL_POLL: Duration = Duration::from_secs(5);
 
-/// Scales a 0–255 linear value by a 0–100 brightness percentage.
+/// Scales a linear 0–255 value by a 0–100 brightness percentage.
 ///
 /// Uses integer arithmetic with rounding to avoid floating point.
+/// The result is clamped to `u8::MAX` on overflow.
 #[inline]
 const fn scale(value: u8, brightness_percent: u8) -> u8 {
-    let value_scaled = u16::from(value);
-    let percent_scaled = u16::from(brightness_percent.min(100));
-    u8::try_from(value_scaled.saturating_mul(percent_scaled).saturating_add(50).checked_div(100).unwrap_or_default())
-        .unwrap_or(255)
+    let v = u16::from(value);
+    let p = u16::from(brightness_percent.min(100));
+    u8::try_from(v.saturating_mul(p).saturating_add(50).checked_div(100).unwrap_or_default()).unwrap_or(255)
 }
 
 /// Applies brightness scaling and gamma 2.2 correction to an RGB triplet.
-///
-/// Returns corrected `(red, green, blue)` ready to write directly to the
-/// PWM shadow buffer via [`Snled27351::set_led`] or
-/// [`Snled27351::set_all_leds`].
 #[inline]
 const fn correct(red: u8, green: u8, blue: u8, brightness_percent: u8) -> (u8, u8, u8) {
     (
@@ -60,11 +62,53 @@ const fn correct(red: u8, green: u8, blue: u8, brightness_percent: u8) -> (u8, u
     )
 }
 
-/// Runs the soft-start brightness ramp at initialization.
+/// Full backlight state, kept in one place so any path can do a consistent
+/// redraw without losing information.
+#[derive(Clone, Copy)]
+struct BacklightState {
+    /// Whether Caps Lock is currently active.
+    caps_lock: bool,
+    /// Whether Num Lock is currently active.
+    num_lock: bool,
+    /// Global brightness percentage (0–100); reduced under thermal throttle.
+    brightness: u8,
+}
+
+impl BacklightState {
+    const fn new() -> Self { Self { caps_lock: false, num_lock: false, brightness: 100 } }
+}
+
+/// Writes every LED to the hardware according to `state`.
 ///
-/// Steps brightness from 0 up to `target_brightness` over
-/// [`SOFTSTART_STEPS`] increments across [`SOFTSTART_RAMP_MS`]
-/// milliseconds, writing corrected PWM values and flushing each step.
+/// Paints the background white at the current brightness, then overlays the
+/// indicator LEDs on top. Called after any state change that requires a full
+/// redraw (e.g. thermal-throttle transitions).
+async fn render_all(backlight: &mut Snled27351<'static, DRIVER_COUNT>, state: BacklightState) {
+    let (r, g, b) = correct(255, 255, 255, state.brightness);
+    backlight.set_all_leds(r, g, b).await;
+    render_indicators(backlight, state).await;
+}
+
+/// Writes only the two indicator LEDs according to `state`.
+///
+/// Used when only indicator state has changed and the background is
+/// already correct, avoiding a full redraw.
+async fn render_indicators(backlight: &mut Snled27351<'static, DRIVER_COUNT>, state: BacklightState) {
+    // Caps Lock: red when active, white when inactive.
+    let caps_color = if state.caps_lock { INDICATOR_RED } else { INDICATOR_WHITE };
+    let (r, g, b) = correct(caps_color.0, caps_color.1, caps_color.2, INDICATOR_BRIGHTNESS);
+    backlight.set_led(CAPS_LOCK_LED_INDEX, r, g, b).await;
+
+    // Num Lock: white when active, off when inactive.
+    let num_color = if state.num_lock { INDICATOR_WHITE } else { INDICATOR_OFF };
+    let (r, g, b) = correct(num_color.0, num_color.1, num_color.2, INDICATOR_BRIGHTNESS);
+    backlight.set_led(NUM_LOCK_LED_INDEX, r, g, b).await;
+}
+
+/// Performs a soft-start brightness ramp on all LEDs at initialization.
+///
+/// Linearly steps brightness from 0 up to `target_brightness` over
+/// [`SOFTSTART_STEPS`] increments across [`SOFTSTART_RAMP_MS`] milliseconds.
 async fn softstart(
     backlight: &mut Snled27351<'static, DRIVER_COUNT>,
     base_red: u8,
@@ -78,8 +122,8 @@ async fn softstart(
 
     for step in 0..=steps {
         let percent = u8::try_from(target.saturating_mul(step).checked_div(steps).unwrap_or(0)).unwrap_or(0);
-        let (scaled_red, scaled_green, scaled_blue) = correct(base_red, base_green, base_blue, percent);
-        backlight.set_all_leds(scaled_red, scaled_green, scaled_blue).await;
+        let (r, g, b) = correct(base_red, base_green, base_blue, percent);
+        backlight.set_all_leds(r, g, b).await;
         if step < steps {
             Timer::after_millis(delay_ms).await;
         }
@@ -88,8 +132,16 @@ async fn softstart(
 
 /// Runs the backlight controller loop.
 ///
-/// Initializes the SNLED27351 drivers, performs a soft-start brightness ramp,
-/// then enters the event loop responding to [`BacklightCmd`] messages.
+/// Initializes both SNLED27351 driver chips, performs a soft-start brightness
+/// ramp, then enters an event loop that concurrently handles two concerns:
+///
+/// - **Indicator commands** arriving on [`BACKLIGHT_CH`]: updates Caps Lock and
+///   Num Lock LEDs without touching the rest of the matrix.
+/// - **Thermal polling** on a [`THERMAL_POLL`] ticker: reads the TDF register
+///   from both chips and reduces overall brightness to
+///   [`THERMAL_THROTTLE_BRIGHTNESS`] if either exceeds 70 °C, restoring it
+///   automatically when both cool down. A full redraw is issued on each
+///   transition so that indicator LEDs are never lost.
 pub async fn backlight_runner(
     spi: Spi<'static, Async, spi::mode::Master>,
     cs0: Output<'static>,
@@ -103,18 +155,29 @@ pub async fn backlight_runner(
     softstart(&mut backlight, 255, 255, 255, 100).await;
 
     let rx = BACKLIGHT_CH.receiver();
-    loop {
-        match rx.receive().await {
-            BacklightCmd::Indicators { caps, num } => {
-                let (caps_r, caps_g, caps_b) = if caps { INDICATOR_RED } else { INDICATOR_WHITE };
-                let (scaled_red_caps, scaled_green_caps, scaled_blue_caps) =
-                    correct(caps_r, caps_g, caps_b, INDICATOR_BRIGHTNESS);
-                backlight.set_led(CAPS_LOCK_LED_INDEX, scaled_red_caps, scaled_green_caps, scaled_blue_caps).await;
+    let mut thermal_ticker = Ticker::every(Duration::from(THERMAL_POLL));
+    let mut state = BacklightState::new();
 
-                let (num_r, num_g, num_b) = if num { INDICATOR_WHITE } else { INDICATOR_OFF };
-                let (scaled_red_num, scaled_green_num, scaled_blue_num) =
-                    correct(num_r, num_g, num_b, INDICATOR_BRIGHTNESS);
-                backlight.set_led(NUM_LOCK_LED_INDEX, scaled_red_num, scaled_green_num, scaled_blue_num).await;
+    loop {
+        match select(rx.receive(), thermal_ticker.next()).await {
+            Either::First(cmd) => match cmd {
+                BacklightCmd::Indicators { caps, num } => {
+                    state.caps_lock = caps;
+                    state.num_lock = num;
+                    // Background is already correct; only repaint indicator LEDs.
+                    render_indicators(&mut backlight, state).await;
+                }
+            },
+
+            Either::Second(_) => {
+                let hot = backlight.check_thermal_flag_set(0).await || backlight.check_thermal_flag_set(1).await;
+                let new_brightness = if hot { THERMAL_THROTTLE_BRIGHTNESS } else { 100 };
+
+                if new_brightness != state.brightness {
+                    state.brightness = new_brightness;
+                    // Full redraw required; restores indicator LEDs over the new background.
+                    render_all(&mut backlight, state).await;
+                }
             }
         }
     }
