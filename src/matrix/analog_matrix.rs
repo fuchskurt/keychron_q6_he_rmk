@@ -9,8 +9,8 @@ use core::{
 use embassy_stm32::{
     Peri,
     adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, ConfiguredSequence, Instance, RxDma},
-    dma,
-    interrupt::typelevel,
+    dma::InterruptHandler,
+    interrupt::typelevel::Binding,
     pac::adc,
 };
 use embassy_time::{Duration, Timer};
@@ -152,12 +152,12 @@ where
     /// Create a [`ConfiguredSequence`] over all row channels, programming the
     /// ADC sequence registers once. The returned reader can be triggered
     /// repeatedly without reprogramming the sequence registers.
-    fn configured_sequence<'reader>(
-        &'reader mut self,
-        buf: &'reader mut [u16; ROW],
-    ) -> ConfiguredSequence<'reader, 'peripherals, ADC, D> {
+    fn configured_sequence<'reader, IRQ2>(&'reader mut self, irq: IRQ2) -> ConfiguredSequence<'reader, adc::Adc>
+    where
+        IRQ2: Binding<D::Interrupt, InterruptHandler<D>> + 'reader + 'peripherals,
+    {
         let st = self.sample_time;
-        self.adc.configured_sequence(self.dma.reborrow(), self.row_adc.iter_mut().map(|ch| (ch, st)), buf)
+        self.adc.configured_sequence(self.dma.reborrow(), self.row_adc.iter_mut().map(|ch| (ch, st)), irq)
     }
 
     /// Create a new [`AdcPart`] from the given peripherals.
@@ -180,7 +180,7 @@ pub struct AnalogHallMatrix<'peripherals, ADC, D, IRQ, const ROW: usize, const C
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
-    IRQ: typelevel::Binding<D::Interrupt, dma::InterruptHandler<D>> + Copy,
+    IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
     AdcSampleTime<ADC>: Clone,
 {
     /// ADC peripherals and channels grouped for split-borrow compatibility.
@@ -202,7 +202,7 @@ impl<'peripherals, ADC, D, IRQ, const ROW: usize, const COL: usize>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
-    IRQ: typelevel::Binding<D::Interrupt, dma::InterruptHandler<D>> + Copy,
+    IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
     AdcSampleTime<ADC>: Clone,
 {
     /// Perform zero-travel calibration using a shared [`ConfiguredSequence`].
@@ -212,8 +212,8 @@ where
     async fn calibrate_zero_travel(
         cols: &mut Hc164Cols<'peripherals>,
         calib: &mut [[KeyCalib; COL]; ROW],
-        seq: &mut ConfiguredSequence<'_, 'peripherals, ADC, D>,
-        irq: IRQ,
+        seq: &mut ConfiguredSequence<'_, adc::Adc>,
+        buf: &mut [u16; ROW],
         col_settle_us: Duration,
         calib_passes: u32,
     ) {
@@ -223,8 +223,8 @@ where
             for col in 0..COL {
                 cols.select(col);
                 Timer::after(col_settle_us).await;
-                let samples = seq.read(irq).await;
-                for (acc_row, &sample) in acc.iter_mut().zip(samples.iter()) {
+                seq.read(buf).await;
+                for (acc_row, &sample) in acc.iter_mut().zip(buf.iter()) {
                     if let Some(cell) = acc_row.get_mut(col) {
                         *cell = cell.saturating_add(u32::from(sample));
                     }
@@ -271,8 +271,8 @@ where
         cols: &mut Hc164Cols<'peripherals>,
         state: &mut [[KeyState; COL]; ROW],
         calib: &[[KeyCalib; COL]; ROW],
-        seq: &mut ConfiguredSequence<'_, 'peripherals, ADC, D>,
-        irq: IRQ,
+        seq: &mut ConfiguredSequence<'_, adc::Adc>,
+        buf: &mut [u16; ROW],
         cfg: HallCfg,
     ) -> Option<KeyboardEvent> {
         let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
@@ -281,10 +281,9 @@ where
         for col in 0..COL {
             cols.select(col);
             Timer::after(cfg.col_settle_us).await;
-            let samples = seq.read(irq).await;
+            seq.read(buf).await;
 
-            for (row, ((state_row, calib_row), &raw)) in
-                state.iter_mut().zip(calib.iter()).zip(samples.iter()).enumerate()
+            for (row, ((state_row, calib_row), &raw)) in state.iter_mut().zip(calib.iter()).zip(buf.iter()).enumerate()
             {
                 let Some(st) = state_row.get_mut(col) else { continue };
                 let last_raw = st.last_raw;
@@ -343,11 +342,12 @@ where
     }
 }
 
-impl<ADC, D, IRQ, const ROW: usize, const COL: usize> InputDevice for AnalogHallMatrix<'_, ADC, D, IRQ, ROW, COL>
+impl<'peripherals, ADC, D, IRQ, const ROW: usize, const COL: usize> InputDevice
+    for AnalogHallMatrix<'peripherals, ADC, D, IRQ, ROW, COL>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
-    IRQ: typelevel::Binding<D::Interrupt, dma::InterruptHandler<D>> + Copy,
+    IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
     AdcSampleTime<ADC>: Clone,
 {
     type Event = KeyboardEvent;
@@ -355,18 +355,19 @@ where
     async fn read_event(&mut self) -> Self::Event { pending().await }
 }
 
-impl<ADC, D, IRQ, const ROW: usize, const COL: usize> Runnable for AnalogHallMatrix<'_, ADC, D, IRQ, ROW, COL>
+impl<'peripherals, ADC, D, IRQ, const ROW: usize, const COL: usize> Runnable
+    for AnalogHallMatrix<'peripherals, ADC, D, IRQ, ROW, COL>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
-    IRQ: typelevel::Binding<D::Interrupt, dma::InterruptHandler<D>> + Copy,
+    IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
     AdcSampleTime<ADC>: Clone,
 {
     async fn run(&mut self) -> ! {
         use ::rmk::event::publish_event_async;
 
         let mut buf = [0_u16; ROW];
-        let mut seq = self.adc_part.configured_sequence(&mut buf);
+        let mut seq = self.adc_part.configured_sequence(self.irq);
 
         // Calibrate using the same ConfiguredSequence as the scan loop —
         // no ADC/DMA reconfiguration occurs between calibration and scanning.
@@ -374,7 +375,7 @@ where
             &mut self.cols,
             &mut self.calib,
             &mut seq,
-            self.irq,
+            &mut buf,
             self.cfg.col_settle_us,
             self.cfg.calib_passes,
         )
@@ -383,7 +384,7 @@ where
         // Scan forever with the same seq.
         loop {
             if let Some(ev) =
-                Self::scan_for_next_change(&mut self.cols, &mut self.state, &self.calib, &mut seq, self.irq, self.cfg)
+                Self::scan_for_next_change(&mut self.cols, &mut self.state, &self.calib, &mut seq, &mut buf, self.cfg)
                     .await
             {
                 publish_event_async(ev).await;
