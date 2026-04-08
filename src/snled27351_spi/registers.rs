@@ -4,10 +4,10 @@
 //! format is: `WRITE_CMD | PATTERN_CMD | (page & 0x0F)`, register address,
 //! then the data payload.
 
-/// SPI command byte for write operations (AD[7:6] = 0b00).
+/// SPI command byte for write operations (AD\[7:6\] = 0b00).
 pub const WRITE_CMD: u8 = 0x00;
 
-/// Pattern field of the SPI command byte: AD[5:4] = 0b10 selects the
+/// Pattern field of the SPI command byte: AD\[5:4\] = 0b10 selects the
 /// auto-increment write pattern (address increments automatically across
 /// the payload).
 pub const PATTERN_CMD: u8 = 2 << 4;
