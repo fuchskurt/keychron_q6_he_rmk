@@ -29,8 +29,6 @@ mod flash_wrapper_async;
 mod keymap;
 /// Matrix scanning components.
 mod matrix;
-/// SNLED27351 driver support.
-mod snled27351_spi;
 /// Vial configuration constants.
 mod vial;
 
