@@ -24,6 +24,9 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: thumbv7em-none-eabihf
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
