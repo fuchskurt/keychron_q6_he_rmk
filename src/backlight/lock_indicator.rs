@@ -22,10 +22,10 @@ pub enum BacklightCmd {
 }
 
 #[processor(subscribe = [LedIndicatorEvent])]
-/// Controller that reacts to indicator events for the SNLED driver.
-pub struct SnledIndicatorProcessor;
+/// Controller that reacts to indicator events for the LED driver.
+pub struct LedIndicatorProcessor;
 
-impl SnledIndicatorProcessor {
+impl LedIndicatorProcessor {
     /// Create a new indicator controller.
     pub const fn new() -> Self { Self }
 

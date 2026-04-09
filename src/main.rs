@@ -33,7 +33,7 @@ mod matrix;
 mod vial;
 
 use crate::{
-    backlight::{init::backlight_runner, lock_indicator::SnledIndicatorProcessor},
+    backlight::{init::backlight_runner, lock_indicator::LedIndicatorProcessor},
     flash_wrapper_async::Flash16K,
     keymap::{COL, ROW},
     matrix::{
@@ -220,7 +220,7 @@ async fn main(spawner: Spawner) {
     // Initialize the keyboard
     let mut keyboard = Keyboard::new(&keymap);
 
-    // LED backlight (SNLED27351)
+    // LED backlight
     let spi_config = {
         let mut spi_config = spi::Config::default();
         spi_config.frequency = Hertz(3_500_000);
@@ -240,11 +240,11 @@ async fn main(spawner: Spawner) {
     let cs0 = Output::new(peripheral.PB8, Level::High, Speed::VeryHigh);
     let cs1 = Output::new(peripheral.PB9, Level::High, Speed::VeryHigh);
     let sdb = Output::new(peripheral.PB7, Level::Low, Speed::VeryHigh);
-    let mut snled_indicator = SnledIndicatorProcessor::new();
+    let mut led_indicator = LedIndicatorProcessor::new();
 
     // Start
     join4(
-        run_all!(matrix, encoder, enc_switch, layer_toggle, snled_indicator),
+        run_all!(matrix, encoder, enc_switch, layer_toggle, led_indicator),
         keyboard.run(),
         run_rmk(&keymap, driver, &mut storage, rmk_config),
         backlight_runner(spi_backlight, cs0, cs1, sdb),

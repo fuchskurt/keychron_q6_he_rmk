@@ -19,7 +19,7 @@ embedded-storage-async = "0.4"
 rmk = { default-features = false, features = ["async_matrix", "storage", "vial", "vial_lock"], git = "https://github.com/HaoboGu/rmk.git" }
 static_cell = "2.1"
 snled27351_driver = { git = "https://github.com/fuchskurt/snled27351_driver.git" }
-embedded-hal = "1.0"
+embedded-hal-async = "1.0"
 
 [patch.crates-io]
 embassy-time = { git = "https://github.com/embassy-rs/embassy.git" }

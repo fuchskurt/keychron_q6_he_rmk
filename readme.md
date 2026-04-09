@@ -92,10 +92,10 @@ capacitor that suppresses this, improving reading stability.
 
 ### Backlight
 
-RGB backlighting is driven by two SNLED27351 LED driver chips over SPI, each
+RGB backlight is driven by two SNLED27351 LED driver chips over SPI, each
 controlling half the keyboard. The firmware applies gamma 2.2 correction and
 brightness scaling to all LED writes. Lock indicator LEDs (Caps Lock, Num Lock)
-are driven as distinct colours via an async channel from the key event
+are driven as distinct colors via an async channel from the key event
 processor to the backlight task.
 
 ### Layers and input devices
@@ -191,13 +191,10 @@ src/
 │   ├── gamma_correction.rs  # Gamma 2.2 LUT
 │   ├── lock_indicator.rs    # Caps/Num lock indicator processor
 │   └── mapping.rs           # LED index to SNLED channel mapping
-└── snled27351_spi/
-    ├── driver.rs            # SNLED27351 SPI driver
-    ├── led_address.rs       # LED channel address constants
-    └── registers.rs         # SNLED27351 register definitions
-poly_gen/
-├── cheby.py                 # Chebyshev polynomial source of truth
-└── lut.py                   # LUT generator (run to regenerate LUT_DELTA)
+│
+└──poly_gen/
+    ├── cheby.py             # Chebyshev polynomial source of truth
+    └── lut.py               # LUT generator (run to regenerate LUT_DELTA)
 ```
 
 ---

@@ -2,7 +2,7 @@
 
 use crate::backlight::{
     gamma_correction::gamma_correction,
-    lock_indicator::{BacklightCmd, BACKLIGHT_CH},
+    lock_indicator::{BACKLIGHT_CH, BacklightCmd},
     mapping::LED_LAYOUT,
 };
 use embassy_stm32::{
@@ -11,8 +11,8 @@ use embassy_stm32::{
     spi::{self, Spi},
 };
 use embassy_time::{Duration, Ticker, Timer};
-use embedded_hal::spi::ErrorType;
-use rmk::embassy_futures::select::{select, Either};
+use embedded_hal_async::spi::ErrorType;
+use rmk::embassy_futures::select::{Either, select};
 use snled27351_driver::{
     driver::Driver,
     transport::spi::{SpiTransport, SpiTransportError},
