@@ -297,3 +297,175 @@ pub const LED_LAYOUT: &[Led] = &[
     Led { driver: 1, red: CB10_CA2, green: CB12_CA2, blue: CB11_CA2 },
     Led { driver: 1, red: CB10_CA1, green: CB12_CA1, blue: CB11_CA1 },
 ];
+
+/// Maps matrix position `[row][col]` to a LED index into [`LED_LAYOUT`].
+///
+/// `None` for positions that have no physical LED (dead matrix cells, the
+/// layer-toggle switch column, encoder switch, etc.). Values must be verified
+/// against the physical PCB if the LED layout ever changes.
+/// Maps matrix position `[row][col]` to a LED index into [`LED_LAYOUT`].
+///
+/// Derived directly from `vial.json` layout and the sequential LED indices
+/// assigned in `LED_LAYOUT`. `None` for dead matrix cells (`a!(No)` in the
+/// keymap), the layer-toggle columns (5,7 and 5,8), and physical gaps where
+/// no key or LED exists.
+///
+/// To re-verify: for each `"row,col"` entry in `vial.json`s keymap array,
+/// assign the next sequential LED index in reading order (left-to-right,
+/// top-to-bottom), skipping entries that have only position modifiers
+/// (`x`, `y`, `w`, `h`) and no matrix coordinate.
+pub const MATRIX_TO_LED: [[Option<u8>; 21]; 6] = [
+    // Row 0: Esc | F1-F4 | F5-F8 | F9-F12 | Mute | PrtSc ScrollLk Pause | F13-F16
+    // vial indices 0-20 in reading order, all 21 columns populated
+    [
+        Some(0),
+        Some(1),
+        Some(2),
+        Some(3),
+        Some(4),
+        Some(5),
+        Some(6),
+        Some(7),
+        Some(8),
+        Some(9),
+        Some(10),
+        Some(11),
+        Some(12),
+        Some(13),
+        Some(14),
+        Some(15),
+        Some(16),
+        Some(17),
+        Some(18),
+        Some(19),
+        Some(20),
+    ],
+    // Row 1: ` 1-0 - = Backspace(2U) | Ins Home PgUp | NumLk / * -
+    // Backspace occupies col 13 only (col 14 is the 2U extension, no matrix pos)
+    [
+        Some(21),
+        Some(22),
+        Some(23),
+        Some(24),
+        Some(25),
+        Some(26),
+        Some(27),
+        Some(28),
+        Some(29),
+        Some(30),
+        Some(31),
+        Some(32),
+        Some(33),
+        Some(34),
+        None,
+        Some(35),
+        Some(36),
+        Some(37),
+        Some(38),
+        Some(39),
+        Some(40),
+    ],
+    // Row 2: Tab(1.5U) Q-] \(1.5U) | Del End PgDn | 7 8 9 +(2H, top)
+    // Tab and backslash are wide but occupy single matrix columns
+    [
+        Some(41),
+        Some(42),
+        Some(43),
+        Some(44),
+        Some(45),
+        Some(46),
+        Some(47),
+        Some(48),
+        Some(49),
+        Some(50),
+        Some(51),
+        Some(52),
+        Some(53),
+        Some(54),
+        Some(55),
+        Some(56),
+        Some(57),
+        Some(58),
+        Some(59),
+        Some(60),
+        Some(61),
+    ],
+    // Row 3: CapsLk(1.75U) A-' Enter(2.25U) | (no nav) | 4 5 6
+    // cols 13-16 are a!(No), col 20 is a!(No) (+ spans rows 2-3)
+    [
+        Some(62),
+        Some(63),
+        Some(64),
+        Some(65),
+        Some(66),
+        Some(67),
+        Some(68),
+        Some(69),
+        Some(70),
+        Some(71),
+        Some(72),
+        Some(73),
+        Some(74),
+        None,
+        None,
+        None,
+        None,
+        Some(75),
+        Some(76),
+        Some(77),
+        None,
+    ],
+    // Row 4: LShift(2.25U) [No] Z-/ RShift(2.75U) | [gap] Up [gap] | 1 2 3 Enter(2H, top)
+    // col 1 is a!(No) (LShift extension), col 12 is a!(No) (RShift extension)
+    // col 14 is a!(No) (gap left of Up), col 16 is a!(No) (gap right of Up)
+    [
+        Some(78),
+        None,
+        Some(79),
+        Some(80),
+        Some(81),
+        Some(82),
+        Some(83),
+        Some(84),
+        Some(85),
+        Some(86),
+        Some(87),
+        Some(88),
+        None,
+        Some(89),
+        None,
+        Some(90),
+        None,
+        Some(91),
+        Some(92),
+        Some(93),
+        Some(94),
+    ],
+    // Row 5: LCtrl LGui LAlt Space(6.25U) [df0 df1 = layer toggle, no LED]
+    //        RAlt RGui Menu RCtrl | ← ↓ → | 0(2U) . [Enter shared with row 4]
+    // cols 3-5 are a!(No) (space extension), cols 7-8 are layer toggle (no LED)
+    // col 13 is a!(No), col 19-20 are a!(No)
+    [
+        Some(95),
+        Some(96),
+        Some(97),
+        None,
+        None,
+        None,
+        Some(98),
+        None,
+        None,
+        Some(99),
+        Some(100),
+        Some(101),
+        Some(102),
+        None,
+        Some(103),
+        Some(104),
+        Some(105),
+        Some(106),
+        Some(107),
+        None,
+        None,
+    ],
+];

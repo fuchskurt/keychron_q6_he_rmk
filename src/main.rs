@@ -23,6 +23,7 @@
 )]
 /// Backlight driver integration.
 mod backlight;
+mod eeprom;
 /// Flash storage wrapper types.
 mod flash_wrapper_async;
 /// Default keymap definitions.
@@ -34,6 +35,7 @@ mod vial;
 
 use crate::{
     backlight::{init::backlight_runner, lock_indicator::LedIndicatorProcessor},
+    eeprom::Ft24c64,
     flash_wrapper_async::Flash16K,
     keymap::{COL, ROW},
     matrix::{
@@ -54,6 +56,8 @@ use embassy_stm32::{
     flash,
     flash::Flash,
     gpio::{Input, Level, Output, Pull, Speed},
+    i2c,
+    i2c::I2c,
     init,
     interrupt::typelevel,
     pac,
@@ -95,10 +99,14 @@ bind_interrupts!(struct Irqs {
     DMA2_STREAM0 => dma::InterruptHandler<peripherals::DMA2_CH0>;
     DMA2_STREAM3 => dma::InterruptHandler<peripherals::DMA2_CH3>;
     DMA2_STREAM2 => dma::InterruptHandler<peripherals::DMA2_CH2>;
+    DMA1_STREAM4 => dma::InterruptHandler<peripherals::DMA1_CH4>;
+    DMA1_STREAM2 => dma::InterruptHandler<peripherals::DMA1_CH2>;
     EXTI3 => exti::InterruptHandler<typelevel::EXTI3>;
     EXTI15_10 => exti::InterruptHandler<typelevel::EXTI15_10>;
     FLASH => flash::InterruptHandler;
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
+    I2C3_EV => i2c::EventInterruptHandler<peripherals::I2C3>;
+    I2C3_ER => i2c::ErrorInterruptHandler<peripherals::I2C3>;
 });
 
 /// Entry point for the firmware.
@@ -191,9 +199,25 @@ async fn main(spawner: Spawner) {
         peripheral.PA0.degrade_adc(),
         peripheral.PA1.degrade_adc(),
     ];
-    let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::CYCLES56);
-    let mut matrix = AnalogHallMatrix::<_, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default());
 
+    let i2c_config = {
+        let mut cfg = i2c::Config::default();
+        cfg.frequency = Hertz(400_000);
+        cfg
+    };
+    let i2c3 = I2c::new(
+        peripheral.I2C3,
+        peripheral.PA8,      // SCL (PA8 = I2C3_SCL)
+        peripheral.PC9,      // SDA (PC9 = I2C3_SDA)
+        peripheral.DMA1_CH4, // TX DMA
+        peripheral.DMA1_CH2, // RX DMA
+        Irqs,                // satisfies all four Binding constraints at once
+        i2c_config,
+    );
+    let eeprom_wp = Output::new(peripheral.PB10, Level::High, Speed::Low);
+    let eeprom = Ft24c64::new(i2c3, eeprom_wp);
+    let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::CYCLES56);
+    let mut matrix = AnalogHallMatrix::<_, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom);
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
     let pin_b = ExtiInput::new(peripheral.PB15, peripheral.EXTI15, Pull::None, Irqs);
