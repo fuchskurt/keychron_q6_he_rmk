@@ -1,17 +1,17 @@
 use crate::matrix::{
     hc164_cols::Hc164Cols,
-    travel_helpers::{delta_from_ref, SCALE_Q_FACTOR, SCALE_SHIFT},
+    travel_helpers::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
 };
 use core::{
     future::pending,
     hint::{likely, unlikely},
 };
 use embassy_stm32::{
+    Peri,
     adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, ConfiguredSequence, Instance, RxDma},
     dma::InterruptHandler,
     interrupt::typelevel::Binding,
     pac::adc,
-    Peri,
 };
 use embassy_time::{Duration, Timer};
 use rmk::{
