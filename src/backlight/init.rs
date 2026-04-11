@@ -2,7 +2,7 @@
 
 use crate::backlight::{
     gamma_correction::gamma_correction,
-    lock_indicator::{BACKLIGHT_CH, BacklightCmd},
+    lock_indicator::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
     mapping::LED_LAYOUT,
 };
 use embassy_stm32::{
@@ -22,6 +22,8 @@ use snled27351_driver::{
 type Transport = SpiTransport<Spi<'static, Async, spi::mode::Master>, Output<'static>, Output<'static>, 2>;
 /// Concrete driver type for this keyboard.
 type BacklightDriver = Driver<Transport, 2>;
+/// Bus error type shared by all async driver helpers.
+type BusError = SpiTransportError<<Spi<'static, Async, spi::mode::Master> as ErrorType>::Error>;
 
 /// LED index for the Caps Lock indicator key.
 const CAPS_LOCK_LED_INDEX: usize = 62;
@@ -35,6 +37,12 @@ const INDICATOR_RED: (u8, u8, u8) = (255, 0, 0);
 const INDICATOR_WHITE: (u8, u8, u8) = (255, 255, 255);
 /// RGB color for a disabled indicator (off).
 const INDICATOR_OFF: (u8, u8, u8) = (0, 0, 0);
+/// Background colour during the zero-travel calibration phase and the
+/// EEPROM-write-failure signal (amber).
+const CALIB_AMBER: (u8, u8, u8) = (255, 120, 0);
+/// Solid colour used for the post-calibration success hold and for each
+/// individually confirmed key during the full-travel pass (green).
+const CALIB_GREEN: (u8, u8, u8) = (0, 220, 80);
 /// Number of brightness steps in the soft-start ramp.
 const SOFTSTART_STEPS: u8 = 50;
 /// Total duration of the soft-start ramp in milliseconds.
@@ -44,14 +52,31 @@ const SOFTSTART_RAMP_MS: u32 = 1000;
 const THERMAL_THROTTLE_BRIGHTNESS: u8 = 50;
 /// Interval between thermal register polls.
 const THERMAL_POLL: Duration = Duration::from_secs(5);
+/// Duration in milliseconds to hold the solid-green display after calibration
+/// is successfully stored, before returning to normal white backlight.
+const CALIB_DONE_HOLD_MS: u64 = 2000;
+/// Number of on/off cycles in the "all keys accepted" blink animation.
+const CALIB_ALL_DONE_BLINK_COUNT: u8 = 3;
+/// Duration of each on and each off half-period of the blink (milliseconds).
+const CALIB_ALL_DONE_BLINK_HALF_MS: u64 = 150;
 
+/// Scale `value` by `brightness_percent` (0–100), rounding to nearest.
+///
+/// Computes `value × percent / 100` with half-up rounding by adding 50 before
+/// the integer division. The intermediate value fits in [`u16`] because
+/// `255 × 100 + 50 = 25 550 < 65 535`; neither saturating path can trigger.
 #[inline]
 const fn scale(value: u8, brightness_percent: u8) -> u8 {
     let v = u16::from(value);
     let p = u16::from(brightness_percent.min(100));
+    // +50 rounds to nearest; /100 cannot overflow u8 because v*p/100 ≤ 255.
     u8::try_from(v.saturating_mul(p).saturating_add(50).checked_div(100).unwrap_or_default()).unwrap_or(255)
 }
 
+/// Apply brightness scaling and gamma correction to an RGB colour.
+///
+/// Each channel is scaled by `brightness_percent` via [`scale`], then passed
+/// through the gamma-2.2 LUT, producing values ready for the LED driver.
 #[inline]
 const fn correct(red: u8, green: u8, blue: u8, brightness_percent: u8) -> (u8, u8, u8) {
     (
@@ -59,6 +84,26 @@ const fn correct(red: u8, green: u8, blue: u8, brightness_percent: u8) -> (u8, u
         gamma_correction(scale(green, brightness_percent)),
         gamma_correction(scale(blue, brightness_percent)),
     )
+}
+
+/// Apply [`correct`] to a pre-packaged `(R, G, B)` colour tuple.
+///
+/// Avoids destructuring at every call site when working with the named colour
+/// constants defined in this module.
+#[inline]
+const fn correct_color(color: (u8, u8, u8), brightness_percent: u8) -> (u8, u8, u8) {
+    correct(color.0, color.1, color.2, brightness_percent)
+}
+
+/// Paint every LED with `color` at `brightness` and flush to hardware.
+///
+/// Combines the three-step correct → stage_all_leds → flush sequence that
+/// appears in every solid-colour calibration frame, so each call site is a
+/// single expression.
+async fn fill_all_leds(driver: &mut BacklightDriver, color: (u8, u8, u8), brightness: u8) -> Result<(), BusError> {
+    let (r, g, b) = correct_color(color, brightness);
+    driver.stage_all_leds(r, g, b);
+    driver.flush().await
 }
 
 /// Full backlight state, kept in one place so any path can do a consistent
@@ -71,28 +116,80 @@ struct BacklightState {
     num_lock: bool,
     /// Global brightness percentage (0–100); reduced under thermal throttle.
     brightness: u8,
+    /// Whether a first-boot calibration pass is currently in progress.
+    ///
+    /// `true` from [`CalibPhase::Zero`] until [`CalibPhase::Done`] completes.
+    /// Used by the thermal throttle path to call [`render_calib`] instead of
+    /// [`render_all`] so a thermal event never clobbers the calibration
+    /// display.
+    in_calib: bool,
+    /// Bitset of LED indices confirmed calibrated during the full-travel pass.
+    ///
+    /// Bit `i` set means LED `i` should be painted solid green by
+    /// [`render_calib`]. Cleared to zero when [`CalibPhase::Done`] completes
+    /// and the keyboard returns to normal white operation.
+    calib_leds_done: u128,
+    /// Whole-keyboard gradient percentage (0–100) during the full-travel pass.
+    ///
+    /// Drives the blue→green background interpolation in [`render_calib`].
+    /// Cleared to zero alongside [`self::BacklightState::calib_leds_done`] on
+    /// calibration completion.
+    calib_pct: u8,
 }
 
 impl BacklightState {
-    const fn new() -> Self { Self { caps_lock: false, num_lock: false, brightness: 100 } }
+    const fn new() -> Self {
+        Self { caps_lock: false, num_lock: false, brightness: 100, in_calib: false, calib_leds_done: 0, calib_pct: 0 }
+    }
 }
 
 /// Writes every LED to hardware according to `state`.
 ///
 /// Paints the background white at the current brightness, then overlays the
 /// indicator LEDs on top. Called after any state change requiring a full
-/// redraw (e.g. thermal-throttle transitions).
+/// redraw (e.g. thermal-throttle transitions during normal operation).
 ///
 /// # Errors
 ///
 /// Returns `Err` if any bus transaction fails. See [`BacklightDriver::flush`].
-async fn render_all(
-    driver: &mut BacklightDriver,
-    state: BacklightState,
-) -> Result<(), SpiTransportError<<Spi<'static, Async, spi::mode::Master> as ErrorType>::Error>> {
-    let (r, g, b) = correct(255, 255, 255, state.brightness);
+async fn render_all(driver: &mut BacklightDriver, state: BacklightState) -> Result<(), BusError> {
+    let (r, g, b) = correct_color(INDICATOR_WHITE, state.brightness);
     driver.stage_all_leds(r, g, b);
     render_indicators(driver, state).await
+}
+
+/// Render the full-travel calibration frame.
+///
+/// The background gradient starts red at 0 % progress and shifts toward blue
+/// at 100 % via `state.calib_pct`. Every LED whose bit is set in
+/// `state.calib_leds_done` is overlaid with solid green regardless of the
+/// background, giving immediate per-key visual confirmation as each key is
+/// pressed to the bottom.
+///
+/// # Errors
+///
+/// Returns `Err` if any bus transaction fails. See [`BacklightDriver::flush`].
+async fn render_calib(driver: &mut BacklightDriver, state: BacklightState) -> Result<(), BusError> {
+    // Gradient background: starts red (0 %), shifts toward blue (100 %).
+    let bg_red = scale(255, 100_u8.saturating_sub(state.calib_pct));
+    let bg_blue = scale(220, state.calib_pct);
+    let (bg_r, bg_g, bg_b) = correct(bg_red, 0, bg_blue, state.brightness);
+
+    // Per-key confirmed color: solid green.
+    let (cal_r, cal_g, cal_b) = correct_color(CALIB_GREEN, state.brightness);
+
+    driver.stage_all_leds(bg_r, bg_g, bg_b);
+
+    // Overlay individually confirmed LEDs in green.
+    let mut bits = state.calib_leds_done;
+    while bits != 0 {
+        // Isolate and consume the lowest set bit.
+        let idx = usize::try_from(bits.trailing_zeros()).unwrap_or(0);
+        driver.stage_led(idx, cal_r, cal_g, cal_b);
+        bits &= bits.saturating_sub(1);
+    }
+
+    driver.flush().await
 }
 
 /// Writes only the two indicator LEDs according to `state`.
@@ -103,18 +200,15 @@ async fn render_all(
 /// # Errors
 ///
 /// Returns `Err` if any bus transaction fails. See [`BacklightDriver::flush`].
-async fn render_indicators(
-    driver: &mut BacklightDriver,
-    state: BacklightState,
-) -> Result<(), SpiTransportError<<Spi<'static, Async, spi::mode::Master> as ErrorType>::Error>> {
+async fn render_indicators(driver: &mut BacklightDriver, state: BacklightState) -> Result<(), BusError> {
     // Caps Lock: red when active, white when inactive.
     let caps_color = if state.caps_lock { INDICATOR_RED } else { INDICATOR_WHITE };
-    let (r, g, b) = correct(caps_color.0, caps_color.1, caps_color.2, INDICATOR_BRIGHTNESS);
+    let (r, g, b) = correct_color(caps_color, INDICATOR_BRIGHTNESS);
     driver.stage_led(CAPS_LOCK_LED_INDEX, r, g, b);
 
     // Num Lock: white when active, off when inactive.
     let num_color = if state.num_lock { INDICATOR_WHITE } else { INDICATOR_OFF };
-    let (r, g, b) = correct(num_color.0, num_color.1, num_color.2, INDICATOR_BRIGHTNESS);
+    let (r, g, b) = correct_color(num_color, INDICATOR_BRIGHTNESS);
     driver.stage_led(NUM_LOCK_LED_INDEX, r, g, b);
 
     driver.flush().await
@@ -134,11 +228,17 @@ async fn softstart(
     base_green: u8,
     base_blue: u8,
     target_brightness: u8,
-) -> Result<(), SpiTransportError<<Spi<'static, Async, spi::mode::Master> as ErrorType>::Error>> {
+) -> Result<(), BusError> {
     let target = u32::from(target_brightness.min(100));
+    // SOFTSTART_STEPS is a non-zero constant; .max(1) is a belt-and-suspenders
+    // guard ensuring checked_div always returns Some.
     let steps = u32::from(SOFTSTART_STEPS.max(1));
     let delay_ms = u64::from(SOFTSTART_RAMP_MS.checked_div(steps).unwrap_or(0));
 
+    // `0..=steps` produces SOFTSTART_STEPS + 1 iterations so that both the
+    // 0 % start and the 100 % end are written. The final delay is skipped
+    // (step == steps guard) so the function returns immediately after the
+    // last write without an unnecessary pause.
     for step in 0..=steps {
         let percent = u8::try_from(target.saturating_mul(step).checked_div(steps).unwrap_or(0)).unwrap_or(0);
         let (r, g, b) = correct(base_red, base_green, base_blue, percent);
@@ -155,13 +255,13 @@ async fn softstart(
 /// Initializes both SNLED27351 driver chips, performs a soft-start brightness
 /// ramp, then enters an event loop that concurrently handles two concerns:
 ///
-/// - **Indicator commands** arriving on [`BACKLIGHT_CH`]: updates Caps Lock and
-///   Num Lock LEDs without touching the rest of the matrix.
+/// - **Indicator and calibration commands** arriving on [`BACKLIGHT_CH`].
 /// - **Thermal polling** on a [`THERMAL_POLL`] ticker: reads the TDF register
 ///   from both chips and reduces overall brightness to
 ///   [`THERMAL_THROTTLE_BRIGHTNESS`] if either exceeds 70 °C, restoring it
-///   automatically when both cool down. A full redraw is issued on each
-///   transition so that indicator LEDs are never lost.
+///   automatically when both cool down. During calibration [`render_calib`] is
+///   used instead of [`render_all`] so the calibration display is never
+///   clobbered by a thermal event.
 pub async fn backlight_runner(
     spi: Spi<'static, Async, spi::mode::Master>,
     cs0: Output<'static>,
@@ -171,6 +271,9 @@ pub async fn backlight_runner(
     let transport = SpiTransport::new(spi, [cs0, cs1], sdb);
     let mut driver = BacklightDriver::new(transport, LED_LAYOUT);
 
+    // Backlight failures are non-critical: the keyboard remains fully functional
+    // without LEDs.  All driver errors are intentionally ignored throughout
+    // this task via `let _ = ...`.
     if driver.init(0xFF).await.is_ok() {
         let _ = softstart(&mut driver, 255, 255, 255, 100).await;
     }
@@ -182,6 +285,59 @@ pub async fn backlight_runner(
     loop {
         match select(rx.receive(), thermal_ticker.next()).await {
             Either::First(cmd) => match cmd {
+                BacklightCmd::CalibPhase(phase) => match phase {
+                    CalibPhase::Zero => {
+                        // Amber: zero-travel pass, all keys should be fully released.
+                        state.in_calib = true;
+                        let _ = fill_all_leds(&mut driver, CALIB_AMBER, state.brightness).await;
+                    }
+                    CalibPhase::Full => {
+                        // Reset calib tracking and render the initial red frame via
+                        // render_calib so the full-travel phase starts consistently.
+                        state.calib_leds_done = 0;
+                        state.calib_pct = 0;
+                        let _ = render_calib(&mut driver, state).await;
+                    }
+                    CalibPhase::AllAccepted => {
+                        // Blink solid green × CALIB_ALL_DONE_BLINK_COUNT to signal
+                        // that every key has been recorded and keys may be released.
+                        // calibration is still in progress (in_calib stays true).
+                        for i in 0..CALIB_ALL_DONE_BLINK_COUNT {
+                            let _ = fill_all_leds(&mut driver, CALIB_GREEN, state.brightness).await;
+                            Timer::after_millis(CALIB_ALL_DONE_BLINK_HALF_MS).await;
+                            if i < CALIB_ALL_DONE_BLINK_COUNT.saturating_sub(1) {
+                                let _ = fill_all_leds(&mut driver, INDICATOR_OFF, state.brightness).await;
+                                Timer::after_millis(CALIB_ALL_DONE_BLINK_HALF_MS).await;
+                            }
+                        }
+                        // Leave the keyboard solid green heading into Done.
+                    }
+                    CalibPhase::Done => {
+                        // Solid green hold for 2 s to confirm calibration is stored.
+                        let _ = fill_all_leds(&mut driver, CALIB_GREEN, state.brightness).await;
+                        Timer::after_millis(CALIB_DONE_HOLD_MS).await;
+                        // Clear all calibration state before returning to normal
+                        // white so stale bits cannot bleed into the next render.
+                        state.in_calib = false;
+                        state.calib_leds_done = 0;
+                        state.calib_pct = 0;
+                        let _ = render_all(&mut driver, state).await;
+                    }
+                },
+                BacklightCmd::CalibProgress(pct) => {
+                    state.calib_pct = pct;
+                    let _ = render_calib(&mut driver, state).await;
+                }
+                BacklightCmd::CalibKeyDone(led_idx) => {
+                    // Mark this LED calibrated and repaint immediately so the
+                    // key turns green the moment it crosses the threshold.
+                    // The `< 128` guard matches the bit-width of calib_leds_done
+                    // (u128); checked_shl is an additional defensive layer.
+                    if usize::from(led_idx) < 128 {
+                        state.calib_leds_done |= 1_u128.checked_shl(u32::from(led_idx)).unwrap_or(0);
+                    }
+                    let _ = render_calib(&mut driver, state).await;
+                }
                 BacklightCmd::Indicators { caps, num } => {
                     state.caps_lock = caps;
                     state.num_lock = num;
@@ -194,8 +350,14 @@ pub async fn backlight_runner(
                 let new_brightness = if hot { THERMAL_THROTTLE_BRIGHTNESS } else { 100 };
                 if new_brightness != state.brightness {
                     state.brightness = new_brightness;
-                    // Full redraw required; restores indicator LEDs over the new background.
-                    let _ = render_all(&mut driver, state).await;
+                    // During calibration use render_calib so the gradient and
+                    // per-key green state are preserved after the brightness change.
+                    // Outside calibration restore the normal white background.
+                    if state.in_calib {
+                        let _ = render_calib(&mut driver, state).await;
+                    } else {
+                        let _ = render_all(&mut driver, state).await;
+                    }
                 }
             }
         }

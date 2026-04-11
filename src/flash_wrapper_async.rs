@@ -44,10 +44,9 @@ impl<F: ReadNorFlash> ReadNorFlash for Flash16K<F> {
 impl<F: NorFlash> NorFlash for Flash16K<F> {
     /// Write granularity for the underlying flash.
     const WRITE_SIZE: usize = F::WRITE_SIZE;
-    /// Erase size reported as 16KB for the wrapped flash.
+    /// Erase size reported as 16 KiB - matches STM32F4 sectors 1 and 2.
     const ERASE_SIZE: usize = 16_usize.saturating_mul(1024);
 
-    // 16KB for sectors 1-2
     /// Erase the flash range between the given offsets.
     async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> { self.0.erase(from, to).await }
 

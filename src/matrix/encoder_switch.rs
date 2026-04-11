@@ -19,6 +19,7 @@ pub struct EncoderSwitch<'peripherals> {
 
 impl<'peripherals> EncoderSwitch<'peripherals> {
     /// Create a new encoder switch input wrapper.
+    #[must_use]
     pub const fn new(pin: ExtiInput<'peripherals, Async>, row: u8, col: u8) -> Self {
         Self { pin, row, col, last_pressed: false, debounce: Duration::from_millis(15) }
     }

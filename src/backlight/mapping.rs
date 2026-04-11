@@ -297,3 +297,188 @@ pub const LED_LAYOUT: &[Led] = &[
     Led { driver: 1, red: CB10_CA2, green: CB12_CA2, blue: CB11_CA2 },
     Led { driver: 1, red: CB10_CA1, green: CB12_CA1, blue: CB11_CA1 },
 ];
+
+/// Maps matrix position `[row][col]` to a LED index into [`LED_LAYOUT`].
+///
+/// Derived directly from `vial.json` layout and the sequential LED indices
+/// assigned in `LED_LAYOUT`. `None` for dead matrix cells (`a!(No)` in the
+/// keymap), the layer-toggle columns (5,7 and 5,8), and physical gaps where
+/// no key or LED exists.
+///
+/// To re-verify: for each `"row,col"` entry in `vial.json`s keymap array,
+/// assign the next sequential LED index in reading order (left-to-right,
+/// top-to-bottom), skipping entries that have only position modifiers
+/// (`x`, `y`, `w`, `h`) and no matrix coordinate.
+pub const MATRIX_TO_LED: [[Option<u8>; 21]; 6] = [
+    // Row 0: col 13 = AudioMute (encoder button, no LED).
+    [
+        Some(0),
+        Some(1),
+        Some(2),
+        Some(3),
+        Some(4),
+        Some(5),
+        Some(6),
+        Some(7),
+        Some(8),
+        Some(9),
+        Some(10),
+        Some(11),
+        Some(12),
+        None,
+        Some(13),
+        Some(14),
+        Some(15),
+        Some(16),
+        Some(17),
+        Some(18),
+        Some(19),
+    ],
+    // Row 1: all 21 keys present. LEDs 20–40.
+    [
+        Some(20),
+        Some(21),
+        Some(22),
+        Some(23),
+        Some(24),
+        Some(25),
+        Some(26),
+        Some(27),
+        Some(28),
+        Some(29),
+        Some(30),
+        Some(31),
+        Some(32),
+        Some(33),
+        Some(34),
+        Some(35),
+        Some(36),
+        Some(37),
+        Some(38),
+        Some(39),
+        Some(40),
+    ],
+    // Row 2: all 21 keys present. LEDs 41–61.
+    [
+        Some(41),
+        Some(42),
+        Some(43),
+        Some(44),
+        Some(45),
+        Some(46),
+        Some(47),
+        Some(48),
+        Some(49),
+        Some(50),
+        Some(51),
+        Some(52),
+        Some(53),
+        Some(54),
+        Some(55),
+        Some(56),
+        Some(57),
+        Some(58),
+        Some(59),
+        Some(60),
+        Some(61),
+    ],
+    // Row 3: keys at cols 0–12, 17–19. LEDs 62–77.
+    // cols 13–16 = a!(No). col 20 = a!(No) (KpPlus h:2 bottom).
+    [
+        Some(62),
+        Some(63),
+        Some(64),
+        Some(65),
+        Some(66),
+        Some(67),
+        Some(68),
+        Some(69),
+        Some(70),
+        Some(71),
+        Some(72),
+        Some(73),
+        Some(74),
+        None,
+        None,
+        None,
+        None,
+        Some(75),
+        Some(76),
+        Some(77),
+        None,
+    ],
+    // Row 4: keys at cols 0,2–11,13,15,17–20. LEDs 78–94.
+    // col 1 = a!(No). col 12 = a!(No). col 14 = a!(No). col 16 = a!(No).
+    [
+        Some(78),
+        None,
+        Some(79),
+        Some(80),
+        Some(81),
+        Some(82),
+        Some(83),
+        Some(84),
+        Some(85),
+        Some(86),
+        Some(87),
+        Some(88),
+        None,
+        Some(89),
+        None,
+        Some(90),
+        None,
+        Some(91),
+        Some(92),
+        Some(93),
+        Some(94),
+    ],
+    // Row 5: keys at cols 0–2,6,9–12,14–18. LEDs 95–107.
+    // cols 3–5 = a!(No). cols 7–8 = layer toggle. col 13 = a!(No). cols 19–20 = a!(No).
+    [
+        Some(95),
+        Some(96),
+        Some(97),
+        None,
+        None,
+        None,
+        Some(98),
+        None,
+        None,
+        Some(99),
+        Some(100),
+        Some(101),
+        Some(102),
+        None,
+        Some(103),
+        Some(104),
+        Some(105),
+        Some(106),
+        Some(107),
+        None,
+        None,
+    ],
+];
+
+/// Compile-time guard: [`LED_LAYOUT`] must fit within the 128-bit
+/// `calib_leds_done` bitset used in the backlight task.
+const _: () = assert!(LED_LAYOUT.len() <= 128, "LED_LAYOUT exceeds the 128-LED capacity of the calib_leds_done bitset");
+
+/// Compile-time guard: every `Some(idx)` in [`MATRIX_TO_LED`] must be a valid
+/// index into [`LED_LAYOUT`]. Catches mismatches when either table is edited.
+const _: () = {
+    let led_count = LED_LAYOUT.len();
+    let mut row = 0;
+    while row < MATRIX_TO_LED.len() {
+        let mut col = 0;
+        while col < MATRIX_TO_LED[row].len() {
+            if let Some(idx) = MATRIX_TO_LED[row][col] {
+                assert!(
+                    usize::from(idx) < led_count,
+                    "MATRIX_TO_LED contains an LED index that exceeds LED_LAYOUT length"
+                );
+            }
+            col = col.saturating_add(1);
+        }
+        row = row.saturating_add(1);
+    }
+};

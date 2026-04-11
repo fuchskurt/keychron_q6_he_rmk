@@ -1,15 +1,3 @@
-//! HC164 shift-register column selector.
-//!
-//! The HC164 is driven as a walking-ones shift register. Column 0 is selected
-//! by pulsing MR low (clearing the register) then clocking in a single high
-//! bit. Each subsequent column is selected by clocking in a low bit, which
-//! shifts the high bit one position along the chain.
-//!
-//! All column transitions go through
-//! [`crate::matrix::hc164_cols::Hc164Cols::select`], which tracks the
-//! last column and handles both cases transparently. The scan loop only needs
-//! to call `select(col)` — there is no separate `advance` step.
-
 use core::hint::unlikely;
 use cortex_m::asm::delay;
 use embassy_stm32::gpio::Output;
@@ -67,7 +55,7 @@ impl<'peripherals> Hc164Cols<'peripherals> {
             self.pulse_cp();
             self.ds.set_low();
         } else {
-            // clock the walking-one to the next position.
+            // Clock the walking-one to the next position.
             self.pulse_cp();
         }
     }

@@ -10,6 +10,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+crc = { version = "3", default-features = false }
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7"
 embassy-time = { features = ["tick-hz-1_000_000"], git = "https://github.com/embassy-rs/embassy.git" }

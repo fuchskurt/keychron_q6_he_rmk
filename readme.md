@@ -1,4 +1,4 @@
-# Keychron Q6 HE ANSI — RMK Firmware
+# Keychron Q6 HE ANSI - RMK Firmware
 
 [![Docs](https://img.shields.io/badge/docs-latest-blue?style=flat-square)](https://fuchskurt.github.io/keychron_q6_he_rmk/rmk_q6_he_ansi/)
 [![Release](https://img.shields.io/github/v/release/fuchskurt/keychron_q6_he_rmk?style=flat-square)](https://github.com/fuchskurt/keychron_q6_he_rmk/releases)

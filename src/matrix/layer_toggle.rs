@@ -2,8 +2,8 @@ use embassy_stm32::{exti::ExtiInput, mode::Async};
 use embassy_time::{Duration, Timer};
 use rmk::{event::KeyboardEvent, macros::input_device};
 
-#[derive(Copy, Clone)]
 /// Matrix coordinates for a key position.
+#[derive(Copy, Clone)]
 pub struct MatrixPos {
     /// Column index within the matrix.
     pub col: u8,
@@ -39,6 +39,7 @@ impl<'peripherals> LayerToggle<'peripherals> {
     }
 
     /// Create a new layer toggle with a provided debounce duration.
+    #[must_use]
     pub const fn new(
         pin: ExtiInput<'peripherals, Async>,
         high_pos: MatrixPos,
@@ -49,6 +50,7 @@ impl<'peripherals> LayerToggle<'peripherals> {
     }
 
     /// Create a new layer toggle with the default debounce.
+    #[must_use]
     pub const fn new_with_default_debounce(
         pin: ExtiInput<'peripherals, Async>,
         high_pos: MatrixPos,
@@ -57,14 +59,14 @@ impl<'peripherals> LayerToggle<'peripherals> {
         Self::new(pin, high_pos, low_pos, Duration::from_millis(15))
     }
 
-    #[inline]
     /// Select the matrix position for the provided level.
+    #[inline]
     const fn pos_for_level(&self, level_high: bool) -> MatrixPos {
         if level_high { self.high_pos } else { self.low_pos }
     }
 
-    #[inline]
     /// Queue a tap event for the provided position.
+    #[inline]
     fn queue_tap(&mut self, pos: MatrixPos) -> KeyboardEvent {
         self.pending_release = Some(pos);
         KeyboardEvent::key(pos.row, pos.col, true)

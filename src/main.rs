@@ -23,6 +23,7 @@
 )]
 /// Backlight driver integration.
 mod backlight;
+mod eeprom;
 /// Flash storage wrapper types.
 mod flash_wrapper_async;
 /// Default keymap definitions.
@@ -34,6 +35,7 @@ mod vial;
 
 use crate::{
     backlight::{init::backlight_runner, lock_indicator::LedIndicatorProcessor},
+    eeprom::Ft24c64,
     flash_wrapper_async::Flash16K,
     keymap::{COL, ROW},
     matrix::{
@@ -53,7 +55,9 @@ use embassy_stm32::{
     exti::{self, ExtiInput},
     flash,
     flash::Flash,
-    gpio::{Input, Level, Output, Pull, Speed},
+    gpio::{Flex, Input, Level, Output, Pull, Speed},
+    i2c,
+    i2c::I2c,
     init,
     interrupt::typelevel,
     pac,
@@ -95,10 +99,14 @@ bind_interrupts!(struct Irqs {
     DMA2_STREAM0 => dma::InterruptHandler<peripherals::DMA2_CH0>;
     DMA2_STREAM3 => dma::InterruptHandler<peripherals::DMA2_CH3>;
     DMA2_STREAM2 => dma::InterruptHandler<peripherals::DMA2_CH2>;
+    DMA1_STREAM4 => dma::InterruptHandler<peripherals::DMA1_CH4>;
+    DMA1_STREAM2 => dma::InterruptHandler<peripherals::DMA1_CH2>;
     EXTI3 => exti::InterruptHandler<typelevel::EXTI3>;
     EXTI15_10 => exti::InterruptHandler<typelevel::EXTI15_10>;
     FLASH => flash::InterruptHandler;
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
+    I2C3_EV => i2c::EventInterruptHandler<peripherals::I2C3>;
+    I2C3_ER => i2c::ErrorInterruptHandler<peripherals::I2C3>;
 });
 
 /// Entry point for the firmware.
@@ -111,19 +119,19 @@ async fn main(spawner: Spawner) {
         let mut config = Config::default();
         config.rcc.hse = Some(Hse { freq: Hertz(16_000_000), mode: HseMode::Oscillator });
         config.rcc.hsi = false;
-        config.rcc.pll_src = PllSource::HSE;
+        config.rcc.pll_src = PllSource::Hse;
         config.rcc.pll = Some(Pll {
-            prediv: PllPreDiv::DIV8,   // 16/8 = 2 MHz
-            mul: PllMul::MUL168,       // 2*168 = 336 MHz (VCO)
-            divp: Some(PllPDiv::DIV4), // 336/4 = 84 MHz (SYSCLK)
-            divq: Some(PllQDiv::DIV7), // 336/7 = 48 MHz
+            prediv: PllPreDiv::Div8,   // 16/8 = 2 MHz
+            mul: PllMul::Mul168,       // 2*168 = 336 MHz (VCO)
+            divp: Some(PllPDiv::Div4), // 336/4 = 84 MHz (SYSCLK)
+            divq: Some(PllQDiv::Div7), // 336/7 = 48 MHz
             divr: None,
         });
-        config.rcc.ahb_pre = AHBPrescaler::DIV1; // 84 MHz
-        config.rcc.apb1_pre = APBPrescaler::DIV2; // 42 MHz
-        config.rcc.apb2_pre = APBPrescaler::DIV1; // 84 MHz
-        config.rcc.sys = Sysclk::PLL1_P;
-        config.rcc.mux.clk48sel = Clk48sel::PLL1_Q;
+        config.rcc.ahb_pre = AHBPrescaler::Div1; // 84 MHz
+        config.rcc.apb1_pre = APBPrescaler::Div2; // 42 MHz
+        config.rcc.apb2_pre = APBPrescaler::Div1; // 84 MHz
+        config.rcc.sys = Sysclk::Pll1P;
+        config.rcc.mux.clk48sel = Clk48sel::Pll1Q;
         config
     });
 
@@ -154,7 +162,7 @@ async fn main(spawner: Spawner) {
 
     // Keyboard config
     let rmk_config = RmkConfig {
-        vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(5, 0), (5, 1)]),
+        vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0), (4, 20)]),
         device_config: DeviceConfig {
             manufacturer: "Keychron",
             product_name: "Q6 HE",
@@ -191,9 +199,25 @@ async fn main(spawner: Spawner) {
         peripheral.PA0.degrade_adc(),
         peripheral.PA1.degrade_adc(),
     ];
-    let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::CYCLES56);
-    let mut matrix = AnalogHallMatrix::<_, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default());
 
+    let i2c_config = {
+        let mut cfg = i2c::Config::default();
+        cfg.frequency = Hertz(850_000);
+        cfg
+    };
+    let i2c3 = I2c::new(
+        peripheral.I2C3,
+        peripheral.PA8,      // SCL (PA8 = I2C3_SCL)
+        peripheral.PC9,      // SDA (PC9 = I2C3_SDA)
+        peripheral.DMA1_CH4, // TX DMA
+        peripheral.DMA1_CH2, // RX DMA
+        Irqs,
+        i2c_config,
+    );
+    let eeprom_wp = Flex::new(peripheral.PB10);
+    let eeprom = Ft24c64::new(i2c3, eeprom_wp);
+    let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::Cycles56);
+    let mut matrix = AnalogHallMatrix::<_, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom);
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
     let pin_b = ExtiInput::new(peripheral.PB15, peripheral.EXTI15, Pull::None, Irqs);
