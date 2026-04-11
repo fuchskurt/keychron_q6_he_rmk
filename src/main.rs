@@ -46,16 +46,15 @@ use crate::{
     },
     vial::VIAL_SERIAL,
 };
-use embassy_executor::{Spawner, main};
+use embassy_executor::{main, Spawner};
 use embassy_stm32::{
-    Config,
     adc::{Adc, AdcChannel as _, AnyAdcChannel, SampleTime},
     bind_interrupts,
     dma,
     exti::{self, ExtiInput},
     flash,
     flash::Flash,
-    gpio::{Input, Level, Output, Pull, Speed},
+    gpio::{Flex, Input, Level, Output, Pull, Speed},
     i2c,
     i2c::I2c,
     init,
@@ -63,6 +62,7 @@ use embassy_stm32::{
     pac,
     peripherals::{self, ADC1},
     rcc::{
+        mux::Clk48sel,
         AHBPrescaler,
         APBPrescaler,
         Hse,
@@ -74,23 +74,23 @@ use embassy_stm32::{
         PllQDiv,
         PllSource,
         Sysclk,
-        mux::Clk48sel,
     },
     spi::{self},
     time::Hertz,
     usb::{self, Driver},
+    Config,
 };
 use encoder_switch::EncoderSwitch;
 use pac::SYSCFG;
 use rmk::{
-    KeymapData,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
     futures::future::join4,
     initialize_keymap_and_storage,
-    input_device::{Runnable as _, rotary_encoder::RotaryEncoder},
+    input_device::{rotary_encoder::RotaryEncoder, Runnable as _},
     keyboard::Keyboard,
     run_all,
     run_rmk,
+    KeymapData,
 };
 use static_cell::ConstStaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
@@ -202,7 +202,7 @@ async fn main(spawner: Spawner) {
 
     let i2c_config = {
         let mut cfg = i2c::Config::default();
-        cfg.frequency = Hertz(400_000);
+        cfg.frequency = Hertz(100_000);
         cfg
     };
     let i2c3 = I2c::new(
@@ -211,10 +211,10 @@ async fn main(spawner: Spawner) {
         peripheral.PC9,      // SDA (PC9 = I2C3_SDA)
         peripheral.DMA1_CH4, // TX DMA
         peripheral.DMA1_CH2, // RX DMA
-        Irqs,                // satisfies all four Binding constraints at once
+        Irqs,
         i2c_config,
     );
-    let eeprom_wp = Output::new(peripheral.PB10, Level::High, Speed::Low);
+    let eeprom_wp = Flex::new(peripheral.PB10);
     let eeprom = Ft24c64::new(i2c3, eeprom_wp);
     let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::CYCLES56);
     let mut matrix = AnalogHallMatrix::<_, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom);

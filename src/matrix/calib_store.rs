@@ -9,10 +9,14 @@
 //! 5             N × 4   entries, row-major:
 //!                         zero: u16  — ADC at zero travel (key at rest)
 //!                         full: u16  — ADC at full travel (key bottomed out)
-//! 5 + N × 4     2       CRC-16/CCITT over all preceding bytes
 //! ```
 //!
 //! where N = ROW × COL.
+//!
+//! Validation on load checks only the magic number and version byte. There
+//! is no trailing checksum — the calibration buffer (≤ 511 bytes) already
+//! fits entirely in RAM, and the magic + version pair is sufficient to
+//! distinguish a valid write from a blank (0xFF) or garbage EEPROM.
 
 /// Magic number identifying a valid calibration block.
 const MAGIC: u32 = 0xCAFE_BABE;
@@ -20,14 +24,12 @@ const MAGIC: u32 = 0xCAFE_BABE;
 const VERSION: u8 = 1;
 /// Byte length of the header (MAGIC + VERSION).
 const HEADER_LEN: usize = 5;
-/// Byte length of the trailing CRC field.
-const CRC_LEN: usize = 2;
 
 /// EEPROM word address at which the calibration block begins.
 pub const EEPROM_BASE_ADDR: u16 = 0x0000;
 
 /// Compute the total serialized byte length for a `rows × cols` matrix.
-pub const fn total_len(rows: usize, cols: usize) -> usize { HEADER_LEN + rows * cols * 4 + CRC_LEN }
+pub const fn total_len(rows: usize, cols: usize) -> usize { HEADER_LEN + rows * cols * 4 }
 
 /// Pre-computed buffer length for the Q6 HE ANSI matrix (6 × 21 = 126 keys).
 ///
@@ -46,9 +48,10 @@ pub struct CalibEntry {
 
 /// Serialize `entries` (row-major, `ROW × COL`) into `buf`.
 ///
-/// `buf` must be at least [`total_len`]`(ROW, COL)` bytes. Asserts in debug.
+/// `buf` must be at least [`total_len`]`(ROW, COL)` bytes.
 pub fn serialize<const ROW: usize, const COL: usize>(entries: &[[CalibEntry; COL]; ROW], buf: &mut [u8]) {
     debug_assert!(buf.len() >= total_len(ROW, COL));
+
     buf[0..4].copy_from_slice(&MAGIC.to_le_bytes());
     buf[4] = VERSION;
 
@@ -60,16 +63,15 @@ pub fn serialize<const ROW: usize, const COL: usize>(entries: &[[CalibEntry; COL
             i += 4;
         }
     }
-
-    let crc = crc16(&buf[..i]);
-    buf[i..i + CRC_LEN].copy_from_slice(&crc.to_le_bytes());
 }
 
 /// Attempt to deserialize a calibration block from `buf` into `out`.
 ///
-/// Validates the magic number, version byte, and CRC-16/CCITT checksum.
-/// Returns `true` and populates `out` on success. Returns `false` without
-/// modifying `out` if any check fails (corrupted, blank, or incompatible data).
+/// Validates only the magic number and version byte. Returns `true` and
+/// populates `out` on success. Returns `false` without modifying `out` if
+/// either check fails — this reliably rejects blank (0xFF) EEPROMs since
+/// `0xFFFF_FFFF != MAGIC`, and rejects future incompatible formats via the
+/// version byte.
 pub fn try_deserialize<const ROW: usize, const COL: usize>(buf: &[u8], out: &mut [[CalibEntry; COL]; ROW]) -> bool {
     if buf.len() < total_len(ROW, COL) {
         return false;
@@ -79,13 +81,8 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(buf: &[u8], out: &mut
     if u32::from_le_bytes(magic_bytes) != MAGIC {
         return false;
     }
-    if buf[4] != VERSION {
-        return false;
-    }
 
-    let data_end = HEADER_LEN + ROW * COL * 4;
-    let Ok(crc_bytes) = buf[data_end..data_end + CRC_LEN].try_into() else { return false };
-    if crc16(&buf[..data_end]) != u16::from_le_bytes(crc_bytes) {
+    if buf[4] != VERSION {
         return false;
     }
 
@@ -100,16 +97,4 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(buf: &[u8], out: &mut
         }
     }
     true
-}
-
-/// CRC-16/CCITT: polynomial 0x1021, initial value 0xFFFF.
-fn crc16(data: &[u8]) -> u16 {
-    let mut crc: u16 = 0xFFFF;
-    for &byte in data {
-        crc ^= u16::from(byte) << 8;
-        for _ in 0..8 {
-            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 };
-        }
-    }
-    crc
 }

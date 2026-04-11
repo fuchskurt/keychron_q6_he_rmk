@@ -626,6 +626,7 @@ where
         self.apply_calib(entries);
 
         // Serialize into the shared buffer and write to EEPROM.
+        Timer::after_millis(50).await;
         calib_store::serialize(entries, eeprom_buf);
         let write_ok = self.eeprom.write(calib_store::EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
 

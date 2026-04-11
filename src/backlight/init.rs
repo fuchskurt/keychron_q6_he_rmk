@@ -2,7 +2,7 @@
 
 use crate::backlight::{
     gamma_correction::gamma_correction,
-    lock_indicator::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
+    lock_indicator::{BacklightCmd, CalibPhase, BACKLIGHT_CH},
     mapping::LED_LAYOUT,
 };
 use embassy_stm32::{
@@ -12,7 +12,7 @@ use embassy_stm32::{
 };
 use embassy_time::{Duration, Ticker, Timer};
 use embedded_hal_async::spi::ErrorType;
-use rmk::embassy_futures::select::{Either, select};
+use rmk::embassy_futures::select::{select, Either};
 use snled27351_driver::{
     driver::Driver,
     transport::spi::{SpiTransport, SpiTransportError},
@@ -130,9 +130,9 @@ async fn render_calib(
     state: BacklightState,
 ) -> Result<(), SpiTransportError<<Spi<'static, Async, spi::mode::Master> as ErrorType>::Error>> {
     // Gradient background: blue fades out, green fades in.
-    let bg_green = scale(220, state.calib_pct);
-    let bg_blue = scale(255, 100_u8.saturating_sub(state.calib_pct));
-    let (bg_r, bg_g, bg_b) = correct(0, bg_green, bg_blue, state.brightness);
+    let bg_blue = scale(220, state.calib_pct);
+    let bg_red = scale(255, 100_u8.saturating_sub(state.calib_pct));
+    let (bg_r, bg_g, bg_b) = correct(bg_red, 0, bg_blue, state.brightness);
 
     // Per-key confirmed color: solid green.
     let (cal_r, cal_g, cal_b) = correct(0, 220, 80, state.brightness);
