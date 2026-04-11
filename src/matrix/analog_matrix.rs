@@ -1,17 +1,17 @@
 use crate::matrix::{
     hc164_cols::Hc164Cols,
-    travel_helpers::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
+    travel_helpers::{delta_from_ref, SCALE_Q_FACTOR, SCALE_SHIFT},
 };
 use core::{
     future::pending,
     hint::{likely, unlikely},
 };
 use embassy_stm32::{
-    Peri,
     adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, ConfiguredSequence, Instance, RxDma},
     dma::InterruptHandler,
     interrupt::typelevel::Binding,
     pac::adc,
+    Peri,
 };
 use embassy_time::{Duration, Timer};
 use rmk::{
@@ -54,9 +54,10 @@ pub struct HallCfg {
     pub col_settle_us: Duration,
     /// Raw ADC delta below which readings are treated as noise (default: 2).
     pub noise_gate: u16,
-    /// Minimum directional travel change required to register a press or
-    /// release.
-    pub rt_sensitivity: u8,
+    /// Minimum upward travel from the trough required to register a new press.
+    pub rt_sensitivity_press: u8,
+    /// Minimum downward travel from the peak required to register a release.
+    pub rt_sensitivity_release: u8,
     /// CPU cycles between HC164 pin transitions.
     pub shifter_delay_cycles: u32,
 }
@@ -69,7 +70,8 @@ impl Default for HallCfg {
             calib_passes: 512,
             col_settle_us: Duration::from_micros(35),
             noise_gate: 2,
-            rt_sensitivity: 6,
+            rt_sensitivity_press: 8,
+            rt_sensitivity_release: 6,
             shifter_delay_cycles: 8,
         }
     }
@@ -279,7 +281,8 @@ where
         cfg: HallCfg,
     ) -> Option<KeyboardEvent> {
         let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
-        let sensitivity = cfg.rt_sensitivity.max(1);
+        let sensitivity_press = cfg.rt_sensitivity_press.max(1);
+        let sensitivity_release = cfg.rt_sensitivity_release.max(1);
 
         for col in 0..COL {
             cols.select(col);
@@ -310,28 +313,25 @@ where
 
                 st.travel_scaled = new_travel;
 
-                // Dynamic Rapid Trigger — always active.
+                // Dynamic Rapid Trigger.
                 let now_pressed = if was_pressed {
-                    // Track peak (maximum travel) while the key is held.
+                    // Track the highest point reached while the key is held so we can
+                    // measure downward travel from it.
                     if new_travel > st.extremum {
                         st.extremum = new_travel;
                     }
-                    // Stay pressed while above the floor and within sensitivity
-                    // units of the peak. Dropping below the floor forces an
-                    // immediate release so the key never stays stuck.
-                    new_travel >= act_threshold && new_travel > st.extremum.saturating_sub(sensitivity)
+                    // Release when the key has dropped at least `sensitivity_release` units
+                    // from the recorded peak.
+                    new_travel >= act_threshold && new_travel > st.extremum.saturating_sub(sensitivity_release)
                 } else {
-                    // Track trough (minimum travel) while the key is up.
+                    // Track the lowest point reached while the key is up so we can measure
+                    // upward travel from it.
                     if new_travel < st.extremum {
                         st.extremum = new_travel;
                     }
-                    // Reset zone: the trough must first drop back below the
-                    // actuation floor before a new press is allowed. Without
-                    // this, a finger hovering mid-travel after release can
-                    // re-fire on a tiny 1mm wobble, causing random keypresses.
-                    st.extremum < act_threshold
-                        && new_travel >= act_threshold
-                        && new_travel >= st.extremum.saturating_add(sensitivity)
+                    // Re-press when travel has climbed at least `sensitivity_press` units
+                    // from the trough AND is above the actuation floor.
+                    new_travel >= act_threshold && new_travel >= st.extremum.saturating_add(sensitivity_press)
                 };
 
                 if now_pressed != st.pressed {
