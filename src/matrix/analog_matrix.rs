@@ -1,17 +1,17 @@
 use crate::matrix::{
     hc164_cols::Hc164Cols,
-    travel_helpers::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
+    travel_helpers::{delta_from_ref, SCALE_Q_FACTOR, SCALE_SHIFT},
 };
 use core::{
     future::pending,
     hint::{likely, unlikely},
 };
 use embassy_stm32::{
-    Peri,
     adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, ConfiguredSequence, Instance, RxDma},
     dma::InterruptHandler,
     interrupt::typelevel::Binding,
     pac::adc,
+    Peri,
 };
 use embassy_time::{Duration, Timer};
 use rmk::{
@@ -46,16 +46,18 @@ type AdcSampleTime<ADC> = <<ADC as BasicInstance>::Regs as BasicAdcRegs>::Sample
 #[derive(Clone, Copy)]
 /// Configuration parameters for hall-effect key sensing.
 pub struct HallCfg {
-    /// Actuation point in scaled travel units, where value is mm/10.
+    /// Minimum travel floor in mm/10 units.
     pub actuation_pt: u8,
     /// Number of passes used during calibration.
     pub calib_passes: u32,
     /// Column settle time in microseconds after selecting a new column.
     pub col_settle_us: Duration,
-    /// Offset from the actuation point required for de-activation in 0.x mm.
-    pub deact_offset: u8,
     /// Raw ADC delta below which readings are treated as noise (default: 2).
     pub noise_gate: u16,
+    /// Minimum upward travel from the trough required to register a new press.
+    pub rt_sensitivity_press: u8,
+    /// Minimum downward travel from the peak required to register a release.
+    pub rt_sensitivity_release: u8,
     /// CPU cycles between HC164 pin transitions.
     pub shifter_delay_cycles: u32,
 }
@@ -64,11 +66,12 @@ impl Default for HallCfg {
     /// Provide default hall configuration values.
     fn default() -> Self {
         Self {
-            actuation_pt: 15,
+            actuation_pt: 6,
             calib_passes: 512,
             col_settle_us: Duration::from_micros(35),
-            deact_offset: 3,
             noise_gate: 2,
+            rt_sensitivity_press: 8,
+            rt_sensitivity_release: 6,
             shifter_delay_cycles: 8,
         }
     }
@@ -107,6 +110,8 @@ impl Default for KeyCalib {
 #[derive(Clone, Copy)]
 /// Dynamic state tracked per key.
 struct KeyState {
+    /// Tracks the local extremum for rapid-trigger calculations.
+    extremum: u8,
     /// Last raw ADC reading for this key.
     last_raw: u16,
     /// Whether the key is currently considered pressed.
@@ -117,7 +122,7 @@ struct KeyState {
 
 impl KeyState {
     /// Create a new default key state.
-    pub const fn new() -> Self { Self { last_raw: u16::MAX, travel_scaled: 0, pressed: false } }
+    pub const fn new() -> Self { Self { extremum: 0, last_raw: u16::MAX, travel_scaled: 0, pressed: false } }
 }
 
 impl Default for KeyState {
@@ -276,7 +281,8 @@ where
         cfg: HallCfg,
     ) -> Option<KeyboardEvent> {
         let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
-        let deact_threshold = cfg.actuation_pt.saturating_sub(cfg.deact_offset).saturating_mul(TRAVEL_SCALE);
+        let sensitivity_press = cfg.rt_sensitivity_press.max(1);
+        let sensitivity_release = cfg.rt_sensitivity_release.max(1);
 
         for col in 0..COL {
             cols.select(col);
@@ -306,9 +312,31 @@ where
                 }
 
                 st.travel_scaled = new_travel;
-                let now_pressed = if was_pressed { new_travel >= deact_threshold } else { new_travel >= act_threshold };
+
+                // Dynamic Rapid Trigger.
+                let now_pressed = if was_pressed {
+                    // Track the highest point reached while the key is held so we can
+                    // measure downward travel from it.
+                    if new_travel > st.extremum {
+                        st.extremum = new_travel;
+                    }
+                    // Release when the key has dropped at least `sensitivity_release` units
+                    // from the recorded peak.
+                    new_travel >= act_threshold && new_travel > st.extremum.saturating_sub(sensitivity_release)
+                } else {
+                    // Track the lowest point reached while the key is up so we can measure
+                    // upward travel from it.
+                    if new_travel < st.extremum {
+                        st.extremum = new_travel;
+                    }
+                    // Re-press when travel has climbed at least `sensitivity_press` units
+                    // from the trough AND is above the actuation floor.
+                    new_travel >= act_threshold && new_travel >= st.extremum.saturating_add(sensitivity_press)
+                };
 
                 if now_pressed != st.pressed {
+                    // Reset extremum so the next direction track starts fresh.
+                    st.extremum = new_travel;
                     st.pressed = now_pressed;
                     return Some(KeyboardEvent::key(
                         u8::try_from(row).unwrap_or_default(),
@@ -369,8 +397,6 @@ where
         let mut buf = [0_u16; ROW];
         let mut seq = self.adc_part.configured_sequence(self.irq);
 
-        // Calibrate using the same ConfiguredSequence as the scan loop —
-        // no ADC/DMA reconfiguration occurs between calibration and scanning.
         Self::calibrate_zero_travel(
             &mut self.cols,
             &mut self.calib,
@@ -381,7 +407,6 @@ where
         )
         .await;
 
-        // Scan forever with the same seq.
         loop {
             if let Some(ev) =
                 Self::scan_for_next_change(&mut self.cols, &mut self.state, &self.calib, &mut seq, &mut buf, self.cfg)
