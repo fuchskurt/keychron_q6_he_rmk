@@ -1,17 +1,17 @@
 use crate::matrix::{
     hc164_cols::Hc164Cols,
-    travel_helpers::{delta_from_ref, SCALE_Q_FACTOR, SCALE_SHIFT},
+    travel_helpers::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
 };
 use core::{
     future::pending,
     hint::{likely, unlikely},
 };
 use embassy_stm32::{
+    Peri,
     adc::{Adc, AnyAdcChannel, BasicAdcRegs, BasicInstance, ConfiguredSequence, Instance, RxDma},
     dma::InterruptHandler,
     interrupt::typelevel::Binding,
     pac::adc,
-    Peri,
 };
 use embassy_time::{Duration, Timer};
 use rmk::{
@@ -21,11 +21,12 @@ use rmk::{
 
 /// Expected travel distance in physical units, represents 4.0 mm.
 const FULL_TRAVEL_UNIT: u8 = 40;
-/// Scale factor applied to travel computations.
+/// Scale factor converting physical travel units into internal scaled travel
+/// units.
 const TRAVEL_SCALE: u8 = 6;
 /// `i64` version of `TRAVEL_SCALE`.
 const TRAVEL_SCALE_I64: i64 = i64::from(TRAVEL_SCALE);
-/// Full travel value after scaling.
+/// Full travel value expressed in internal scaled travel units.
 const FULL_TRAVEL_SCALED: u8 = FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE);
 /// Default full-range calibration delta.
 const DEFAULT_FULL_RANGE: u16 = 900;
@@ -54,9 +55,11 @@ pub struct HallCfg {
     pub col_settle_us: Duration,
     /// Raw ADC delta below which readings are treated as noise (default: 2).
     pub noise_gate: u16,
-    /// Minimum upward travel from the trough required to register a new press.
+    /// Minimum upward travel from the trough required to register a new press,
+    /// expressed in internal scaled travel units.
     pub rt_sensitivity_press: u8,
-    /// Minimum downward travel from the peak required to register a release.
+    /// Minimum downward travel from the peak required to register a release,
+    /// expressed in internal scaled travel units.
     pub rt_sensitivity_release: u8,
     /// CPU cycles between HC164 pin transitions.
     pub shifter_delay_cycles: u32,
@@ -122,7 +125,7 @@ struct KeyState {
 
 impl KeyState {
     /// Create a new default key state.
-    pub const fn new() -> Self { Self { extremum: 0, last_raw: u16::MAX, travel_scaled: 0, pressed: false } }
+    pub const fn new() -> Self { Self { extremum: u8::MAX, last_raw: u16::MAX, travel_scaled: 0, pressed: false } }
 }
 
 impl Default for KeyState {

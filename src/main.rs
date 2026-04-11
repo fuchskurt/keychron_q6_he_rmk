@@ -154,7 +154,7 @@ async fn main(spawner: Spawner) {
 
     // Keyboard config
     let rmk_config = RmkConfig {
-        vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0), (5, 13)]),
+        vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0), (4, 20)]),
         device_config: DeviceConfig {
             manufacturer: "Keychron",
             product_name: "Q6 HE",
