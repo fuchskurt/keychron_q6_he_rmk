@@ -7,7 +7,7 @@
 //! 7-bit device address with A0 = A1 = A2 tied to GND: 0x50.
 
 use embassy_stm32::{
-    gpio::{Flex, Pull},
+    gpio::Output,
     i2c::{mode::MasterMode, Error, I2c},
     mode::Async,
 };
@@ -33,17 +33,12 @@ const WRITE_BUF_LEN: usize = 2 + PAGE_SIZE;
 pub struct Ft24c64<'peripherals, IM: MasterMode> {
     i2c: I2c<'peripherals, Async, IM>,
     /// Active-high write-protect. High = read-only, Low = writable.
-    wp: Flex<'peripherals>,
+    wp: Output<'peripherals>,
 }
 
 impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// Create a new driver. `wp` must already be driven high (write-protected).
-    pub fn new(i2c: I2c<'peripherals, Async, IM>, mut wp: Flex<'peripherals>) -> Self {
-        // Input pull-up: WP is asserted via the pull resistor.
-        // Matches QMK: writePin(WP, 1); setPinInputHigh(WP).
-        wp.set_as_input(Pull::Up);
-        Self { i2c, wp }
-    }
+    pub fn new(i2c: I2c<'peripherals, Async, IM>, wp: Output<'peripherals>) -> Self { Self { i2c, wp } }
 
     /// Read `buf.len()` bytes from 16-bit word address `addr` (sequential
     /// read).
@@ -56,11 +51,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// Splits automatically at 32-byte page boundaries and waits tWR after
     /// each page. WP is lowered for the entire write and restored on return.
     pub async fn write(&mut self, start_addr: u16, data: &[u8]) -> Result<(), Error> {
-        // Switch to output-low to deassert WP during the write cycle.
-        // Matches QMK: setPinOutput(WP); writePin(WP, 0).
         self.wp.set_low();
-        self.wp.set_as_output(embassy_stm32::gpio::Speed::Low);
-
         let mut offset = 0_usize;
         let mut result = Ok(());
 
@@ -84,8 +75,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
             offset += chunk_len;
         }
 
-        // Restore to input pull-up.
-        self.wp.set_as_input(Pull::Up);
+        self.wp.set_high();
         result
     }
 }

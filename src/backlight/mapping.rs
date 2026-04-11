@@ -341,7 +341,7 @@ pub const MATRIX_TO_LED: [[Option<u8>; 21]; 6] = [
         Some(20),
     ],
     // Row 1: ` 1-0 - = Backspace(2U) | Ins Home PgUp | NumLk / * -
-    // Backspace occupies col 13 only (col 14 is the 2U extension, no matrix pos)
+    // Backspace occupies col 13; col 14 is Ins (nav cluster), not a 2U extension.
     [
         Some(21),
         Some(22),
@@ -357,18 +357,17 @@ pub const MATRIX_TO_LED: [[Option<u8>; 21]; 6] = [
         Some(32),
         Some(33),
         Some(34),
-        None,
         Some(35),
         Some(36),
         Some(37),
         Some(38),
         Some(39),
         Some(40),
+        Some(41),
     ],
     // Row 2: Tab(1.5U) Q-] \(1.5U) | Del End PgDn | 7 8 9 +(2H, top)
     // Tab and backslash are wide but occupy single matrix columns
     [
-        Some(41),
         Some(42),
         Some(43),
         Some(44),
@@ -389,11 +388,11 @@ pub const MATRIX_TO_LED: [[Option<u8>; 21]; 6] = [
         Some(59),
         Some(60),
         Some(61),
+        Some(62),
     ],
     // Row 3: CapsLk(1.75U) A-' Enter(2.25U) | (no nav) | 4 5 6
     // cols 13-16 are a!(No), col 20 is a!(No) (+ spans rows 2-3)
     [
-        Some(62),
         Some(63),
         Some(64),
         Some(65),
@@ -406,22 +405,22 @@ pub const MATRIX_TO_LED: [[Option<u8>; 21]; 6] = [
         Some(72),
         Some(73),
         Some(74),
-        None,
-        None,
-        None,
-        None,
         Some(75),
+        None,
+        None,
+        None,
+        None,
         Some(76),
         Some(77),
+        Some(78),
         None,
     ],
     // Row 4: LShift(2.25U) [No] Z-/ RShift(2.75U) | [gap] Up [gap] | 1 2 3 Enter(2H, top)
     // col 1 is a!(No) (LShift extension), col 12 is a!(No) (RShift extension)
     // col 14 is a!(No) (gap left of Up), col 16 is a!(No) (gap right of Up)
     [
-        Some(78),
-        None,
         Some(79),
+        None,
         Some(80),
         Some(81),
         Some(82),
@@ -431,40 +430,41 @@ pub const MATRIX_TO_LED: [[Option<u8>; 21]; 6] = [
         Some(86),
         Some(87),
         Some(88),
-        None,
         Some(89),
         None,
         Some(90),
         None,
         Some(91),
+        None,
         Some(92),
         Some(93),
         Some(94),
+        Some(95),
     ],
     // Row 5: LCtrl LGui LAlt Space(6.25U) [df0 df1 = layer toggle, no LED]
     //        RAlt RGui Menu RCtrl | ← ↓ → | 0(2U) . [Enter shared with row 4]
     // cols 3-5 are a!(No) (space extension), cols 7-8 are layer toggle (no LED)
     // col 13 is a!(No), col 19-20 are a!(No)
     [
-        Some(95),
         Some(96),
         Some(97),
-        None,
-        None,
-        None,
         Some(98),
         None,
         None,
+        None,
         Some(99),
+        None,
+        None,
         Some(100),
         Some(101),
         Some(102),
-        None,
         Some(103),
+        None,
         Some(104),
         Some(105),
         Some(106),
         Some(107),
+        Some(108),
         None,
         None,
     ],

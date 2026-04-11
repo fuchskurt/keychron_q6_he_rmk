@@ -54,7 +54,7 @@ use embassy_stm32::{
     exti::{self, ExtiInput},
     flash,
     flash::Flash,
-    gpio::{Flex, Input, Level, Output, Pull, Speed},
+    gpio::{Input, Level, Output, Pull, Speed},
     i2c,
     i2c::I2c,
     init,
@@ -214,7 +214,7 @@ async fn main(spawner: Spawner) {
         Irqs,
         i2c_config,
     );
-    let eeprom_wp = Flex::new(peripheral.PB10);
+    let eeprom_wp = Output::new(peripheral.PB10, Level::High, Speed::Low);
     let eeprom = Ft24c64::new(i2c3, eeprom_wp);
     let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::CYCLES56);
     let mut matrix = AnalogHallMatrix::<_, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom);
