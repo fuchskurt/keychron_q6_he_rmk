@@ -1,23 +1,54 @@
-[tasks.install-llvm-tools]
-install_crate = { rustup_component_name = "llvm-tools" }
+[config]
+default_to_workspace = false
 
-[tasks.flip-link]
-install_crate = { crate_name = "flip-link", binary = "flip-link", test_arg = ["-h"] }
+[env]
+CARGO_MAKE_CARGO_BUILD_TEST_FLAGS = "--release"
+
+[tasks.install]
+description = "Install all required host tools"
+dependencies = [
+    "install-target",
+    "install-llvm-tools",
+    "install-flip-link",
+    "install-cargo-binutils",
+    "install-cargo-dfu",
+    "install-cargo-make",
+    "install-cargo-hex-to-uf2",
+]
+
+[tasks.install-target]
+command = "rustup"
+args = ["target", "add", "thumbv7em-none-eabihf"]
+
+[tasks.install-llvm-tools]
+command = "rustup"
+args = ["component", "add", "llvm-tools"]
+
+[tasks.install-flip-link]
+command = "cargo"
+args = ["install", "flip-link"]
+
+[tasks.install-cargo-binutils]
+command = "cargo"
+args = ["install", "cargo-binutils"]
+
+[tasks.install-cargo-dfu]
+command = "cargo"
+args = ["install", "cargo-dfu"]
+
+[tasks.install-cargo-make]
+command = "cargo"
+args = ["install", "cargo-make"]
+
+[tasks.install-cargo-hex-to-uf2]
+command = "cargo"
+args = ["install", "cargo-hex-to-uf2"]
 
 [tasks.objcopy]
-install_crate = { crate_name = "cargo-binutils", binary = "cargo", test_arg = [
-    "objcopy",
-    "--help",
-] }
 command = "cargo"
 args = ["objcopy", "--release", "--", "-O", "binary", "rmk.bin"]
-dependencies = ["install-llvm-tools", "flip-link"]
 
 [tasks.uf2]
-install_crate = { crate_name = "cargo-hex-to-uf2", binary = "cargo", test_arg = [
-    "hex-to-uf2",
-    "--help",
-] }
 command = "cargo"
 args = [
     "hex-to-uf2",
@@ -29,3 +60,8 @@ args = [
     "stm32f4",
 ]
 dependencies = ["objcopy"]
+
+[tasks.flash]
+description = "Build and flash firmware via DFU (STM32 bootloader)"
+command = "cargo"
+args = ["dfu", "--vid", "0x483", "--pid", "0xdf11", "--release"]
