@@ -12,5 +12,3 @@ pub mod hc164_cols;
 pub mod layer_toggle;
 /// Sensor presence map used during calibration
 mod sensor_mapping;
-/// Travel polynomial functions.
-pub mod travel_helpers;

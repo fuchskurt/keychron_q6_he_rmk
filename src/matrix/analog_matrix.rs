@@ -4,14 +4,9 @@ use crate::{
         mapping::MATRIX_TO_LED,
     },
     eeprom::Ft24c64,
-    matrix::{
-        calib_store,
-        calib_store::CALIB_BUF_LEN,
-        hc164_cols::Hc164Cols,
-        sensor_mapping::SENSOR_POSITIONS,
-        travel_helpers::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
-    },
+    matrix::{calib_store, calib_store::CALIB_BUF_LEN, hc164_cols::Hc164Cols, sensor_mapping::SENSOR_POSITIONS},
 };
+use calib_store::EEPROM_BASE_ADDR;
 use core::{
     future::pending,
     hint::{likely, unlikely},
@@ -25,6 +20,7 @@ use embassy_stm32::{
     pac::adc,
 };
 use embassy_time::{Duration, Instant, Timer};
+use num_traits::float::Float;
 use rmk::{
     event::{KeyboardEvent, publish_event_async},
     input_device::{InputDevice, Runnable},
@@ -166,9 +162,6 @@ pub const REF_ZERO_TRAVEL: u16 = 3121;
 /// units.
 const TRAVEL_SCALE: u8 = 6;
 
-/// `i64` version of [`TRAVEL_SCALE`].
-const TRAVEL_SCALE_I64: i64 = i64::from(TRAVEL_SCALE);
-
 /// Fallback zero-travel ADC value used before any calibration has run.
 const UNCALIBRATED_ZERO: u16 = 3000;
 
@@ -287,23 +280,31 @@ impl Default for HallCfg {
 /// Calibration values for a single key.
 #[derive(Clone, Copy)]
 struct KeyCalib {
-    /// Fixed-point scale factor converting a raw LUT delta into internal
-    /// scaled travel units. Derived from the measured zero-to-full ADC range.
-    scale_factor: i32,
     /// Whether this matrix position has a valid hall-effect sensor.
     ///
     /// `false` for unpopulated positions or those whose zero-travel reading
     /// is too far from [`REF_ZERO_TRAVEL`] to be a real key.
     used: bool,
+    /// Polynomial Value at Pfull pressed point, precomputed on construction.
+    poly_delta_full: f32,
+    /// Polynomial Value at Zero point, precomputed on construction.
+    poly_zero: f32,
     /// Raw ADC value corresponding to zero travel (key fully released).
     zero: u16,
 }
 
 impl KeyCalib {
+    fn poly(x: f32) -> f32 {
+        (-2.99368e-8_f32).mul_add(x, 2.04637e-4_f32).mul_add(x, -0.48358_f32).mul_add(x, 426.88962_f32)
+    }
+
     /// Build calibration data from zero and full-travel ADC readings.
-    const fn new(zero: u16, full: u16) -> Self {
+    fn new(zero: u16, full: u16) -> Self {
+        let poly_zero = Self::poly(f32::from(zero));
+        let poly_full = Self::poly(f32::from(full));
         Self {
-            scale_factor: compute_scale_factor(zero, full),
+            poly_delta_full: poly_full - poly_zero,
+            poly_zero,
             used: zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE,
             zero,
         }
@@ -313,7 +314,9 @@ impl KeyCalib {
     ///
     /// `used` is `false` so the scanner ignores this position entirely until
     /// real calibration data is applied.
-    pub const fn uncalibrated() -> Self { Self { scale_factor: SCALE_Q_FACTOR, used: false, zero: UNCALIBRATED_ZERO } }
+    pub const fn uncalibrated() -> Self {
+        Self { used: false, poly_delta_full: 1.0, poly_zero: 0.0, zero: UNCALIBRATED_ZERO }
+    }
 }
 
 impl Default for KeyCalib {
@@ -752,12 +755,12 @@ where
         Timer::after_millis(50).await;
         calib_store::serialize(entries, eeprom_buf);
 
-        let write_ok = self.eeprom.write(calib_store::EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
+        let write_ok = self.eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
 
         // Verify by reading back into the same buffer and re-deserializing.
         // Reusing the buffer avoids a second large stack allocation.
         let verified = write_ok
-            && self.eeprom.read(calib_store::EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
+            && self.eeprom.read(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
             && calib_store::try_deserialize::<ROW, COL>(eeprom_buf, entries);
 
         if !verified {
@@ -999,15 +1002,16 @@ where
         if unlikely(!(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw)) {
             return None;
         }
-        // Shift into the LUT's reference frame, clamping at zero-travel so
-        // upward travel beyond rest maps to zero rather than a negative delta.
-        let x = apply_ref_offset(cal.zero, raw).min(REF_ZERO_TRAVEL);
+        if cal.poly_delta_full <= 0.0 {
+            return None;
+        }
 
-        let delta = i64::from(delta_from_ref(x));
-        let prod = delta.saturating_mul(i64::from(cal.scale_factor)).saturating_mul(TRAVEL_SCALE_I64);
-        // SCALE_SHIFT = 24 < 64, so checked_shr always returns Some on i64.
-        let travel = prod.checked_shr(SCALE_SHIFT).unwrap_or(0);
-        Some(u8::try_from(travel.clamp(0_i64, i64::from(FULL_TRAVEL_SCALED))).unwrap_or_default())
+        let delta_raw = KeyCalib::poly(f32::from(raw)) - cal.poly_zero;
+
+        Some(
+            (delta_raw / cal.poly_delta_full * f32::from(FULL_TRAVEL_SCALED)).clamp(0.0, f32::from(FULL_TRAVEL_SCALED))
+                as u8,
+        )
     }
 }
 
@@ -1038,14 +1042,14 @@ where
     AdcSampleTime<ADC>: Clone,
 {
     async fn run(&mut self) -> ! {
-        let mut eeprom_buf = [0_u8; calib_store::CALIB_BUF_LEN];
+        let mut eeprom_buf = [0_u8; CALIB_BUF_LEN];
         let mut entries = Self::default_entries();
 
         // Wait for the EEPROM to complete its power-on reset before issuing
         // the first I²C transaction.
         Timer::after(EEPROM_POWER_ON_DELAY).await;
 
-        let loaded = self.eeprom.read(calib_store::EEPROM_BASE_ADDR, &mut eeprom_buf).await.is_ok()
+        let loaded = self.eeprom.read(EEPROM_BASE_ADDR, &mut eeprom_buf).await.is_ok()
             && calib_store::try_deserialize::<ROW, COL>(&eeprom_buf, &mut entries);
 
         if loaded {
@@ -1074,49 +1078,5 @@ where
                 publish_event_async(ev).await;
             }
         }
-    }
-}
-
-/// Adjust a raw ADC value into the LUT's reference frame.
-///
-/// The LUT is built around [`REF_ZERO_TRAVEL`] as its zero-delta origin.
-/// Each key's physical resting point (`zero`) differs from `REF_ZERO_TRAVEL`
-/// due to magnet and sensor manufacturing variation, so a raw reading must
-/// be shifted before the LUT lookup to produce a meaningful delta.
-///
-/// - `zero > REF_ZERO_TRAVEL` - key rests at a higher ADC value than the
-///   reference; subtract the offset from `raw` to pull it into the LUT frame.
-/// - `zero < REF_ZERO_TRAVEL` - key rests lower; add the offset, then clamp to
-///   `REF_ZERO_TRAVEL` so that upward travel beyond the resting point (ADC
-///   rising above `zero`) maps to zero delta rather than a negative index.
-#[inline]
-const fn apply_ref_offset(zero: u16, raw: u16) -> u16 {
-    if zero >= REF_ZERO_TRAVEL {
-        raw.saturating_sub(zero.saturating_sub(REF_ZERO_TRAVEL))
-    } else {
-        raw.saturating_add(REF_ZERO_TRAVEL.saturating_sub(zero)).min(REF_ZERO_TRAVEL)
-    }
-}
-
-/// Compute a fixed-point scale factor from zero and full-travel ADC readings.
-///
-/// Normalizes the LUT delta (Q8) to the known physical full-travel distance
-/// ([`FULL_TRAVEL_UNIT`]), producing a per-key Q16 multiplier stored in
-/// [`KeyCalib::scale_factor`]. Returns the identity factor [`SCALE_Q_FACTOR`]
-/// if the full-travel delta is zero or negative. A negative delta indicates a
-/// reversed sensor polarity (magnet installed inverted); returning the identity
-/// rather than a negative multiplier prevents inverted or wildly incorrect
-/// travel readings.
-#[inline]
-const fn compute_scale_factor(zero: u16, full: u16) -> i32 {
-    let x_full = apply_ref_offset(zero, full);
-    let full_travel: i64 = i64::from(delta_from_ref(x_full));
-    if full_travel <= 0 {
-        return SCALE_Q_FACTOR;
-    }
-    let num = i64::from(FULL_TRAVEL_UNIT).saturating_mul(256_i64).saturating_mul(i64::from(SCALE_Q_FACTOR));
-    match num.checked_div(full_travel) {
-        Some(quotient) => i32::try_from(quotient).unwrap_or(SCALE_Q_FACTOR),
-        None => SCALE_Q_FACTOR,
     }
 }
