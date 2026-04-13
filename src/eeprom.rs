@@ -4,6 +4,7 @@ use embassy_stm32::{
     mode::Async,
 };
 use embassy_time::{Duration, Timer};
+use embedded_hal_async::i2c::Operation;
 
 /// 7-bit I²C device address (A0 = A1 = A2 = GND).
 const DEVICE_ADDR: u8 = 0x51;
@@ -13,8 +14,6 @@ const EEPROM_SIZE: usize = 8192;
 const PAGE_SIZE: usize = 32;
 /// Write-cycle time tWR in milliseconds.
 const WRITE_CYCLE_DELAY: Duration = Duration::from_millis(5);
-/// I²C transmit buffer: 2-byte word address + one full page of data.
-const WRITE_BUF_LEN: usize = 2_usize.saturating_add(PAGE_SIZE);
 
 /// Driver for the FT24C64 64-Kbit (8 K × 8) I²C EEPROM.
 pub struct Ft24c64<'peripherals, IM: MasterMode> {
@@ -59,16 +58,10 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
             // Bytes to write on this page, the smaller of the remaining page
             // space and the remaining data.
             let chunk_len = page_remaining.min(data.len().saturating_sub(offset));
-
-            // Build the packet: [addr_hi, addr_lo, data...].
-            // Invariants: chunk_len ≤ PAGE_SIZE, so 2 + chunk_len ≤ WRITE_BUF_LEN;
-            // and offset + chunk_len ≤ data.len() by construction above.
-            let data_end = 2_usize.saturating_add(chunk_len);
-            let mut buf = [0_u8; WRITE_BUF_LEN];
-            buf[..2].copy_from_slice(&addr.to_be_bytes());
-            buf[2..data_end].copy_from_slice(&data[offset..offset.saturating_add(chunk_len)]);
-
-            result = self.i2c.write(DEVICE_ADDR, &buf[..data_end]).await;
+            let addr_bytes = addr.to_be_bytes();
+            let chunk = &data[offset..offset.saturating_add(chunk_len)];
+            result =
+                self.i2c.transaction(DEVICE_ADDR, &mut [Operation::Write(&addr_bytes), Operation::Write(chunk)]).await;
             Timer::after(WRITE_CYCLE_DELAY).await;
 
             if result.is_err() {
