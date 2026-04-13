@@ -1,6 +1,6 @@
 use crate::keymap::{COL, ROW};
 use core::mem::size_of;
-use crc::{Crc, NoTable};
+use crc::{CRC_16_IBM_3740, Crc, NoTable};
 
 /// Copy exactly `N` bytes from `buf[start..end]` into a fixed-size array.
 ///
@@ -25,7 +25,7 @@ const CRC_LEN: usize = size_of::<u16>();
 const ENTRY_LEN: usize = size_of::<u16>();
 
 /// CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
-const CRC16: Crc<u16, NoTable> = Crc::<u16, NoTable>::new(&crc::CRC_16_IBM_3740);
+const CRC16: Crc<u16, NoTable> = Crc::<u16, NoTable>::new(&CRC_16_IBM_3740);
 
 /// EEPROM word address at which the calibration block begins.
 pub const EEPROM_BASE_ADDR: u16 = 0x0000;
