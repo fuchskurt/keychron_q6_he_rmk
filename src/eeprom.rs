@@ -7,6 +7,8 @@ use embassy_time::{Duration, Timer};
 
 /// 7-bit I²C device address (A0 = A1 = A2 = GND).
 const DEVICE_ADDR: u8 = 0x51;
+/// Total size of the FT24C64 in bytes (64 Kbit).
+const EEPROM_SIZE: usize = 8192;
 /// Page write size in bytes per the FT24C64 datasheet.
 const PAGE_SIZE: usize = 32;
 /// Write-cycle time tWR in milliseconds.
@@ -79,5 +81,33 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         // Restore to input pull-up: write-protect re-asserted.
         self.wp.set_as_input(Pull::Up);
         result
+    }
+
+    /// Erase the entire EEPROM by writing `0x00` to all 8 192 bytes.
+    ///
+    /// Pages are written sequentially from address `0x0000` to `0x1FFF` (256
+    /// pages × 32 bytes). The [`WRITE_CYCLE_DELAY`] is observed after every
+    /// page write, so this operation takes approximately 1.28 seconds to
+    /// complete.
+    ///
+    /// Call this once on first boot before starting a calibration run to
+    /// guarantee no stale data survives in any region of the device.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`Error`] encountered. Any pages written before the
+    /// failure are not rolled back.
+    pub async fn zero_out(&mut self) -> Result<(), Error> {
+        let blank = [0xFF_u8; PAGE_SIZE];
+        let mut offset = 0_usize;
+        while offset < EEPROM_SIZE {
+            let addr = u16::try_from(offset).unwrap_or(u16::MAX);
+            let result = self.write(addr, &blank).await;
+            if let Err(e) = result {
+                return Err(e);
+            }
+            offset = offset.saturating_add(PAGE_SIZE);
+        }
+        Ok(())
     }
 }

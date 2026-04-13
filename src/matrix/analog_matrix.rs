@@ -760,14 +760,15 @@ where
         self.apply_calib(entries, &zero_raw);
 
         // Allow the backlight channel to drain before starting the I²C write.
-        Timer::after_millis(50).await;
+        Timer::after_micros(200).await;
         calib_store::serialize(entries, eeprom_buf);
-
+        let erase_ok = self.eeprom.zero_out().await.is_ok();
         let write_ok = self.eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
 
         // Verify by reading back into the same buffer and re-deserializing.
         // Reusing the buffer avoids a second large stack allocation.
-        let verified = write_ok
+        let verified = erase_ok
+            && write_ok
             && self.eeprom.read(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
             && calib_store::try_deserialize::<ROW, COL>(eeprom_buf, entries);
 
