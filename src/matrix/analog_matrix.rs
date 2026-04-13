@@ -20,7 +20,7 @@ use embassy_stm32::{
     pac::adc,
 };
 use embassy_time::{Duration, Instant, Timer};
-use num_traits::float::Float;
+use num_traits::{ToPrimitive, float::Float};
 use rmk::{
     event::{KeyboardEvent, publish_event_async},
     input_device::{InputDevice, Runnable},
@@ -155,6 +155,20 @@ const FULL_TRAVEL_UNIT: u8 = 40;
 /// or absent readings, intentionally small.
 const MIN_USEFUL_FULL_RANGE: u16 = 100;
 
+/// Cubic coefficient of the Hall sensor transfer polynomial `f(x) = A3·x³ +
+/// A2·x² + A1·x + A0`.
+///
+/// Maps a raw ADC value to a distance-from-zero in mm, derived by least-squares
+/// fit to empirical sensor data. Evaluated via Horner's method in
+/// [`KeyCalib::poly`].
+const POLY_A0: f32 = 426.88962;
+/// Linear coefficient of the Hall sensor transfer polynomial.
+const POLY_A1: f32 = -0.48358;
+/// Quadratic coefficient of the Hall sensor transfer polynomial.
+const POLY_A2: f32 = 2.04637e-4;
+/// Cubic coefficient of the Hall sensor transfer polynomial.
+const POLY_A3: f32 = -2.99368e-8;
+
 /// Reference zero-travel ADC value used as the LUT origin.
 pub const REF_ZERO_TRAVEL: u16 = 3121;
 
@@ -280,24 +294,20 @@ impl Default for HallCfg {
 /// Calibration values for a single key.
 #[derive(Clone, Copy)]
 struct KeyCalib {
+    /// Polynomial Value at full pressed state, precomputed on construction.
+    poly_delta_full: f32,
+    /// Polynomial Value at zero state, precomputed on construction.
+    poly_zero: f32,
     /// Whether this matrix position has a valid hall-effect sensor.
     ///
     /// `false` for unpopulated positions or those whose zero-travel reading
     /// is too far from [`REF_ZERO_TRAVEL`] to be a real key.
     used: bool,
-    /// Polynomial Value at Pfull pressed point, precomputed on construction.
-    poly_delta_full: f32,
-    /// Polynomial Value at Zero point, precomputed on construction.
-    poly_zero: f32,
     /// Raw ADC value corresponding to zero travel (key fully released).
     zero: u16,
 }
 
 impl KeyCalib {
-    fn poly(x: f32) -> f32 {
-        (-2.99368e-8_f32).mul_add(x, 2.04637e-4_f32).mul_add(x, -0.48358_f32).mul_add(x, 426.88962_f32)
-    }
-
     /// Build calibration data from zero and full-travel ADC readings.
     fn new(zero: u16, full: u16) -> Self {
         let poly_zero = Self::poly(f32::from(zero));
@@ -310,12 +320,19 @@ impl KeyCalib {
         }
     }
 
+    /// Evaluate the Hall sensor transfer polynomial at `x` using Horner's
+    /// method.
+    ///
+    /// Implements `f(x) = A3·x³ + A2·x² + A1·x + A0` in Horner form to minimize
+    /// floating-point rounding and avoid redundant multiplications.
+    fn poly(x: f32) -> f32 { POLY_A3.mul_add(x, POLY_A2).mul_add(x, POLY_A1).mul_add(x, POLY_A0) }
+
     /// Build an uncalibrated placeholder.
     ///
     /// `used` is `false` so the scanner ignores this position entirely until
     /// real calibration data is applied.
     pub const fn uncalibrated() -> Self {
-        Self { used: false, poly_delta_full: 1.0, poly_zero: 0.0, zero: UNCALIBRATED_ZERO }
+        Self { poly_delta_full: 1.0, poly_zero: 0.0, used: false, zero: UNCALIBRATED_ZERO }
     }
 }
 
@@ -370,12 +387,12 @@ impl Default for KeyState {
 /// is satisfied.
 #[derive(Clone, Copy)]
 enum KeyCalibState {
-    /// Key has not yet crossed the press threshold, or was released and reset.
-    Waiting,
-    /// Key crossed the threshold at the stored instant; hold timer is running.
-    Holding(Instant),
     /// Hold duration satisfied; this key is fully calibrated.
     Accepted,
+    /// Key crossed the threshold at the stored instant; hold timer is running.
+    Holding(Instant),
+    /// Key has not yet crossed the press threshold, or was released and reset.
+    Waiting,
 }
 
 /// ADC-related peripherals grouped to allow split borrows when constructing
@@ -416,7 +433,7 @@ where
     }
 
     /// Create a new [`AdcPart`] from the given peripherals.
-    pub fn new(
+    pub const fn new(
         adc: Adc<'peripherals, ADC>,
         row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
         dma: Peri<'peripherals, D>,
@@ -518,11 +535,8 @@ where
     /// `self.calib`, pairing each stored full-travel reading with the
     /// corresponding live zero-travel reading from `zero_raw`.
     fn apply_calib(&mut self, entries: &[[calib_store::CalibEntry; COL]; ROW], zero_raw: &[[u16; COL]; ROW]) {
-        for row in 0..ROW {
-            for col in 0..COL {
-                let Some(cal) = get2_mut(&mut self.calib, row, col) else { continue };
-                let Some(zero) = get2(zero_raw, row, col) else { continue };
-                let Some(entry) = get2(entries, row, col) else { continue };
+        for ((cal_row, entry_row), zero_row) in self.calib.iter_mut().zip(entries).zip(zero_raw) {
+            for ((cal, entry), &zero) in cal_row.iter_mut().zip(entry_row).zip(zero_row) {
                 *cal = KeyCalib::new(zero, entry.full);
             }
         }
@@ -546,8 +560,8 @@ where
                 self.cols.select(col);
                 Timer::after(self.cfg.col_settle_us).await;
                 seq.read(&mut buf).await;
-                for (row, &raw) in buf.iter().enumerate() {
-                    if let Some(cell) = get2_mut(&mut acc, row, col) {
+                for (acc_row, &raw) in acc.iter_mut().zip(buf.iter()) {
+                    if let Some(cell) = acc_row.get_mut(col) {
                         *cell = cell.saturating_add(u32::from(raw));
                     }
                 }
@@ -586,9 +600,7 @@ where
         // Closure to update the running minimum for a single position.
         let mut update_min = |row: usize, col: usize, raw: u16| {
             if let Some(cell) = get2_mut(&mut min_raw, row, col) {
-                if raw < *cell {
-                    *cell = raw;
-                }
+                *cell = (*cell).min(raw);
             }
         };
 
@@ -602,7 +614,7 @@ where
             .flat_map(|r| (0..COL).map(move |c| (r, c)))
             .filter(|&(r, c)| {
                 SENSOR_POSITIONS.get(r).and_then(|row| row.get(c)).copied().unwrap_or(false)
-                    && get2(zero_raw, r, c).map_or(false, |z| z.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE)
+                    && get2(zero_raw, r, c).is_some_and(|z| z.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE)
             })
             .count()
             .max(1);
@@ -734,18 +746,14 @@ where
         BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Full)).ok();
         let full_raw = self.sample_full_raw(self.cfg.full_calib_duration, &zero_raw).await;
 
-        for row in 0..ROW {
-            for col in 0..COL {
-                let zero = get2(&zero_raw, row, col).unwrap_or(UNCALIBRATED_ZERO);
-                let seen_min = get2(&full_raw, row, col).unwrap_or(u16::MAX);
+        for ((entry_row, zero_row), full_row) in entries.iter_mut().zip(zero_raw.iter()).zip(full_raw.iter()) {
+            for ((entry, &zero), &seen_min) in entry_row.iter_mut().zip(zero_row.iter()).zip(full_row.iter()) {
                 let full = if zero > seen_min && zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
                     seen_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE))
                 } else {
                     zero.saturating_sub(DEFAULT_FULL_RANGE)
                 };
-                if let Some(entry) = get2_mut(entries, row, col) {
-                    *entry = calib_store::CalibEntry { full };
-                }
+                *entry = calib_store::CalibEntry { full };
             }
         }
 
@@ -917,7 +925,7 @@ where
                     buf.iter().zip(first_pressed.iter()).enumerate().any(|(row, (&recheck, &was_pressed))| {
                         get2(calib, row, col)
                             .and_then(|c| Self::travel_scaled_from(&c, recheck))
-                            .map_or(false, |t| t >= act_threshold)
+                            .is_some_and(|t| t >= act_threshold)
                             != was_pressed
                     });
                 if state_changed {
@@ -1008,10 +1016,9 @@ where
 
         let delta_raw = KeyCalib::poly(f32::from(raw)) - cal.poly_zero;
 
-        Some(
-            (delta_raw / cal.poly_delta_full * f32::from(FULL_TRAVEL_SCALED)).clamp(0.0, f32::from(FULL_TRAVEL_SCALED))
-                as u8,
-        )
+        let scaled =
+            (delta_raw / cal.poly_delta_full * f32::from(FULL_TRAVEL_SCALED)).clamp(0.0, f32::from(FULL_TRAVEL_SCALED));
+        Some(scaled.to_u8().unwrap_or(FULL_TRAVEL_SCALED))
     }
 }
 
