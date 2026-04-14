@@ -24,7 +24,7 @@ use embassy_stm32::{
     pac::adc,
 };
 use embassy_time::{Duration, Instant, Timer};
-use num_traits::ToPrimitive as _;
+use num_traits::{ToPrimitive as _, float::Float as _};
 use rmk::{
     event::{KeyboardEvent, publish_event_async},
     input_device::{InputDevice, Runnable},
