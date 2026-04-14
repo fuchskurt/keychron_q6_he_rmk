@@ -904,8 +904,9 @@ where
             let first_read = *buf;
             // Pre-compute each row's pressed state from the first reading.
             // first_read is constant across all debounce passes, so computing
-            // it here avoids repeating the LUT lookup and multiply inside the
-            // pass loop for the baseline side of the comparison.
+            // it here avoids repeating the travel conversion / polynomial
+            // evaluation inside the pass loop for the baseline side of the
+            // comparison.
             let first_pressed: [bool; ROW] = from_fn(|row| {
                 get2(calib, row, col)
                     .and_then(|c| Self::travel_scaled_from(&c, first_read[row]))
