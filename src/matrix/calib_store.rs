@@ -2,6 +2,30 @@ use crate::keymap::{COL, ROW};
 use core::mem::size_of;
 use crc::{CRC_16_IBM_3740, Crc, NoTable};
 
+/// Pre-computed buffer length for the HE matrix.
+pub const CALIB_BUF_LEN: usize = total_len(ROW, COL);
+/// CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
+const CRC16: Crc<u16, NoTable> = Crc::<u16, NoTable>::new(&CRC_16_IBM_3740);
+/// Byte length of the trailing CRC field.
+const CRC_LEN: usize = size_of::<u16>();
+/// EEPROM word address at which the calibration block begins.
+pub const EEPROM_BASE_ADDR: u16 = 0x0000;
+/// Byte length of a single serialized entry (one u16 full-travel value).
+const ENTRY_LEN: usize = size_of::<u16>();
+/// Byte length of the header: magic + version.
+const HEADER_LEN: usize = size_of::<u32>().saturating_add(size_of::<u8>());
+/// Format version. Must be incremented on any incompatible layout change.
+const VERSION: u8 = 1;
+/// Magic number identifying a valid Q6 HE calibration block.
+const MAGIC: u32 = 0x5136_4845;
+
+/// Per-key full-travel calibration value stored in EEPROM.
+#[derive(Clone, Copy)]
+pub struct CalibEntry {
+    /// Raw ADC reading at full travel (key fully depressed to the PCB).
+    pub full: u16,
+}
+
 /// Copy exactly `N` bytes from `buf[start..end]` into a fixed-size array.
 ///
 /// Returns `None` if the range is out of bounds or its length is not `N`.
@@ -11,38 +35,6 @@ use crc::{CRC_16_IBM_3740, Crc, NoTable};
 #[inline]
 fn read_array<const N: usize>(buf: &[u8], start: usize, end: usize) -> Option<[u8; N]> {
     buf.get(start..end)?.try_into().ok()
-}
-
-/// Magic number identifying a valid Q6 HE calibration block.
-const MAGIC: u32 = 0x5136_4845;
-/// Format version. Must be incremented on any incompatible layout change.
-const VERSION: u8 = 1;
-/// Byte length of the header: magic + version.
-const HEADER_LEN: usize = size_of::<u32>().saturating_add(size_of::<u8>());
-/// Byte length of the trailing CRC field.
-const CRC_LEN: usize = size_of::<u16>();
-/// Byte length of a single serialized entry (one u16 full-travel value).
-const ENTRY_LEN: usize = size_of::<u16>();
-
-/// CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
-const CRC16: Crc<u16, NoTable> = Crc::<u16, NoTable>::new(&CRC_16_IBM_3740);
-
-/// EEPROM word address at which the calibration block begins.
-pub const EEPROM_BASE_ADDR: u16 = 0x0000;
-
-/// Compute the total serialized byte length for a `rows × cols` matrix.
-pub const fn total_len(rows: usize, cols: usize) -> usize {
-    HEADER_LEN.saturating_add(rows.saturating_mul(cols).saturating_mul(ENTRY_LEN)).saturating_add(CRC_LEN)
-}
-
-/// Pre-computed buffer length for the HE matrix.
-pub const CALIB_BUF_LEN: usize = total_len(ROW, COL);
-
-/// Per-key full-travel calibration value stored in EEPROM.
-#[derive(Clone, Copy)]
-pub struct CalibEntry {
-    /// Raw ADC reading at full travel (key fully depressed to the PCB).
-    pub full: u16,
 }
 
 /// Serialize `entries` (row-major, `ROW × COL`) into `buf`.
@@ -60,23 +52,23 @@ pub fn serialize<const ROW: usize, const COL: usize>(
     }
 
     // Write version byte.
-    if let Some(b) = buf.get_mut(size_of::<u32>()) {
-        *b = VERSION;
+    if let Some(version_byte) = buf.get_mut(size_of::<u32>()) {
+        *version_byte = VERSION;
     }
 
-    let mut i = HEADER_LEN;
+    let mut pos = HEADER_LEN;
     for row in entries {
         for entry in row {
-            let end = i.saturating_add(ENTRY_LEN);
-            if let Some(dst) = buf.get_mut(i..end) {
+            let end = pos.saturating_add(ENTRY_LEN);
+            if let Some(dst) = buf.get_mut(pos..end) {
                 dst.copy_from_slice(&entry.full.to_le_bytes());
             }
-            i = end;
+            pos = end;
         }
     }
 
     // Compute CRC over the header + all entry bytes.
-    let crc_start = i;
+    let crc_start = pos;
     let crc_end = crc_start.saturating_add(CRC_LEN);
     let crc = buf.get(..crc_start).map_or(0, |data| CRC16.checksum(data));
     if let Some(dst) = buf.get_mut(crc_start..crc_end) {
@@ -111,7 +103,6 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(buf: &[u8], out: &mut
     // Validate CRC over header + entries.
     let data_end = HEADER_LEN.saturating_add(ROW.saturating_mul(COL).saturating_mul(ENTRY_LEN));
     let crc_end = data_end.saturating_add(CRC_LEN);
-    // read_array returns None for a truncated field; see its doc for why
     // None must not be silently replaced with 0 (0 is a valid CRC value).
     let Some(stored_crc_bytes) = read_array::<2>(buf, data_end, crc_end) else { return false };
     let stored_crc = u16::from_le_bytes(stored_crc_bytes);
@@ -121,14 +112,19 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(buf: &[u8], out: &mut
     }
 
     // Deserialize entries.
-    let mut i = HEADER_LEN;
+    let mut pos = HEADER_LEN;
     for row in out.iter_mut() {
         for entry in row.iter_mut() {
-            let end = i.saturating_add(ENTRY_LEN);
-            let Some(fb) = read_array::<2>(buf, i, end) else { return false };
+            let end = pos.saturating_add(ENTRY_LEN);
+            let Some(fb) = read_array::<2>(buf, pos, end) else { return false };
             entry.full = u16::from_le_bytes(fb);
-            i = end;
+            pos = end;
         }
     }
     true
+}
+
+/// Compute the total serialized byte length for a `rows × cols` matrix.
+pub const fn total_len(rows: usize, cols: usize) -> usize {
+    HEADER_LEN.saturating_add(rows.saturating_mul(cols).saturating_mul(ENTRY_LEN)).saturating_add(CRC_LEN)
 }
