@@ -2,9 +2,10 @@
 
 use crate::backlight::{
     gamma_correction::gamma_correction,
-    lock_indicator::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
+    led_processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
     mapping::LED_LAYOUT,
 };
+use CalibPhase::{AllAccepted, Done, Full, Zero};
 use embassy_stm32::{
     gpio::Output,
     mode::Async,
@@ -118,7 +119,7 @@ struct BacklightState {
     brightness: u8,
     /// Whether a first-boot calibration pass is currently in progress.
     ///
-    /// `true` from [`CalibPhase::Zero`] until [`CalibPhase::Done`] completes.
+    /// `true` from [`Zero`] until [`Done`] completes.
     /// Used by the thermal throttle path to call [`render_calib`] instead of
     /// [`render_all`] so a thermal event never clobbers the calibration
     /// display.
@@ -126,7 +127,7 @@ struct BacklightState {
     /// Bitset of LED indices confirmed calibrated during the full-travel pass.
     ///
     /// Bit `i` set means LED `i` should be painted solid green by
-    /// [`render_calib`]. Cleared to zero when [`CalibPhase::Done`] completes
+    /// [`render_calib`]. Cleared to zero when [`Done`] completes
     /// and the keyboard returns to normal white operation.
     calib_leds_done: u128,
     /// Whole-keyboard gradient percentage (0–100) during the full-travel pass.
@@ -286,19 +287,19 @@ pub async fn backlight_runner(
         match select(rx.receive(), thermal_ticker.next()).await {
             Either::First(cmd) => match cmd {
                 BacklightCmd::CalibPhase(phase) => match phase {
-                    CalibPhase::Zero => {
+                    Zero => {
                         // Amber: zero-travel pass, all keys should be fully released.
                         state.in_calib = true;
                         let _ = fill_all_leds(&mut driver, CALIB_AMBER, state.brightness).await;
                     }
-                    CalibPhase::Full => {
+                    Full => {
                         // Reset calib tracking and render the initial red frame via
                         // render_calib so the full-travel phase starts consistently.
                         state.calib_leds_done = 0;
                         state.calib_pct = 0;
                         let _ = render_calib(&mut driver, state).await;
                     }
-                    CalibPhase::AllAccepted => {
+                    AllAccepted => {
                         // Blink solid green × CALIB_ALL_DONE_BLINK_COUNT to signal
                         // that every key has been recorded and keys may be released.
                         // calibration is still in progress (in_calib stays true).
@@ -312,7 +313,7 @@ pub async fn backlight_runner(
                         }
                         // Leave the keyboard solid green heading into Done.
                     }
-                    CalibPhase::Done => {
+                    Done => {
                         // Solid green hold for 2 s to confirm calibration is stored.
                         let _ = fill_all_leds(&mut driver, CALIB_GREEN, state.brightness).await;
                         Timer::after_millis(CALIB_DONE_HOLD_MS).await;

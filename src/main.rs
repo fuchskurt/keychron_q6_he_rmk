@@ -34,7 +34,7 @@ mod matrix;
 mod vial;
 
 use crate::{
-    backlight::{init::backlight_runner, lock_indicator::LedIndicatorProcessor},
+    backlight::{init::backlight_runner, led_processor::LedIndicatorProcessor},
     eeprom::Ft24c64,
     flash_wrapper_async::Flash16K,
     keymap::{COL, ROW},

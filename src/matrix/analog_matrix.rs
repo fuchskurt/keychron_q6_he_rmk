@@ -1,18 +1,17 @@
 use crate::{
     backlight::{
-        lock_indicator::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
+        led_processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
         mapping::MATRIX_TO_LED,
     },
     eeprom::Ft24c64,
-    matrix::{
-        calib_store,
-        calib_store::CALIB_BUF_LEN,
-        hc164_cols::Hc164Cols,
-        sensor_mapping::SENSOR_POSITIONS,
-        travel_helpers::{SCALE_Q_FACTOR, SCALE_SHIFT, delta_from_ref},
-    },
+    matrix::{calib_store, calib_store::CALIB_BUF_LEN, hc164_cols::Hc164Cols, sensor_mapping::SENSOR_POSITIONS},
 };
+use BacklightCmd::{CalibKeyDone, CalibProgress};
+use CalibPhase::{AllAccepted, Done, Full, Zero};
+use KeyCalibState::{Accepted, Holding, Waiting};
+use calib_store::{CalibEntry, EEPROM_BASE_ADDR, try_deserialize};
 use core::{
+    array::from_fn,
     future::pending,
     hint::{likely, unlikely},
 };
@@ -25,24 +24,11 @@ use embassy_stm32::{
     pac::adc,
 };
 use embassy_time::{Duration, Instant, Timer};
+use num_traits::ToPrimitive as _;
 use rmk::{
     event::{KeyboardEvent, publish_event_async},
     input_device::{InputDevice, Runnable},
 };
-
-/// Copy the element at `(row, col)` from a 2-D array slice, returning `None`
-/// if either index is out of bounds.
-#[inline]
-fn get2<T: Copy, const C: usize>(arr: &[[T; C]], row: usize, col: usize) -> Option<T> {
-    arr.get(row)?.get(col).copied()
-}
-
-/// Return a mutable reference to `(row, col)` in a 2-D array slice, returning
-/// `None` if either index is out of bounds.
-#[inline]
-fn get2_mut<T, const C: usize>(arr: &mut [[T; C]], row: usize, col: usize) -> Option<&mut T> {
-    arr.get_mut(row)?.get_mut(col)
-}
 
 /// Number of confident press/release cycles required before the
 /// auto-calibrator updates the live [`KeyCalib`] data for a key.
@@ -118,7 +104,7 @@ pub const CALIB_PRESS_THRESHOLD: u16 = 450;
 /// Extra sampling time after all keys have been accepted during full-travel
 /// calibration, allowing each key's minimum ADC to settle at its true
 /// physical bottom rather than the first crossing of [`CALIB_PRESS_THRESHOLD`].
-const CALIB_SETTLE_AFTER_ALL_DONE_MS: u64 = 1000;
+const CALIB_SETTLE_AFTER_ALL_DONE_MS: u64 = 2000;
 
 /// Maximum acceptable distance from [`REF_ZERO_TRAVEL`] for a key to be
 /// considered to have a valid hall-effect sensor at its position.
@@ -159,15 +145,27 @@ const FULL_TRAVEL_UNIT: u8 = 40;
 /// or absent readings, intentionally small.
 const MIN_USEFUL_FULL_RANGE: u16 = 100;
 
-/// Reference zero-travel ADC value used as the LUT origin.
+/// Cubic coefficient of the Hall sensor transfer polynomial `f(x) = A3·x³ +
+/// A2·x² + A1·x + A0`.
+///
+/// Maps a raw ADC value to a distance-from-zero in mm, derived by least-squares
+/// fit to empirical sensor data. Evaluated via Horner's method in
+/// [`KeyCalib::poly`].
+const POLY_A0: f32 = 426.88962;
+/// Linear coefficient of the Hall sensor transfer polynomial.
+const POLY_A1: f32 = -0.48358;
+/// Quadratic coefficient of the Hall sensor transfer polynomial.
+const POLY_A2: f32 = 2.04637e-4;
+/// Cubic coefficient of the Hall sensor transfer polynomial.
+const POLY_A3: f32 = -2.99368e-8;
+
+/// Reference zero-travel ADC value used for calibration and used-sensor
+/// validation.
 pub const REF_ZERO_TRAVEL: u16 = 3121;
 
 /// Scale factor converting physical travel units into internal scaled travel
 /// units.
 const TRAVEL_SCALE: u8 = 6;
-
-/// `i64` version of [`TRAVEL_SCALE`].
-const TRAVEL_SCALE_I64: i64 = i64::from(TRAVEL_SCALE);
 
 /// Fallback zero-travel ADC value used before any calibration has run.
 const UNCALIBRATED_ZERO: u16 = 3000;
@@ -287,9 +285,10 @@ impl Default for HallCfg {
 /// Calibration values for a single key.
 #[derive(Clone, Copy)]
 struct KeyCalib {
-    /// Fixed-point scale factor converting a raw LUT delta into internal
-    /// scaled travel units. Derived from the measured zero-to-full ADC range.
-    scale_factor: i32,
+    /// Polynomial Value at full pressed state, precomputed on construction.
+    poly_delta_full: f32,
+    /// Polynomial Value at zero state, precomputed on construction.
+    poly_zero: f32,
     /// Whether this matrix position has a valid hall-effect sensor.
     ///
     /// `false` for unpopulated positions or those whose zero-travel reading
@@ -301,19 +300,31 @@ struct KeyCalib {
 
 impl KeyCalib {
     /// Build calibration data from zero and full-travel ADC readings.
-    const fn new(zero: u16, full: u16) -> Self {
+    fn new(zero: u16, full: u16) -> Self {
+        let poly_zero = Self::poly(f32::from(zero));
+        let poly_full = Self::poly(f32::from(full));
         Self {
-            scale_factor: compute_scale_factor(zero, full),
+            poly_delta_full: poly_full - poly_zero,
+            poly_zero,
             used: zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE,
             zero,
         }
     }
 
+    /// Evaluate the Hall sensor transfer polynomial at `x` using Horner's
+    /// method.
+    ///
+    /// Implements `f(x) = A3·x³ + A2·x² + A1·x + A0` in Horner form to minimize
+    /// floating-point rounding and avoid redundant multiplications.
+    fn poly(x: f32) -> f32 { POLY_A3.mul_add(x, POLY_A2).mul_add(x, POLY_A1).mul_add(x, POLY_A0) }
+
     /// Build an uncalibrated placeholder.
     ///
     /// `used` is `false` so the scanner ignores this position entirely until
     /// real calibration data is applied.
-    pub const fn uncalibrated() -> Self { Self { scale_factor: SCALE_Q_FACTOR, used: false, zero: UNCALIBRATED_ZERO } }
+    pub const fn uncalibrated() -> Self {
+        Self { poly_delta_full: 1.0, poly_zero: 0.0, used: false, zero: UNCALIBRATED_ZERO }
+    }
 }
 
 impl Default for KeyCalib {
@@ -367,12 +378,12 @@ impl Default for KeyState {
 /// is satisfied.
 #[derive(Clone, Copy)]
 enum KeyCalibState {
-    /// Key has not yet crossed the press threshold, or was released and reset.
-    Waiting,
-    /// Key crossed the threshold at the stored instant; hold timer is running.
-    Holding(Instant),
     /// Hold duration satisfied; this key is fully calibrated.
     Accepted,
+    /// Key crossed the threshold at the stored instant; hold timer is running.
+    Holding(Instant),
+    /// Key has not yet crossed the press threshold, or was released and reset.
+    Waiting,
 }
 
 /// ADC-related peripherals grouped to allow split borrows when constructing
@@ -413,7 +424,7 @@ where
     }
 
     /// Create a new [`AdcPart`] from the given peripherals.
-    pub fn new(
+    pub const fn new(
         adc: Adc<'peripherals, ADC>,
         row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
         dma: Peri<'peripherals, D>,
@@ -504,270 +515,15 @@ where
         }
     }
 
-    /// Build the default calibration entries used when EEPROM is blank or
-    /// invalid, giving a reasonable approximation of travel until real
-    /// calibration runs.
-    const fn default_entries() -> [[calib_store::CalibEntry; COL]; ROW] {
-        [[calib_store::CalibEntry { full: UNCALIBRATED_ZERO.saturating_sub(DEFAULT_FULL_RANGE) }; COL]; ROW]
-    }
-
-    /// Apply a row-major array of [`calib_store::CalibEntry`] values to
+    /// Apply a row-major array of [`CalibEntry`] values to
     /// `self.calib`, pairing each stored full-travel reading with the
     /// corresponding live zero-travel reading from `zero_raw`.
-    fn apply_calib(&mut self, entries: &[[calib_store::CalibEntry; COL]; ROW], zero_raw: &[[u16; COL]; ROW]) {
-        for row in 0..ROW {
-            for col in 0..COL {
-                let Some(cal) = get2_mut(&mut self.calib, row, col) else { continue };
-                let Some(zero) = get2(zero_raw, row, col) else { continue };
-                let Some(entry) = get2(entries, row, col) else { continue };
+    fn apply_calib(&mut self, entries: &[[CalibEntry; COL]; ROW], zero_raw: &[[u16; COL]; ROW]) {
+        for ((cal_row, entry_row), zero_row) in self.calib.iter_mut().zip(entries).zip(zero_raw) {
+            for ((cal, entry), &zero) in cal_row.iter_mut().zip(entry_row).zip(zero_row) {
                 *cal = KeyCalib::new(zero, entry.full);
             }
         }
-    }
-
-    /// Average `cfg.calib_passes` full-matrix scans to establish per-key
-    /// zero-travel (resting) ADC values.
-    ///
-    /// All keys must be fully released during this pass. Returns a
-    /// `ROW × COL` array of raw ADC averages, each reduced by
-    /// [`ZERO_TRAVEL_DEAD_ZONE`] so that the resting position sits cleanly
-    /// below the measured average, preventing ADC noise from producing
-    /// spurious non-zero travel readings. Does not modify `self.calib`.
-    async fn calibrate_zero_raw(&mut self) -> [[u16; COL]; ROW] {
-        let mut acc = [[0_u32; COL]; ROW];
-        let mut seq = self.adc_part.configured_sequence(self.irq);
-        let mut buf = [0_u16; ROW];
-
-        for _ in 0..self.cfg.calib_passes {
-            for col in 0..COL {
-                self.cols.select(col);
-                Timer::after(self.cfg.col_settle_us).await;
-                seq.read(&mut buf).await;
-                for (row, &raw) in buf.iter().enumerate() {
-                    if let Some(cell) = get2_mut(&mut acc, row, col) {
-                        *cell = cell.saturating_add(u32::from(raw));
-                    }
-                }
-            }
-        }
-
-        let mut result = [[UNCALIBRATED_ZERO; COL]; ROW];
-        for (res_row, acc_row) in result.iter_mut().zip(acc.iter()) {
-            for (res, &total) in res_row.iter_mut().zip(acc_row.iter()) {
-                // Leave the UNCALIBRATED_ZERO initializer in place on any
-                // arithmetic failure (e.g. calib_passes == 0).
-                if let Some(avg) = total.checked_div(self.cfg.calib_passes) {
-                    *res = u16::try_from(avg).unwrap_or(UNCALIBRATED_ZERO).saturating_sub(ZERO_TRAVEL_DEAD_ZONE);
-                }
-            }
-        }
-        result
-    }
-
-    /// Sample the matrix for `duration` (or until all real keys are accepted),
-    /// recording the minimum ADC reading seen per key.
-    ///
-    /// Lower ADC = more magnet travel, so the minimum reading over the window
-    /// is the deepest press seen. A key is accepted only after it has stayed
-    /// continuously below [`CALIB_PRESS_THRESHOLD`] for
-    /// [`CALIB_HOLD_DURATION_MS`]; releasing and re-pressing resets the timer.
-    /// The LED turns green only at acceptance, not at first crossing.
-    ///
-    /// After all keys are accepted a [`CALIB_SETTLE_AFTER_ALL_DONE_MS`]
-    /// continuation window keeps updating `min_raw` so the stored value
-    /// reflects the true bottom-out ADC, not merely the acceptance instant.
-    async fn sample_full_raw(&mut self, duration: Duration, zero_raw: &[[u16; COL]; ROW]) -> [[u16; COL]; ROW] {
-        let deadline = Instant::now() + duration;
-        let mut min_raw = [[u16::MAX; COL]; ROW];
-
-        // Closure to update the running minimum for a single position.
-        let mut update_min = |row: usize, col: usize, raw: u16| {
-            if let Some(cell) = get2_mut(&mut min_raw, row, col) {
-                if raw < *cell {
-                    *cell = raw;
-                }
-            }
-        };
-
-        let mut calib_state: [[KeyCalibState; COL]; ROW] = [[KeyCalibState::Waiting; COL]; ROW];
-        let mut calibrated_count: usize = 0;
-        let hold_duration = Duration::from_millis(CALIB_HOLD_DURATION_MS);
-
-        // Count only positions that have a physical sensor and a plausible
-        // zero-travel reading so the denominator matches the detection loop.
-        let total_keys = (0..ROW)
-            .flat_map(|r| (0..COL).map(move |c| (r, c)))
-            .filter(|&(r, c)| {
-                SENSOR_POSITIONS.get(r).and_then(|row| row.get(c)).copied().unwrap_or(false)
-                    && get2(zero_raw, r, c).map_or(false, |z| z.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE)
-            })
-            .count()
-            .max(1);
-
-        let mut seq = self.adc_part.configured_sequence(self.irq);
-        let mut buf = [0_u16; ROW];
-        let mut last_pct: u8 = 0;
-
-        // Phase A: sample until all real keys are accepted or the deadline expires.
-        while Instant::now() < deadline && calibrated_count < total_keys {
-            for col in 0..COL {
-                self.cols.select(col);
-                Timer::after(self.cfg.col_settle_us).await;
-                seq.read(&mut buf).await;
-
-                for (row, &raw) in buf.iter().enumerate() {
-                    // Always track the deepest reading seen, regardless of
-                    // whether the key has been accepted yet.
-                    update_min(row, col, raw);
-
-                    if !SENSOR_POSITIONS.get(row).and_then(|r| r.get(col)).copied().unwrap_or(false) {
-                        continue;
-                    }
-
-                    let Some(key_state) = get2_mut(&mut calib_state, row, col) else {
-                        continue;
-                    };
-
-                    // Skip keys already accepted.
-                    if matches!(*key_state, KeyCalibState::Accepted) {
-                        continue;
-                    }
-
-                    let zero = get2(zero_raw, row, col).unwrap_or(UNCALIBRATED_ZERO);
-                    let pressed = zero.saturating_sub(raw) >= CALIB_PRESS_THRESHOLD;
-
-                    match *key_state {
-                        KeyCalibState::Waiting => {
-                            if pressed {
-                                // Start hold timer on first threshold crossing.
-                                *key_state = KeyCalibState::Holding(Instant::now());
-                            }
-                        }
-                        KeyCalibState::Holding(first_seen) => {
-                            if pressed {
-                                if first_seen.elapsed() >= hold_duration {
-                                    // Hold duration satisfied; accept this key.
-                                    *key_state = KeyCalibState::Accepted;
-                                    calibrated_count = calibrated_count.saturating_add(1);
-
-                                    if let Some(Some(led_idx)) =
-                                        MATRIX_TO_LED.get(row).and_then(|r| r.get(col)).copied()
-                                    {
-                                        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibKeyDone(led_idx)).ok();
-                                    }
-
-                                    let pct = u8::try_from(
-                                        calibrated_count.saturating_mul(100).checked_div(total_keys).unwrap_or(0),
-                                    )
-                                    .unwrap_or(100)
-                                    .min(100);
-
-                                    if pct != last_pct {
-                                        last_pct = pct;
-                                        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibProgress(pct)).ok();
-                                    }
-                                }
-                                // else: still within hold window; keep waiting.
-                            } else {
-                                // Released before hold duration; reset so the
-                                // user must press it all the way down again.
-                                *key_state = KeyCalibState::Waiting;
-                            }
-                        }
-                        KeyCalibState::Accepted => {}
-                    }
-                }
-            }
-        }
-
-        // If all keys were accepted (not just a deadline timeout), signal the
-        // backlight to blink green so the user knows to release their keys.
-        // Best-effort: missing this signal only skips the animation.
-        if calibrated_count >= total_keys {
-            BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::AllAccepted)).ok();
-        }
-
-        // Phase B: continue sampling for CALIB_SETTLE_AFTER_ALL_DONE_MS
-        // regardless of whether Phase A ended by full acceptance or timeout.
-        // This gives every accepted key time to reach its true bottom-out ADC
-        // rather than storing the value at the moment of acceptance, and still
-        // captures the deepest reading seen for any keys that ran out of time.
-        let settle_deadline = Instant::now() + Duration::from_millis(CALIB_SETTLE_AFTER_ALL_DONE_MS);
-        while Instant::now() < settle_deadline {
-            for col in 0..COL {
-                self.cols.select(col);
-                Timer::after(self.cfg.col_settle_us).await;
-                seq.read(&mut buf).await;
-                for (row, &raw) in buf.iter().enumerate() {
-                    update_min(row, col, raw);
-                }
-            }
-        }
-
-        min_raw
-    }
-
-    /// Run the guided first-boot two-phase calibration, persist the result to
-    /// EEPROM, and apply it to `self.calib`.
-    ///
-    /// Backlight signals during the process:
-    /// - **Amber** - zero-travel pass, all keys must be released.
-    /// - **Blue → green per key** - full-travel press window.
-    /// - **Green blink ×3** - all keys accepted; keys may be released.
-    /// - **Green for 2 s** - calibration stored successfully.
-    /// - **Amber** - EEPROM write-back verification failed; keyboard will
-    ///   re-calibrate on the next boot.
-    ///
-    /// Keys not pressed during the full-travel window fall back to
-    /// `zero − DEFAULT_FULL_RANGE` so the keyboard remains functional.
-    async fn run_first_boot_calib(
-        &mut self,
-        eeprom_buf: &mut [u8; CALIB_BUF_LEN],
-        entries: &mut [[calib_store::CalibEntry; COL]; ROW],
-    ) {
-        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Zero)).ok();
-        let zero_raw = self.calibrate_zero_raw().await;
-
-        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Full)).ok();
-        let full_raw = self.sample_full_raw(self.cfg.full_calib_duration, &zero_raw).await;
-
-        for row in 0..ROW {
-            for col in 0..COL {
-                let zero = get2(&zero_raw, row, col).unwrap_or(UNCALIBRATED_ZERO);
-                let seen_min = get2(&full_raw, row, col).unwrap_or(u16::MAX);
-                let full = if zero > seen_min && zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
-                    seen_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE))
-                } else {
-                    zero.saturating_sub(DEFAULT_FULL_RANGE)
-                };
-                if let Some(entry) = get2_mut(entries, row, col) {
-                    *entry = calib_store::CalibEntry { full };
-                }
-            }
-        }
-
-        self.apply_calib(entries, &zero_raw);
-
-        // Allow the backlight channel to drain before starting the I²C write.
-        Timer::after_millis(50).await;
-        calib_store::serialize(entries, eeprom_buf);
-
-        let write_ok = self.eeprom.write(calib_store::EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
-
-        // Verify by reading back into the same buffer and re-deserializing.
-        // Reusing the buffer avoids a second large stack allocation.
-        let verified = write_ok
-            && self.eeprom.read(calib_store::EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
-            && calib_store::try_deserialize::<ROW, COL>(eeprom_buf, entries);
-
-        if !verified {
-            // Signal amber so the user knows calibration will repeat on the
-            // next boot.
-            BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Zero)).await;
-            return;
-        }
-
-        BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Done)).await;
     }
 
     /// Update the auto-calibration state machine for a single key.
@@ -837,7 +593,8 @@ where
 
                         // Only commit the update if the new zero differs
                         // meaningfully from the current one, avoiding
-                        // unnecessary scale-factor recomputation.
+                        // unnecessary churn in the precomputed polynomial
+                        // calibration data derived by `KeyCalib::new`.
                         if let Some(cal) = get2_mut(calib, row, col) {
                             if cal.zero.abs_diff(new_zero) > 10 {
                                 *cal = KeyCalib::new(new_zero, new_full);
@@ -853,6 +610,253 @@ where
                 }
             }
         }
+    }
+
+    /// Average `cfg.calib_passes` full-matrix scans to establish per-key
+    /// zero-travel (resting) ADC values.
+    ///
+    /// All keys must be fully released during this pass. Returns a
+    /// `ROW × COL` array of raw ADC averages, each reduced by
+    /// [`ZERO_TRAVEL_DEAD_ZONE`] so that the resting position sits cleanly
+    /// below the measured average, preventing ADC noise from producing
+    /// spurious non-zero travel readings. Does not modify `self.calib`.
+    async fn calibrate_zero_raw(&mut self) -> [[u16; COL]; ROW] {
+        let mut acc = [[0_u32; COL]; ROW];
+        let mut seq = self.adc_part.configured_sequence(self.irq);
+        let mut buf = [0_u16; ROW];
+
+        for _ in 0..self.cfg.calib_passes {
+            for col in 0..COL {
+                self.cols.select(col);
+                Timer::after(self.cfg.col_settle_us).await;
+                seq.read(&mut buf).await;
+                for (acc_row, &raw) in acc.iter_mut().zip(buf.iter()) {
+                    if let Some(cell) = acc_row.get_mut(col) {
+                        *cell = cell.saturating_add(u32::from(raw));
+                    }
+                }
+            }
+        }
+
+        let mut result = [[UNCALIBRATED_ZERO; COL]; ROW];
+        for (res_row, acc_row) in result.iter_mut().zip(acc.iter()) {
+            for (res, &total) in res_row.iter_mut().zip(acc_row.iter()) {
+                // Leave the UNCALIBRATED_ZERO initializer in place on any
+                // arithmetic failure (e.g. calib_passes == 0).
+                if let Some(avg) = total.checked_div(self.cfg.calib_passes) {
+                    *res = u16::try_from(avg).unwrap_or(UNCALIBRATED_ZERO).saturating_sub(ZERO_TRAVEL_DEAD_ZONE);
+                }
+            }
+        }
+        result
+    }
+
+    /// Build the default calibration entries used when EEPROM is blank or
+    /// invalid, giving a reasonable approximation of travel until real
+    /// calibration runs.
+    const fn default_entries() -> [[CalibEntry; COL]; ROW] {
+        [[CalibEntry { full: UNCALIBRATED_ZERO.saturating_sub(DEFAULT_FULL_RANGE) }; COL]; ROW]
+    }
+
+    /// Sample the matrix for `duration` (or until all real keys are accepted),
+    /// recording the minimum ADC reading seen per key.
+    ///
+    /// Lower ADC = more magnet travel, so the minimum reading over the window
+    /// is the deepest press seen. A key is accepted only after it has stayed
+    /// continuously below [`CALIB_PRESS_THRESHOLD`] for
+    /// [`CALIB_HOLD_DURATION_MS`]; releasing and re-pressing resets the timer.
+    /// The LED turns green only at acceptance, not at first crossing.
+    ///
+    /// After all keys are accepted a [`CALIB_SETTLE_AFTER_ALL_DONE_MS`]
+    /// continuation window keeps updating `min_raw` so the stored value
+    /// reflects the true bottom-out ADC, not merely the acceptance instant.
+    async fn sample_full_raw(&mut self, duration: Duration, zero_raw: &[[u16; COL]; ROW]) -> [[u16; COL]; ROW] {
+        let deadline = Instant::now() + duration;
+        let mut min_raw = [[u16::MAX; COL]; ROW];
+
+        // Closure to update the running minimum for a single position.
+        let mut update_min = |row: usize, col: usize, raw: u16| {
+            if let Some(cell) = get2_mut(&mut min_raw, row, col) {
+                *cell = (*cell).min(raw);
+            }
+        };
+
+        let mut calib_state: [[KeyCalibState; COL]; ROW] = [[Waiting; COL]; ROW];
+        let mut calibrated_count: usize = 0;
+        let hold_duration = Duration::from_millis(CALIB_HOLD_DURATION_MS);
+
+        // Count only positions that have a physical sensor and a plausible
+        // zero-travel reading so the denominator matches the detection loop.
+        let total_keys = (0..ROW)
+            .flat_map(|r| (0..COL).map(move |c| (r, c)))
+            .filter(|&(r, c)| {
+                SENSOR_POSITIONS.get(r).and_then(|row| row.get(c)).copied().unwrap_or(false)
+                    && get2(zero_raw, r, c).is_some_and(|z| z.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE)
+            })
+            .count()
+            .max(1);
+
+        let mut seq = self.adc_part.configured_sequence(self.irq);
+        let mut buf = [0_u16; ROW];
+        let mut last_pct: u8 = 0;
+
+        // Phase A: sample until all real keys are accepted or the deadline expires.
+        while Instant::now() < deadline && calibrated_count < total_keys {
+            for col in 0..COL {
+                self.cols.select(col);
+                Timer::after(self.cfg.col_settle_us).await;
+                seq.read(&mut buf).await;
+
+                for (row, &raw) in buf.iter().enumerate() {
+                    // Always track the deepest reading seen, regardless of
+                    // whether the key has been accepted yet.
+                    update_min(row, col, raw);
+
+                    if !SENSOR_POSITIONS.get(row).and_then(|r| r.get(col)).copied().unwrap_or(false) {
+                        continue;
+                    }
+
+                    let Some(key_state) = get2_mut(&mut calib_state, row, col) else {
+                        continue;
+                    };
+
+                    // Skip keys already accepted.
+                    if matches!(*key_state, Accepted) {
+                        continue;
+                    }
+
+                    let zero = get2(zero_raw, row, col).unwrap_or(UNCALIBRATED_ZERO);
+                    let pressed = zero.saturating_sub(raw) >= CALIB_PRESS_THRESHOLD;
+
+                    match *key_state {
+                        Waiting => {
+                            if pressed {
+                                // Start hold timer on first threshold crossing.
+                                *key_state = Holding(Instant::now());
+                            }
+                        }
+                        Holding(first_seen) => {
+                            if pressed {
+                                if first_seen.elapsed() >= hold_duration {
+                                    // Hold duration satisfied; accept this key.
+                                    *key_state = Accepted;
+                                    calibrated_count = calibrated_count.saturating_add(1);
+
+                                    if let Some(Some(led_idx)) =
+                                        MATRIX_TO_LED.get(row).and_then(|r| r.get(col)).copied()
+                                    {
+                                        BACKLIGHT_CH.sender().try_send(CalibKeyDone(led_idx)).ok();
+                                    }
+
+                                    let pct = u8::try_from(
+                                        calibrated_count.saturating_mul(100).checked_div(total_keys).unwrap_or(0),
+                                    )
+                                    .unwrap_or(100)
+                                    .min(100);
+
+                                    if pct != last_pct {
+                                        last_pct = pct;
+                                        BACKLIGHT_CH.sender().try_send(CalibProgress(pct)).ok();
+                                    }
+                                }
+                                // else: still within hold window; keep waiting.
+                            } else {
+                                // Released before hold duration; reset so the
+                                // user must press it all the way down again.
+                                *key_state = Waiting;
+                            }
+                        }
+                        Accepted => {}
+                    }
+                }
+            }
+        }
+
+        // If all keys were accepted (not just a deadline timeout), signal the
+        // backlight to blink green so the user knows to release their keys.
+        // Best-effort: missing this signal only skips the animation.
+        if calibrated_count >= total_keys {
+            BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(AllAccepted)).ok();
+        }
+
+        // Phase B: continue sampling for CALIB_SETTLE_AFTER_ALL_DONE_MS
+        // regardless of whether Phase A ended by full acceptance or timeout.
+        // This gives every accepted key time to reach its true bottom-out ADC
+        // rather than storing the value at the moment of acceptance, and still
+        // captures the deepest reading seen for any keys that ran out of time.
+        let settle_deadline = Instant::now().saturating_add(Duration::from_millis(CALIB_SETTLE_AFTER_ALL_DONE_MS));
+        while Instant::now() < settle_deadline {
+            for col in 0..COL {
+                self.cols.select(col);
+                Timer::after(self.cfg.col_settle_us).await;
+                seq.read(&mut buf).await;
+                for (row, &raw) in buf.iter().enumerate() {
+                    update_min(row, col, raw);
+                }
+            }
+        }
+
+        min_raw
+    }
+
+    /// Run the guided first-boot two-phase calibration, persist the result to
+    /// EEPROM, and apply it to `self.calib`.
+    ///
+    /// Backlight signals during the process:
+    /// - **Amber** - zero-travel pass, all keys must be released.
+    /// - **Blue → green per key** - full-travel press window.
+    /// - **Green blink ×3** - all keys accepted; keys may be released.
+    /// - **Green for 2 s** - calibration stored successfully.
+    /// - **Amber** - EEPROM write-back verification failed; keyboard will
+    ///   re-calibrate on the next boot.
+    ///
+    /// Keys not pressed during the full-travel window fall back to
+    /// `zero − DEFAULT_FULL_RANGE` so the keyboard remains functional.
+    async fn run_first_boot_calib(
+        &mut self,
+        eeprom_buf: &mut [u8; CALIB_BUF_LEN],
+        entries: &mut [[CalibEntry; COL]; ROW],
+    ) {
+        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(Zero)).ok();
+        let zero_raw = self.calibrate_zero_raw().await;
+
+        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(Full)).ok();
+        let full_raw = self.sample_full_raw(self.cfg.full_calib_duration, &zero_raw).await;
+
+        for ((entry_row, zero_row), full_row) in entries.iter_mut().zip(zero_raw.iter()).zip(full_raw.iter()) {
+            for ((entry, &zero), &seen_min) in entry_row.iter_mut().zip(zero_row.iter()).zip(full_row.iter()) {
+                let full = if zero > seen_min && zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
+                    seen_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE))
+                } else {
+                    zero.saturating_sub(DEFAULT_FULL_RANGE)
+                };
+                *entry = CalibEntry { full };
+            }
+        }
+
+        self.apply_calib(entries, &zero_raw);
+
+        // Allow the backlight channel to drain before starting the I²C write.
+        Timer::after_micros(200).await;
+        calib_store::serialize(entries, eeprom_buf);
+        let erase_ok = self.eeprom.zero_out().await.is_ok();
+        let write_ok = self.eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
+
+        // Verify by reading back into the same buffer and re-deserializing.
+        // Reusing the buffer avoids a second large stack allocation.
+        let verified = erase_ok
+            && write_ok
+            && self.eeprom.read(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
+            && try_deserialize::<ROW, COL>(eeprom_buf, entries);
+
+        if !verified {
+            // Signal amber so the user knows calibration will repeat on the
+            // next boot.
+            BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(Zero)).await;
+            return;
+        }
+
+        BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(Done)).await;
     }
 
     /// Scan the matrix once, returning the first key state change found.
@@ -900,12 +904,13 @@ where
             let first_read = *buf;
             // Pre-compute each row's pressed state from the first reading.
             // first_read is constant across all debounce passes, so computing
-            // it here avoids repeating the LUT lookup and multiply inside the
-            // pass loop for the baseline side of the comparison.
-            let first_pressed: [bool; ROW] = core::array::from_fn(|row| {
+            // it here avoids repeating the travel conversion / polynomial
+            // evaluation inside the pass loop for the baseline side of the
+            // comparison.
+            let first_pressed: [bool; ROW] = from_fn(|row| {
                 get2(calib, row, col)
                     .and_then(|c| Self::travel_scaled_from(&c, first_read[row]))
-                    .map_or(false, |t| t >= act_threshold)
+                    .is_some_and(|t| t >= act_threshold)
             });
             let mut stable = true;
             for _ in 0..DEBOUNCE_PASSES {
@@ -914,7 +919,7 @@ where
                     buf.iter().zip(first_pressed.iter()).enumerate().any(|(row, (&recheck, &was_pressed))| {
                         get2(calib, row, col)
                             .and_then(|c| Self::travel_scaled_from(&c, recheck))
-                            .map_or(false, |t| t >= act_threshold)
+                            .is_some_and(|t| t >= act_threshold)
                             != was_pressed
                     });
                 if state_changed {
@@ -999,15 +1004,15 @@ where
         if unlikely(!(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw)) {
             return None;
         }
-        // Shift into the LUT's reference frame, clamping at zero-travel so
-        // upward travel beyond rest maps to zero rather than a negative delta.
-        let x = apply_ref_offset(cal.zero, raw).min(REF_ZERO_TRAVEL);
+        if cal.poly_delta_full <= 0.0 {
+            return None;
+        }
 
-        let delta = i64::from(delta_from_ref(x));
-        let prod = delta.saturating_mul(i64::from(cal.scale_factor)).saturating_mul(TRAVEL_SCALE_I64);
-        // SCALE_SHIFT = 24 < 64, so checked_shr always returns Some on i64.
-        let travel = prod.checked_shr(SCALE_SHIFT).unwrap_or(0);
-        Some(u8::try_from(travel.clamp(0_i64, i64::from(FULL_TRAVEL_SCALED))).unwrap_or_default())
+        let delta_raw = KeyCalib::poly(f32::from(raw)) - cal.poly_zero;
+
+        let scaled =
+            (delta_raw / cal.poly_delta_full * f32::from(FULL_TRAVEL_SCALED)).clamp(0.0, f32::from(FULL_TRAVEL_SCALED));
+        Some(scaled.to_u8().unwrap_or(FULL_TRAVEL_SCALED))
     }
 }
 
@@ -1038,15 +1043,15 @@ where
     AdcSampleTime<ADC>: Clone,
 {
     async fn run(&mut self) -> ! {
-        let mut eeprom_buf = [0_u8; calib_store::CALIB_BUF_LEN];
+        let mut eeprom_buf = [0_u8; CALIB_BUF_LEN];
         let mut entries = Self::default_entries();
 
         // Wait for the EEPROM to complete its power-on reset before issuing
         // the first I²C transaction.
         Timer::after(EEPROM_POWER_ON_DELAY).await;
 
-        let loaded = self.eeprom.read(calib_store::EEPROM_BASE_ADDR, &mut eeprom_buf).await.is_ok()
-            && calib_store::try_deserialize::<ROW, COL>(&eeprom_buf, &mut entries);
+        let loaded = self.eeprom.read(EEPROM_BASE_ADDR, &mut eeprom_buf).await.is_ok()
+            && try_deserialize::<ROW, COL>(&eeprom_buf, &mut entries);
 
         if loaded {
             // Re-measure zero travel on every boot to compensate for
@@ -1077,46 +1082,16 @@ where
     }
 }
 
-/// Adjust a raw ADC value into the LUT's reference frame.
-///
-/// The LUT is built around [`REF_ZERO_TRAVEL`] as its zero-delta origin.
-/// Each key's physical resting point (`zero`) differs from `REF_ZERO_TRAVEL`
-/// due to magnet and sensor manufacturing variation, so a raw reading must
-/// be shifted before the LUT lookup to produce a meaningful delta.
-///
-/// - `zero > REF_ZERO_TRAVEL` - key rests at a higher ADC value than the
-///   reference; subtract the offset from `raw` to pull it into the LUT frame.
-/// - `zero < REF_ZERO_TRAVEL` - key rests lower; add the offset, then clamp to
-///   `REF_ZERO_TRAVEL` so that upward travel beyond the resting point (ADC
-///   rising above `zero`) maps to zero delta rather than a negative index.
+/// Copy the element at `(row, col)` from a 2-D array slice, returning `None`
+/// if either index is out of bounds.
 #[inline]
-const fn apply_ref_offset(zero: u16, raw: u16) -> u16 {
-    if zero >= REF_ZERO_TRAVEL {
-        raw.saturating_sub(zero.saturating_sub(REF_ZERO_TRAVEL))
-    } else {
-        raw.saturating_add(REF_ZERO_TRAVEL.saturating_sub(zero)).min(REF_ZERO_TRAVEL)
-    }
+fn get2<T: Copy, const C: usize>(arr: &[[T; C]], row: usize, col: usize) -> Option<T> {
+    arr.get(row).and_then(|r| r.get(col)).copied()
 }
 
-/// Compute a fixed-point scale factor from zero and full-travel ADC readings.
-///
-/// Normalizes the LUT delta (Q8) to the known physical full-travel distance
-/// ([`FULL_TRAVEL_UNIT`]), producing a per-key Q16 multiplier stored in
-/// [`KeyCalib::scale_factor`]. Returns the identity factor [`SCALE_Q_FACTOR`]
-/// if the full-travel delta is zero or negative. A negative delta indicates a
-/// reversed sensor polarity (magnet installed inverted); returning the identity
-/// rather than a negative multiplier prevents inverted or wildly incorrect
-/// travel readings.
+/// Return a mutable reference to `(row, col)` in a 2-D array slice, returning
+/// `None` if either index is out of bounds.
 #[inline]
-const fn compute_scale_factor(zero: u16, full: u16) -> i32 {
-    let x_full = apply_ref_offset(zero, full);
-    let full_travel: i64 = i64::from(delta_from_ref(x_full));
-    if full_travel <= 0 {
-        return SCALE_Q_FACTOR;
-    }
-    let num = i64::from(FULL_TRAVEL_UNIT).saturating_mul(256_i64).saturating_mul(i64::from(SCALE_Q_FACTOR));
-    match num.checked_div(full_travel) {
-        Some(quotient) => i32::try_from(quotient).unwrap_or(SCALE_Q_FACTOR),
-        None => SCALE_Q_FACTOR,
-    }
+fn get2_mut<T, const C: usize>(arr: &mut [[T; C]], row: usize, col: usize) -> Option<&mut T> {
+    arr.get_mut(row).and_then(|r| r.get_mut(col))
 }

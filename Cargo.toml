@@ -21,6 +21,7 @@ rmk = { default-features = false, features = ["async_matrix", "storage", "vial",
 static_cell = "2.1"
 snled27351_driver = { git = "https://github.com/fuchskurt/snled27351_driver.git" }
 embedded-hal-async = "1.0"
+num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 
 [patch.crates-io]
 embassy-time = { git = "https://github.com/embassy-rs/embassy.git" }
