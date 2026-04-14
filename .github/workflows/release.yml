@@ -34,37 +34,23 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install flip-link
-        run: cargo install flip-link
-
-      - name: Install cargo-binutils + llvm-tools
-        run: |
-          cargo install cargo-binutils
-          rustup component add llvm-tools
-
       - name: Install cargo-make
         run: cargo install cargo-make
+
+      - name: Install all required tools
+        run: cargo make install
 
       - name: Build firmware (release)
         run: cargo build --release
 
       - name: Produce .bin artifact
-        run: |
-          cargo objcopy --release -- -O binary rmk.bin
+        run: cargo make objcopy
 
       - name: Produce .hex artifact
-        run: |
-          cargo objcopy --release -- -O ihex rmk.hex
-
-      - name: Install cargo-hex-to-uf2
-        run: cargo install cargo-hex-to-uf2
+        run: cargo objcopy --release -- -O ihex rmk.hex
 
       - name: Produce .uf2 artifact
-        run: |
-          cargo hex-to-uf2 \
-            --input-path rmk.hex \
-            --output-path rmk.uf2 \
-            --family stm32f4
+        run: cargo make uf2
 
       - name: Rename artifacts with version tag
         run: |
@@ -82,17 +68,19 @@ jobs:
 
             ### Flashing
 
-            **DFU (recommended):**
+            Install all required host tools (only needed once):
             ```sh
-            dfu-util -l  # note the serial number
-            dfu-util -a 0 -s 0x08000000:mass-erase:force:leave \
-              -D rmk-q6_he_ansi-${{ github.ref_name }}.bin \
-              -S <SerialNumber>
+            cargo make install
             ```
 
+            Put the keyboard into DFU mode by holding the reset button, then flash:
+            ```sh
+            cargo make flash
+            ```
+            
             **probe-rs (debug probe):**
             ```sh
-            probe-rs run --chip stm32f401rc rmk-q6_he_ansi-${{ github.ref_name }}.elf
+            cargo run --release
             ```
           files: |
             rmk-q6_he_ansi-${{ github.ref_name }}.bin
