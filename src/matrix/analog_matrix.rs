@@ -77,14 +77,14 @@ const AUTO_CALIB_ZERO_JITTER: u16 = 50;
 ///
 /// The physical bottom-out reading is the true minimum ADC value a key can
 /// produce, so without this offset `travel_from` can return exactly
-/// [`FULL_TRAVEL`] while the key is held down. Any upward jitter then
+/// [`FULL_TRAVEL_UNIT`] while the key is held down. Any upward jitter then
 /// advances `extremum`, and a subsequent reading that dips back to the true
 /// floor satisfies the rapid-trigger release condition, firing a spurious
 /// release even though the key never moved.
 ///
 /// By raising the stored floor 80 counts above the physical minimum the scale
 /// factor is anchored to a point the key cannot reach in normal use, so
-/// bottom-of-travel travel values stay comfortably below [`FULL_TRAVEL`]
+/// bottom-of-travel travel values stay comfortably below [`FULL_TRAVEL_UNIT`]
 /// and RT jitter cannot accumulate a phantom peak.
 const BOTTOM_JITTER: u16 = 80;
 
