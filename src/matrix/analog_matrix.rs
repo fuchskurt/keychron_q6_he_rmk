@@ -593,7 +593,8 @@ where
 
                         // Only commit the update if the new zero differs
                         // meaningfully from the current one, avoiding
-                        // unnecessary scale-factor recomputation.
+                        // unnecessary churn in the precomputed polynomial
+                        // calibration data derived by `KeyCalib::new`.
                         if let Some(cal) = get2_mut(calib, row, col) {
                             if cal.zero.abs_diff(new_zero) > 10 {
                                 *cal = KeyCalib::new(new_zero, new_full);
