@@ -76,15 +76,15 @@ const AUTO_CALIB_ZERO_JITTER: u16 = 50;
 /// the calibration floor.
 ///
 /// The physical bottom-out reading is the true minimum ADC value a key can
-/// produce, so without this offset `travel_scaled_from` can return exactly
-/// [`FULL_TRAVEL_SCALED`] while the key is held down. Any upward jitter then
+/// produce, so without this offset `travel_from` can return exactly
+/// [`FULL_TRAVEL`] while the key is held down. Any upward jitter then
 /// advances `extremum`, and a subsequent reading that dips back to the true
 /// floor satisfies the rapid-trigger release condition, firing a spurious
 /// release even though the key never moved.
 ///
 /// By raising the stored floor 80 counts above the physical minimum the scale
 /// factor is anchored to a point the key cannot reach in normal use, so
-/// bottom-of-travel travel values stay comfortably below [`FULL_TRAVEL_SCALED`]
+/// bottom-of-travel travel values stay comfortably below [`FULL_TRAVEL`]
 /// and RT jitter cannot accumulate a phantom peak.
 const BOTTOM_JITTER: u16 = 80;
 
@@ -126,17 +126,6 @@ const DEFAULT_FULL_RANGE: u16 = 900;
 /// transactions.
 const EEPROM_POWER_ON_DELAY: Duration = Duration::from_micros(300);
 
-/// Full travel value expressed in internal scaled travel units.
-const FULL_TRAVEL_SCALED: u8 = FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE);
-
-/// Compile-time guard: the product must fit in a `u8` without saturating so
-/// that [`FULL_TRAVEL_SCALED`] is exact and travel clamping in
-/// [`AnalogHallMatrix::travel_scaled_from`] is correct.
-const _: () = assert!(
-    u32::from(FULL_TRAVEL_UNIT).saturating_mul(u32::from(TRAVEL_SCALE)) < 256,
-    "FULL_TRAVEL_UNIT * TRAVEL_SCALE overflows u8; reduce one of the constants"
-);
-
 /// Expected travel distance in physical units, represents 4.0 mm.
 const FULL_TRAVEL_UNIT: u8 = 40;
 
@@ -162,10 +151,6 @@ const POLY_A3: f32 = -2.99368e-8;
 /// Reference zero-travel ADC value used for calibration and used-sensor
 /// validation.
 pub const REF_ZERO_TRAVEL: u16 = 3121;
-
-/// Scale factor converting physical travel units into internal scaled travel
-/// units.
-const TRAVEL_SCALE: u8 = 6;
 
 /// Fallback zero-travel ADC value used before any calibration has run.
 const UNCALIBRATED_ZERO: u16 = 3000;
@@ -348,11 +333,11 @@ struct KeyState {
     last_raw: u16,
     /// Whether the key is currently considered pressed.
     pressed: bool,
-    /// Travel value from the previous scan cycle, in internal scaled units.
+    /// Travel value from the previous scan cycle.
     ///
     /// Used to skip redundant RT computations when travel has not changed
     /// after the noise gate passes.
-    travel_scaled: u8,
+    travel: u8,
 }
 
 impl KeyState {
@@ -361,7 +346,7 @@ impl KeyState {
     /// `last_raw` starts at [`u16::MAX`] so that the first real ADC reading
     /// always produces a diff larger than any noise gate, ensuring every key
     /// is evaluated on the very first scan pass.
-    pub const fn new() -> Self { Self { extremum: u8::MAX, last_raw: u16::MAX, travel_scaled: 0, pressed: false } }
+    pub const fn new() -> Self { Self { extremum: u8::MAX, last_raw: u16::MAX, travel: 0, pressed: false } }
 }
 
 impl Default for KeyState {
@@ -877,11 +862,10 @@ where
         buf: &mut [u16; ROW],
         cfg: HallCfg,
     ) -> Option<KeyboardEvent> {
-        let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
+        let act_threshold = cfg.actuation_pt;
         // Clamp to 1 so a zero config value never disables the dead-band.
-        let sensitivity_press = cfg.rt_sensitivity_press.saturating_mul(TRAVEL_SCALE).max(1);
-        let sensitivity_release = cfg.rt_sensitivity_release.saturating_mul(TRAVEL_SCALE).max(1);
-
+        let sensitivity_press = cfg.rt_sensitivity_press.max(1);
+        let sensitivity_release = cfg.rt_sensitivity_release.max(1);
         for col in 0..COL {
             cols.select(col);
             Timer::after(cfg.col_settle_us).await;
@@ -909,7 +893,7 @@ where
             // comparison.
             let first_pressed: [bool; ROW] = from_fn(|row| {
                 get2(calib, row, col)
-                    .and_then(|c| Self::travel_scaled_from(&c, first_read[row]))
+                    .and_then(|c| Self::travel_from(&c, first_read[row]))
                     .is_some_and(|t| t >= act_threshold)
             });
             let mut stable = true;
@@ -918,7 +902,7 @@ where
                 let state_changed =
                     buf.iter().zip(first_pressed.iter()).enumerate().any(|(row, (&recheck, &was_pressed))| {
                         get2(calib, row, col)
-                            .and_then(|c| Self::travel_scaled_from(&c, recheck))
+                            .and_then(|c| Self::travel_from(&c, recheck))
                             .is_some_and(|t| t >= act_threshold)
                             != was_pressed
                     });
@@ -946,9 +930,9 @@ where
                 Self::auto_calib_update(auto_calib, calib, row, col, raw);
 
                 let Some(cal) = get2(calib, row, col) else { continue };
-                let prev_travel = st.travel_scaled;
+                let prev_travel = st.travel;
                 let was_pressed = st.pressed;
-                let Some(new_travel) = Self::travel_scaled_from(&cal, raw) else { continue };
+                let Some(new_travel) = Self::travel_from(&cal, raw) else { continue };
 
                 st.last_raw = raw;
 
@@ -956,7 +940,7 @@ where
                     continue;
                 }
 
-                st.travel_scaled = new_travel;
+                st.travel = new_travel;
 
                 // Dynamic Rapid Trigger
                 let now_pressed = if was_pressed {
@@ -991,13 +975,13 @@ where
         None
     }
 
-    /// Convert a raw ADC reading into a scaled travel value.
+    /// Convert a raw ADC reading into a travel value.
     ///
     /// Returns `None` if the position is uncalibrated, if `raw` is outside
     /// [`VALID_RAW_MIN`]..=[`VALID_RAW_MAX`], or if the computation overflows.
     #[inline]
     #[optimize(speed)]
-    fn travel_scaled_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
+    fn travel_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
         if !cal.used {
             return None;
         }
@@ -1011,8 +995,8 @@ where
         let delta_raw = KeyCalib::poly(f32::from(raw)) - cal.poly_zero;
 
         let scaled =
-            (delta_raw / cal.poly_delta_full * f32::from(FULL_TRAVEL_SCALED)).clamp(0.0, f32::from(FULL_TRAVEL_SCALED));
-        Some(scaled.to_u8().unwrap_or(FULL_TRAVEL_SCALED))
+            (delta_raw / cal.poly_delta_full * f32::from(FULL_TRAVEL_UNIT)).clamp(0.0, f32::from(FULL_TRAVEL_UNIT));
+        Some(scaled.to_u8().unwrap_or(FULL_TRAVEL_UNIT))
     }
 }
 
