@@ -159,7 +159,8 @@ const POLY_A2: f32 = 2.04637e-4;
 /// Cubic coefficient of the Hall sensor transfer polynomial.
 const POLY_A3: f32 = -2.99368e-8;
 
-/// Reference zero-travel ADC value used as the LUT origin.
+/// Reference zero-travel ADC value used for calibration and used-sensor
+/// validation.
 pub const REF_ZERO_TRAVEL: u16 = 3121;
 
 /// Scale factor converting physical travel units into internal scaled travel
