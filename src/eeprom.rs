@@ -101,9 +101,9 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// Erase the entire EEPROM by writing `0xFF` to all 8 192 bytes.
     ///
     /// Pages are written sequentially from address `0x0000` to `0x1FFF` (256
-    /// pages × 32 bytes). The [`WRITE_CYCLE_DELAY`] is observed after every
-    /// page write, so this operation takes approximately 1.28 seconds to
-    /// complete.
+    /// pages × 32 bytes). After each page write, the driver waits for the
+    /// device to become ready again using the polling-based readiness check
+    /// before continuing with the next page.
     ///
     /// Call this once on first boot before starting a calibration run to
     /// guarantee no stale data survives in any region of the device.
