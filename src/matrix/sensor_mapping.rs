@@ -8,8 +8,7 @@ const _: [(); COL] = [(); 21];
 /// Whether each matrix position has a physical hall-effect sensor.
 ///
 /// Excluding these positions from calibration prevents their floating ADC
-/// readings from crossing
-/// [`crate::matrix::analog_matrix::CALIB_PRESS_THRESHOLD`] spuriously and
+/// readings from crossing the threshold spuriously and
 /// advancing `calibrated_count` to `total_keys` prematurely, which would cut
 /// the full-travel window short before all real keys are pressed.
 pub const SENSOR_POSITIONS: [[bool; COL]; ROW] = [

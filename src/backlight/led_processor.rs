@@ -61,8 +61,8 @@ impl LedIndicatorProcessor {
 
     /// Handle incoming lock LED indicator events.
     async fn on_led_indicator_event(&self, event: LedIndicatorEvent) {
-        let caps = event.indicator.caps_lock();
-        let num = event.indicator.num_lock();
+        let caps = event.caps_lock();
+        let num = event.num_lock();
 
         BACKLIGHT_CH.sender().send(Indicators { caps, num }).await;
     }
