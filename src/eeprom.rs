@@ -1,6 +1,7 @@
+use Pull::Up;
 use embassy_stm32::{
     gpio::{Flex, Pull, Speed},
-    i2c::{Error, I2c, mode::MasterMode},
+    i2c::{Error, Error::Overrun, I2c, mode::MasterMode},
     mode::Async,
 };
 use embassy_time::{Duration, Timer};
@@ -26,7 +27,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// Create a new driver.
     pub fn new(i2c: I2c<'peripherals, Async, IM>, mut wp: Flex<'peripherals>) -> Self {
         // Input pull-up: write-protect asserted via pull resistor.
-        wp.set_as_input(Pull::Up);
+        wp.set_as_input(Up);
         Self { i2c, wp }
     }
 
@@ -94,7 +95,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         }
 
         // Restore to input pull-up: write-protect re-asserted.
-        self.wp.set_as_input(Pull::Up);
+        self.wp.set_as_input(Up);
         result
     }
 
@@ -116,7 +117,10 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         let blank = [0xFF_u8; PAGE_SIZE];
         let mut offset = 0_usize;
         while offset < EEPROM_SIZE {
-            let addr = u16::try_from(offset).unwrap_or(u16::MAX);
+            let addr = match u16::try_from(offset) {
+                Ok(a) => a,
+                Err(_) => return Err(Overrun),
+            };
             let result = self.write(addr, &blank).await;
             if let Err(e) = result {
                 return Err(e);

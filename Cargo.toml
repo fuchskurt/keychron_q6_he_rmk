@@ -11,17 +11,17 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 crc = { version = "3", default-features = false }
-cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
-cortex-m-rt = "0.7"
+cortex-m = { version = "0", features = ["critical-section-single-core"] }
+cortex-m-rt = "0"
 embassy-time = { features = ["tick-hz-1_000_000"], git = "https://github.com/embassy-rs/embassy.git" }
 embassy-stm32 = { features = ["stm32f401rc", "memory-x", "time-driver-any", "exti", "unstable-pac"], git = "https://github.com/embassy-rs/embassy.git" }
 embassy-executor = { features = ["platform-cortex-m", "executor-thread"], git = "https://github.com/embassy-rs/embassy.git" }
-embedded-storage-async = "0.4"
+embedded-storage-async = "0"
 rmk = { default-features = false, features = ["async_matrix", "storage", "vial", "vial_lock"], git = "https://github.com/HaoboGu/rmk.git" }
-static_cell = "2.1"
+static_cell = "2"
 snled27351_driver = { git = "https://github.com/fuchskurt/snled27351_driver.git" }
-embedded-hal-async = "1.0"
-num-traits = { version = "0.2", default-features = false, features = ["libm"] }
+embedded-hal-async = "1"
+num-traits = { version = "0", default-features = false, features = ["libm"] }
 
 [patch.crates-io]
 embassy-time = { git = "https://github.com/embassy-rs/embassy.git" }
@@ -32,8 +32,8 @@ embassy-futures = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-usb = { git = "https://github.com/embassy-rs/embassy.git" }
 
 [build-dependencies]
-lzma-rust2 = "*"
-serde_json = { version = "*", features = ["preserve_order"] }
+lzma-rust2 = "0"
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [[bin]]
 name = "rmk-q6_he_ansi"

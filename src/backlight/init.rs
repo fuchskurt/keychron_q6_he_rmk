@@ -185,7 +185,7 @@ async fn render_calib(driver: &mut BacklightDriver, state: BacklightState) -> Re
     let mut bits = state.calib_leds_done;
     while bits != 0 {
         // Isolate and consume the lowest set bit.
-        let idx = usize::try_from(bits.trailing_zeros()).unwrap_or(0);
+        let idx = usize::try_from(bits.trailing_zeros()).unwrap_or(usize::MAX);
         driver.stage_led(idx, cal_r, cal_g, cal_b);
         bits &= bits.saturating_sub(1);
     }
