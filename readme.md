@@ -84,7 +84,7 @@ then starts normally.
 ## Keymap editing
 
 Connect the keyboard and open [Vial](https://get.vial.today) (desktop app or [vial.rocks](https://vial.rocks) in a
-browser). Select the keyboard, then remap keys, layers, or encoder actions , changes take effect immediately without
+browser). Select the keyboard, then remap keys, layers, or encoder actions. Changes take effect immediately without
 reflashing.
 
 ---
