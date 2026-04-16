@@ -1,4 +1,3 @@
-use Pull::Up;
 use embassy_stm32::{
     gpio::{Flex, Pull, Speed},
     i2c::{Error, Error::Overrun, I2c, mode::MasterMode},
@@ -27,7 +26,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// Create a new driver.
     pub fn new(i2c: I2c<'peripherals, Async, IM>, mut wp: Flex<'peripherals>) -> Self {
         // Input pull-up: write-protect asserted via pull resistor.
-        wp.set_as_input(Up);
+        wp.set_as_input(Pull::Up);
         Self { i2c, wp }
     }
 
@@ -95,7 +94,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         }
 
         // Restore to input pull-up: write-protect re-asserted.
-        self.wp.set_as_input(Up);
+        self.wp.set_as_input(Pull::Up);
         result
     }
 
