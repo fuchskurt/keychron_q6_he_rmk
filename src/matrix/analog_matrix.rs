@@ -97,11 +97,11 @@ where
 ///    `HallCfg::calib_passes` reads per key. Backlight signals amber.
 /// 2. **Full-travel pass** - user presses every key to the bottom within
 ///    `HallCfg::full_calib_duration`; each key must be held for
-///    [`crate::matrix::analog_matrix::types::CALIB_HOLD_DURATION_MS`] before it
-///    is accepted and its LED turns green.
+///    [`types::CALIB_HOLD_DURATION_MS`] before it is accepted and its LED turns
+///    green.
 ///
 /// After all keys are accepted a
-/// [`crate::matrix::analog_matrix::types::CALIB_SETTLE_AFTER_ALL_DONE`]
+/// [`types::CALIB_SETTLE_AFTER_ALL_DONE`]
 /// window continues sampling to capture the true bottom-out ADC. Validated
 /// entries are written to the FT24C64 EEPROM and verified by read-back. On all
 /// subsequent boots only full-travel data is loaded from EEPROM; zero-travel
@@ -169,11 +169,15 @@ where
         }
     }
 
-    /// Apply a row-major array of [`CalibEntry`] values to
-    /// `self.calib`, pairing each stored full-travel reading with the
-    /// corresponding live zero-travel reading from `zero_raw`.
-    fn apply_calib(&mut self, entries: &[[CalibEntry; COL]; ROW], zero_raw: &[[u16; COL]; ROW]) {
-        for ((cal_row, entry_row), zero_row) in self.calib.iter_mut().zip(entries).zip(zero_raw) {
+    /// Apply a row-major array of [`CalibEntry`] values to `calib`, pairing
+    /// each stored full-travel reading with the corresponding live zero-travel
+    /// reading from `zero_raw`.
+    fn apply_calib(
+        calib: &mut [[KeyCalib; COL]; ROW],
+        entries: &[[CalibEntry; COL]; ROW],
+        zero_raw: &[[u16; COL]; ROW],
+    ) {
+        for ((cal_row, entry_row), zero_row) in calib.iter_mut().zip(entries).zip(zero_raw) {
             for ((cal, entry), &zero) in cal_row.iter_mut().zip(entry_row).zip(zero_row) {
                 *cal = KeyCalib::new(zero, entry.full);
             }
@@ -217,18 +221,27 @@ where
 
         let loaded = self.eeprom.read(EEPROM_BASE_ADDR, &mut eeprom_buf).await.is_ok()
             && try_deserialize::<ROW, COL>(&eeprom_buf, &mut entries);
-
+        let mut buf = [0_u16; ROW];
+        let mut seq = self.adc_part.configured_sequence(self.irq);
         if loaded {
             // Re-measure zero travel on every boot to compensate for
             // temperature drift; full-travel data comes from EEPROM.
-            let zero_raw = self.calibrate_zero_raw().await;
-            self.apply_calib(&entries, &zero_raw);
+            let zero_raw = Self::calibrate_zero_raw(&mut self.cols, &mut seq, &mut buf, self.cfg).await;
+            Self::apply_calib(&mut self.calib, &entries, &zero_raw);
         } else {
-            self.run_first_boot_calib(&mut eeprom_buf, &mut entries).await;
+            Self::run_first_boot_calib(
+                &mut self.cols,
+                &mut seq,
+                &mut buf,
+                self.cfg,
+                &mut self.eeprom,
+                &mut self.calib,
+                &mut eeprom_buf,
+                &mut entries,
+            )
+            .await;
         }
 
-        let mut buf = [0_u16; ROW];
-        let mut seq = self.adc_part.configured_sequence(self.irq);
         loop {
             if let Some(ev) = Self::scan_for_next_change(
                 &mut self.cols,

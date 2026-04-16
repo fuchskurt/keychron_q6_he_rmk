@@ -5,12 +5,13 @@
 //! continuous background auto-calibration that runs during normal scanning
 //! lives in [`super::scan`] alongside the hot scan loop that calls it.
 
-use super::{AdcSampleTime, AnalogHallMatrix, get2};
+use super::{AdcSampleTime, AnalogHallMatrix, HallCfg, get2};
 use crate::{
     backlight::{
         led_processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
         mapping::MATRIX_TO_LED,
     },
+    eeprom::Ft24c64,
     matrix::{
         analog_matrix::types::{
             BOTTOM_JITTER,
@@ -19,6 +20,7 @@ use crate::{
             CALIB_SETTLE_AFTER_ALL_DONE,
             CALIB_ZERO_TOLERANCE,
             DEFAULT_FULL_RANGE,
+            KeyCalib,
             KeyCalibState,
             MIN_USEFUL_FULL_RANGE,
             REF_ZERO_TRAVEL,
@@ -28,12 +30,13 @@ use crate::{
         },
         calib_store,
         calib_store::{CALIB_BUF_LEN, CalibEntry, EEPROM_BASE_ADDR},
+        hc164_cols::Hc164Cols,
         sensor_mapping::SENSOR_POSITIONS,
     },
 };
 use calib_store::try_deserialize;
 use embassy_stm32::{
-    adc::{BasicInstance, Instance, RxDma},
+    adc::{BasicInstance, ConfiguredSequence, Instance, RxDma},
     dma::InterruptHandler,
     i2c::mode::MasterMode,
     interrupt::typelevel::Binding,
@@ -64,17 +67,20 @@ where
     /// `ROW × COL` array of raw ADC averages, each reduced by
     /// [`ZERO_TRAVEL_DEAD_ZONE`] so that the resting position sits cleanly
     /// below the measured average, preventing ADC noise from producing
-    /// spurious non-zero travel readings. Does not modify `self.calib`.
-    pub(super) async fn calibrate_zero_raw(&mut self) -> [[u16; COL]; ROW] {
+    /// spurious non-zero travel readings.
+    pub(super) async fn calibrate_zero_raw(
+        cols: &mut Hc164Cols<'_>,
+        seq: &mut ConfiguredSequence<'_, adc::Adc>,
+        buf: &mut [u16; ROW],
+        cfg: HallCfg,
+    ) -> [[u16; COL]; ROW] {
         let mut acc = [[0_u32; COL]; ROW];
-        let mut seq = self.adc_part.configured_sequence(self.irq);
-        let mut buf = [0_u16; ROW];
 
-        for _ in 0..self.cfg.calib_passes {
+        for _ in 0..cfg.calib_passes {
             for col in 0..COL {
-                self.cols.select(col);
-                Timer::after(self.cfg.col_settle_us).await;
-                seq.read(&mut buf).await;
+                cols.select(col);
+                Timer::after(cfg.col_settle_us).await;
+                seq.read(buf).await;
                 for (acc_row, &raw) in acc.iter_mut().zip(buf.iter()) {
                     if let Some(cell) = acc_row.get_mut(col) {
                         *cell = cell.saturating_add(u32::from(raw));
@@ -88,7 +94,7 @@ where
             for (res, &total) in res_row.iter_mut().zip(acc_row.iter()) {
                 // Leave the UNCALIBRATED_ZERO initializer in place on any
                 // arithmetic failure (e.g. calib_passes == 0).
-                if let Some(avg) = total.checked_div(self.cfg.calib_passes) {
+                if let Some(avg) = total.checked_div(cfg.calib_passes) {
                     *res = u16::try_from(avg).unwrap_or(UNCALIBRATED_ZERO).saturating_sub(ZERO_TRAVEL_DEAD_ZONE);
                 }
             }
@@ -109,7 +115,10 @@ where
     /// continuation window keeps updating `min_raw` so the stored value
     /// reflects the true bottom-out ADC, not merely the acceptance instant.
     pub(super) async fn sample_full_raw(
-        &mut self,
+        cols: &mut Hc164Cols<'_>,
+        seq: &mut ConfiguredSequence<'_, adc::Adc>,
+        buf: &mut [u16; ROW],
+        cfg: HallCfg,
         duration: Duration,
         zero_raw: &[[u16; COL]; ROW],
     ) -> [[u16; COL]; ROW] {
@@ -138,16 +147,14 @@ where
             .count()
             .max(1);
 
-        let mut seq = self.adc_part.configured_sequence(self.irq);
-        let mut buf = [0_u16; ROW];
         let mut last_pct: u8 = 0;
 
         // Phase A: sample until all real keys are accepted or the deadline expires.
         while Instant::now() < deadline && calibrated_count < total_keys {
             for col in 0..COL {
-                self.cols.select(col);
-                Timer::after(self.cfg.col_settle_us).await;
-                seq.read(&mut buf).await;
+                cols.select(col);
+                Timer::after(cfg.col_settle_us).await;
+                seq.read(buf).await;
 
                 for (row, &raw) in buf.iter().enumerate() {
                     // Always track the deepest reading seen, regardless of
@@ -221,17 +228,17 @@ where
             BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::AllAccepted)).ok();
         }
 
-        // Phase B: continue sampling for CALIB_SETTLE_AFTER_ALL_DONE_MS
-        // regardless of whether Phase A ended by full acceptance or timeout.
-        // This gives every accepted key time to reach its true bottom-out ADC
-        // rather than storing the value at the moment of acceptance, and still
-        // captures the deepest reading seen for any keys that ran out of time.
+        // Phase B: continue sampling for CALIB_SETTLE_AFTER_ALL_DONE regardless
+        // of whether Phase A ended by full acceptance or timeout.  This gives
+        // every accepted key time to reach its true bottom-out ADC rather than
+        // storing the value at the moment of acceptance, and still captures the
+        // deepest reading seen for any keys that ran out of time.
         let settle_deadline = Instant::now().saturating_add(CALIB_SETTLE_AFTER_ALL_DONE);
         while Instant::now() < settle_deadline {
             for col in 0..COL {
-                self.cols.select(col);
-                Timer::after(self.cfg.col_settle_us).await;
-                seq.read(&mut buf).await;
+                cols.select(col);
+                Timer::after(cfg.col_settle_us).await;
+                seq.read(buf).await;
                 for (row, &raw) in buf.iter().enumerate() {
                     update_min(row, col, raw);
                 }
@@ -242,7 +249,7 @@ where
     }
 
     /// Run the guided first-boot two-phase calibration, persist the result to
-    /// EEPROM, and apply it to `self.calib`.
+    /// EEPROM, and apply it to `calib`.
     ///
     /// Backlight signals during the process:
     /// - **Amber** - zero-travel pass, all keys must be released.
@@ -255,15 +262,20 @@ where
     /// Keys not pressed during the full-travel window fall back to
     /// `zero − DEFAULT_FULL_RANGE` so the keyboard remains functional.
     pub(super) async fn run_first_boot_calib(
-        &mut self,
+        cols: &mut Hc164Cols<'_>,
+        seq: &mut ConfiguredSequence<'_, adc::Adc>,
+        buf: &mut [u16; ROW],
+        cfg: HallCfg,
+        eeprom: &mut Ft24c64<'_, IM>,
+        calib: &mut [[KeyCalib; COL]; ROW],
         eeprom_buf: &mut [u8; CALIB_BUF_LEN],
         entries: &mut [[CalibEntry; COL]; ROW],
     ) {
         BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Zero)).ok();
-        let zero_raw = self.calibrate_zero_raw().await;
+        let zero_raw = Self::calibrate_zero_raw(cols, seq, buf, cfg).await;
 
         BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Full)).ok();
-        let full_raw = self.sample_full_raw(self.cfg.full_calib_duration, &zero_raw).await;
+        let full_raw = Self::sample_full_raw(cols, seq, buf, cfg, cfg.full_calib_duration, &zero_raw).await;
 
         for ((entry_row, zero_row), full_row) in entries.iter_mut().zip(zero_raw.iter()).zip(full_raw.iter()) {
             for ((entry, &zero), &seen_min) in entry_row.iter_mut().zip(zero_row.iter()).zip(full_row.iter()) {
@@ -276,19 +288,19 @@ where
             }
         }
 
-        self.apply_calib(entries, &zero_raw);
+        Self::apply_calib(calib, entries, &zero_raw);
 
         // Allow the backlight channel to drain before starting the I²C write.
         Timer::after_micros(200).await;
         calib_store::serialize(entries, eeprom_buf);
-        let erase_ok = self.eeprom.zero_out().await.is_ok();
-        let write_ok = self.eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
+        let erase_ok = eeprom.zero_out().await.is_ok();
+        let write_ok = eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
 
         // Verify by reading back into the same buffer and re-deserializing.
         // Reusing the buffer avoids a second large stack allocation.
         let verified = erase_ok
             && write_ok
-            && self.eeprom.read(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
+            && eeprom.read(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
             && try_deserialize::<ROW, COL>(eeprom_buf, entries);
 
         if !verified {
