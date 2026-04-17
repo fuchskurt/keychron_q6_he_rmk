@@ -30,7 +30,7 @@ use embassy_stm32::{
 };
 use embassy_time::Timer;
 use rmk::{
-    event::{KeyboardEvent, publish_event_async},
+    event::KeyboardEvent,
     input_device::{InputDevice, Runnable},
 };
 pub use types::HallCfg;
@@ -242,21 +242,16 @@ where
             .await;
         }
 
-        loop {
-            if let Some(ev) = Self::scan_for_next_change(
-                &mut self.cols,
-                &mut self.state,
-                &mut self.calib,
-                &mut self.auto_calib,
-                &mut seq,
-                &mut buf,
-                self.cfg,
-            )
-            .await
-            {
-                publish_event_async(ev).await;
-            }
-        }
+        Self::run_scan_loop(
+            &mut self.cols,
+            &mut self.state,
+            &mut self.calib,
+            &mut self.auto_calib,
+            &mut seq,
+            &mut buf,
+            self.cfg,
+        )
+        .await;
     }
 }
 

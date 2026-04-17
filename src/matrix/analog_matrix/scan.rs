@@ -2,7 +2,7 @@
 //! computation.
 //!
 //! [`auto_calib_update`] and [`travel_from`] are free functions so they can be
-//! inlined into [`AnalogHallMatrix::scan_for_next_change`] without going
+//! inlined into [`AnalogHallMatrix::run_scan_loop`] without going
 //! through an extra method dispatch.
 
 use super::{AdcSampleTime, AnalogHallMatrix, AutoCalib, HallCfg, KeyCalib, KeyState, get2, get2_mut};
@@ -33,7 +33,7 @@ use embassy_stm32::{
 };
 use embassy_time::Timer;
 use num_traits::ToPrimitive as _;
-use rmk::event::KeyboardEvent;
+use rmk::event::{KeyboardEvent, publish_event_async};
 
 /// Update the auto-calibration state machine for a single key.
 ///
@@ -154,16 +154,17 @@ where
     IM: embassy_stm32::i2c::mode::MasterMode,
     AdcSampleTime<ADC>: Clone,
 {
-    /// Scan the matrix once, returning the first key state change found.
+    /// Hot-path matrix scan loop. Runs forever, publishing key state changes
+    /// directly via [`publish_event_async`] as they are detected.
     ///
-    /// The [`ConfiguredSequence`] is programmed once per invocation and
-    /// reused across all columns. Both the column settle delay and the DMA
+    /// The [`ConfiguredSequence`] is programmed once before entry and reused
+    /// across all columns and passes. Both the column settle delay and the DMA
     /// transfer are fully async. For each reading that passes the noise gate
     /// the auto-calibrator is updated before the travel and rapid-trigger
     /// logic runs, so any calibration refinement takes effect within the same
     /// scan pass.
     #[optimize(speed)]
-    pub(super) async fn scan_for_next_change(
+    pub(super) async fn run_scan_loop(
         cols: &mut Hc164Cols<'peripherals>,
         state: &mut [[KeyState; COL]; ROW],
         calib: &mut [[KeyCalib; COL]; ROW],
@@ -171,88 +172,90 @@ where
         seq: &mut ConfiguredSequence<'_, adc::Adc>,
         buf: &mut [u16; ROW],
         cfg: HallCfg,
-    ) -> Option<KeyboardEvent> {
+    ) -> ! {
         let act_threshold = cfg.actuation_pt;
         // Clamp to 1 so a zero config value never disables the dead-band.
         let sensitivity_press = cfg.rt_sensitivity_press.max(1);
         let sensitivity_release = cfg.rt_sensitivity_release.max(1);
-        for col in 0..COL {
-            cols.select(col);
-            Timer::after(cfg.col_settle_us).await;
-            seq.read(buf).await;
+        loop {
+            for col in 0..COL {
+                cols.select(col);
+                Timer::after(cfg.col_settle_us).await;
+                seq.read(buf).await;
 
-            for (row, &raw) in buf.iter().enumerate() {
-                // Skip positions with no physical hall-effect sensor. Their
-                // ADC readings are undefined and must never feed the key-state
-                // machine or auto-calibrator.
-                if !SENSOR_POSITIONS.get(row).and_then(|r| r.get(col)).copied().unwrap_or(false) {
-                    continue;
-                }
-
-                let Some(st) = get2_mut(state, row, col) else { continue };
-                let last_raw = st.last_raw;
-
-                // Skip if the reading has not changed beyond the noise gate.
-                if likely(last_raw.abs_diff(raw) < cfg.noise_gate) {
-                    continue;
-                }
-
-                // Record the raw value now so that repeated identical readings
-                // are filtered by the noise gate even when travel_from later
-                // returns None (uncalibrated or out-of-range position).
-                st.last_raw = raw;
-
-                // Update the auto-calibrator with this reading before the
-                // travel computation so any refined KeyCalib is used immediately.
-                auto_calib_update(auto_calib, calib, row, col, raw);
-
-                let Some(cal) = get2(calib, row, col) else { continue };
-                let prev_travel = st.travel;
-                let was_pressed = st.pressed;
-                let Some(new_travel) = travel_from(&cal, raw) else { continue };
-
-                if new_travel == prev_travel {
-                    continue;
-                }
-
-                st.travel = new_travel;
-
-                // Dynamic Rapid Trigger
-                let now_pressed = if was_pressed {
-                    // Track the peak while held; release when travel drops at
-                    // least `sensitivity_release` below it. The actuation floor
-                    // is a hard lower bound that forces an immediate release.
-                    st.extremum = st.extremum.max(new_travel);
-                    new_travel >= act_threshold && new_travel > st.extremum.saturating_sub(sensitivity_release)
-                } else {
-                    // Track the trough while released; re-press when travel
-                    // climbs at least `sensitivity_press` above it AND exceeds
-                    // the actuation floor. The trough is not required to have
-                    // dipped below the floor first, so a finger hovering
-                    // mid-travel after an RT-release can re-fire immediately. When travel drops
-                    // below the actuation floor the trough is additionally
-                    // clamped so the key re-presses cleanly at `act_threshold`
-                    // without requiring an extra delta above it.
-                    st.extremum = st.extremum.min(new_travel);
-                    if new_travel < act_threshold {
-                        st.extremum = st.extremum.min(act_threshold.saturating_sub(sensitivity_press));
+                for (row, &raw) in buf.iter().enumerate() {
+                    // Skip positions with no physical hall-effect sensor. Their
+                    // ADC readings are undefined and must never feed the key-state
+                    // machine or auto-calibrator.
+                    if !SENSOR_POSITIONS.get(row).and_then(|r| r.get(col)).copied().unwrap_or(false) {
+                        continue;
                     }
-                    new_travel >= act_threshold && new_travel >= st.extremum.saturating_add(sensitivity_press)
-                };
 
-                if now_pressed != st.pressed {
-                    // Reset extremum so the next direction starts fresh from
-                    // the transition point.
-                    st.extremum = new_travel;
-                    st.pressed = now_pressed;
-                    return Some(KeyboardEvent::key(
-                        u8::try_from(row).unwrap_or_default(),
-                        u8::try_from(col).unwrap_or_default(),
-                        now_pressed,
-                    ));
+                    let Some(st) = get2_mut(state, row, col) else { continue };
+                    let last_raw = st.last_raw;
+
+                    // Skip if the reading has not changed beyond the noise gate.
+                    if likely(last_raw.abs_diff(raw) < cfg.noise_gate) {
+                        continue;
+                    }
+
+                    // Record the raw value now so that repeated identical readings
+                    // are filtered by the noise gate even when travel_from later
+                    // returns None (uncalibrated or out-of-range position).
+                    st.last_raw = raw;
+
+                    // Update the auto-calibrator with this reading before the
+                    // travel computation so any refined KeyCalib is used immediately.
+                    auto_calib_update(auto_calib, calib, row, col, raw);
+
+                    let Some(cal) = get2(calib, row, col) else { continue };
+                    let prev_travel = st.travel;
+                    let was_pressed = st.pressed;
+                    let Some(new_travel) = travel_from(&cal, raw) else { continue };
+
+                    if new_travel == prev_travel {
+                        continue;
+                    }
+
+                    st.travel = new_travel;
+
+                    // Dynamic Rapid Trigger
+                    let now_pressed = if was_pressed {
+                        // Track the peak while held; release when travel drops at
+                        // least `sensitivity_release` below it. The actuation floor
+                        // is a hard lower bound that forces an immediate release.
+                        st.extremum = st.extremum.max(new_travel);
+                        new_travel >= act_threshold && new_travel > st.extremum.saturating_sub(sensitivity_release)
+                    } else {
+                        // Track the trough while released; re-press when travel
+                        // climbs at least `sensitivity_press` above it AND exceeds
+                        // the actuation floor. The trough is not required to have
+                        // dipped below the floor first, so a finger hovering
+                        // mid-travel after an RT-release can re-fire immediately. When travel drops
+                        // below the actuation floor the trough is additionally
+                        // clamped so the key re-presses cleanly at `act_threshold`
+                        // without requiring an extra delta above it.
+                        st.extremum = st.extremum.min(new_travel);
+                        if new_travel < act_threshold {
+                            st.extremum = st.extremum.min(act_threshold.saturating_sub(sensitivity_press));
+                        }
+                        new_travel >= act_threshold && new_travel >= st.extremum.saturating_add(sensitivity_press)
+                    };
+
+                    if now_pressed != st.pressed {
+                        // Reset extremum so the next direction starts fresh from
+                        // the transition point.
+                        st.extremum = new_travel;
+                        st.pressed = now_pressed;
+                        publish_event_async(KeyboardEvent::key(
+                            u8::try_from(row).unwrap_or_default(),
+                            u8::try_from(col).unwrap_or_default(),
+                            now_pressed,
+                        ))
+                        .await;
+                    }
                 }
             }
         }
-        None
     }
 }
