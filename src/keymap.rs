@@ -1,6 +1,6 @@
 //! Default keymap definitions and sizes.
 
-use crate::keymap::keymap::{
+use crate::keymap::definition::{
     ENCODER_VOLUME,
     EncoderAction,
     KeyAction,
@@ -24,7 +24,7 @@ pub const NUM_ENCODER: usize = 1;
 
 #[rustfmt::skip]
 #[expect(clippy::min_ident_chars, reason = "RMK-side implementation")]
-mod keymap {
+mod definition {
     use crate::keymap::{COL, NUM_ENCODER};
     pub use rmk::types::action::{EncoderAction, KeyAction};
     use rmk::{a, df, encoder, k};
