@@ -8,6 +8,7 @@
     const_option_ops,
     const_result_trait_fn,
     float_algebraic,
+    impl_trait_in_assoc_type,
     optimize_attribute,
     likely_unlikely
 )]
