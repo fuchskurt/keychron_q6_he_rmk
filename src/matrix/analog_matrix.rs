@@ -189,9 +189,10 @@ where
 {
     type Event = KeyboardEvent;
 
-    /// Not used - events are published directly via [`publish_event_async`] in
-    /// [`Runnable::run`]. Returns [`pending`] to satisfy the trait bound
-    /// without competing with the scan loop.
+    /// Not used - events are published directly via
+    /// [`rmk::event::publish_event_async`] in [`Runnable::run`]. Returns
+    /// [`pending`] to satisfy the trait bound without competing with the
+    /// scan loop.
     async fn read_event(&mut self) -> Self::Event { pending().await }
 }
 

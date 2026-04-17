@@ -108,7 +108,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         result
     }
 
-    /// Erase the entire EEPROM by writing `0xFF` to all 8 192 bytes.
+    /// Erase the entire EEPROM by writing `0xFF` to all [`EEPROM_SIZE`] bytes.
     ///
     /// Pages are written sequentially from address `0x0000` to `0x1FFF` (256
     /// pages × 32 bytes). After each page write the driver polls for
