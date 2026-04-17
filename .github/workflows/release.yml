@@ -22,18 +22,6 @@ jobs:
         with:
           targets: thumbv7em-none-eabihf
           components: rust-src
-
-      - name: Cache Cargo registry & build artifacts
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
       - name: Install cargo-make
         run: cargo install cargo-make
 
@@ -55,9 +43,9 @@ jobs:
       - name: Rename artifacts with version tag
         run: |
           TAG="${{ github.ref_name }}"
-          mv rmk.bin "rmk-q6_he_ansi-${TAG}.bin"
-          mv rmk.hex "rmk-q6_he_ansi-${TAG}.hex"
-          mv rmk.uf2 "rmk-q6_he_ansi-${TAG}.uf2"
+          mv rmk.bin "keychron-q6-he-rmk-${TAG}.bin"
+          mv rmk.hex "keychron-q6-he-rmk-${TAG}.hex"
+          mv rmk.uf2 "keychron-q6-he-rmk-${TAG}.uf2"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -83,8 +71,8 @@ jobs:
             cargo run --release
             ```
           files: |
-            rmk-q6_he_ansi-${{ github.ref_name }}.bin
-            rmk-q6_he_ansi-${{ github.ref_name }}.hex
-            rmk-q6_he_ansi-${{ github.ref_name }}.uf2
+            keychron-q6-he-rmk-${{ github.ref_name }}.bin
+            keychron-q6-he-rmk-${{ github.ref_name }}.hex
+            keychron-q6-he-rmk-${{ github.ref_name }}.uf2
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

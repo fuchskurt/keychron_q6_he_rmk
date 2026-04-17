@@ -30,18 +30,6 @@ jobs:
         with:
           targets: thumbv7em-none-eabihf
           components: rust-src
-
-      - name: Cache Cargo
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-docs-
-
       - name: Install flip-link
         run: cargo install flip-link
 
@@ -50,11 +38,6 @@ jobs:
           cargo doc --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: "--default-theme dark"
-
-      - name: Add redirect at root
-        run: |
-          echo '<meta http-equiv="refresh" content="0; url=rmk_q6_he_ansi">' \
-            > target/thumbv7em-none-eabihf/doc/index.html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4

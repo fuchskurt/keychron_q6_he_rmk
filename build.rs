@@ -2,23 +2,30 @@
 //!
 //! Generates Vial keyboard configuration constants from `vial.json` and
 //! sets the required linker arguments for the Cortex-M4 target.
+#![expect(
+    clippy::single_call_fn,
+    clippy::question_mark_used,
+    clippy::blanket_clippy_restriction_lints,
+    reason = "Used for building the package."
+)]
 
+use core::error::Error;
 use fs::read_to_string;
 use lzma_rust2::{XzOptions, XzWriter};
 use serde_json::{Value, from_str, to_string};
-use std::{env, fmt::Write as _, fs, io::Write, path::Path};
+use std::{env, fs, io::Write as _, path::Path};
 
 /// Entry point for the build script.
 ///
 /// Registers change detection for `vial.json` and `memory.x`, sets the
 /// required linker arguments, and triggers Vial config generation.
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=vial.json");
     println!("cargo:rerun-if-changed=memory.x");
     println!("cargo:rustc-link-arg=--nmagic");
     println!("cargo:rustc-link-arg=-Tlink.x");
 
-    generate_vial_config();
+    generate_vial_config()
 }
 
 /// Generates the Vial keyboard configuration constants and writes them to
@@ -30,14 +37,13 @@ fn main() {
 /// - `VIAL_KEYBOARD_ID`: Unique 8-byte keyboard identifier.
 /// - `VIAL_SERIAL`: Vial serial string derived from the first 4 bytes of the
 ///   keyboard ID.
-fn generate_vial_config() {
-    let out_file = Path::new(&env::var_os("OUT_DIR").unwrap()).join("config_generated.rs");
-
-    let vial_cfg = read_vial_json();
-    let compressed = compress_vial_cfg(&vial_cfg);
+fn generate_vial_config() -> Result<(), Box<dyn Error>> {
+    let out_file = Path::new(&env::var_os("OUT_DIR").ok_or("OUT_DIR not set")?).join("config_generated.rs");
+    let vial_cfg = read_vial_json()?;
+    let compressed = compress_vial_cfg(&vial_cfg)?;
     let keyboard_id: [u8; 8] = [0x36, 0x3B, 0x06, 0xF5, 0x13, 0x9F, 0xE4, 0x46];
-
-    fs::write(out_file, format_constants(&compressed, &keyboard_id)).unwrap();
+    fs::write(out_file, format_constants(&compressed, keyboard_id))?;
+    Ok(())
 }
 
 /// Reads and minifies `vial.json` from the crate root.
@@ -45,39 +51,32 @@ fn generate_vial_config() {
 /// Parses the JSON and re-stringifies it to strip whitespace before
 /// compression. Prints a diagnostic message to stderr if the file cannot
 /// be opened, and returns an empty string so compression can still proceed.
-fn read_vial_json() -> String {
-    read_to_string("vial.json")
-        .map(|content| {
-            let value: Value = from_str(&content).unwrap();
-            to_string(&value).unwrap()
-        })
-        .expect("failed to read vial.json")
+fn read_vial_json() -> Result<String, Box<dyn Error>> {
+    let content = read_to_string("vial.json")?;
+    let value: Value = from_str(&content)?;
+    Ok(to_string(&value)?)
 }
 
 /// Compresses a Vial config string using XZ at compression level 9.
 ///
 /// Returns the compressed bytes as a `Vec<u8>` ready to be embedded as a
 /// constant in the generated source file.
-fn compress_vial_cfg(vial_cfg: &str) -> Vec<u8> {
+fn compress_vial_cfg(vial_cfg: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut compressed = Vec::new();
-    XzWriter::new(&mut compressed, XzOptions::with_preset(9))
-        .unwrap()
-        .auto_finish()
-        .write_all(vial_cfg.as_bytes())
-        .unwrap();
-    compressed
+    XzWriter::new(&mut compressed, XzOptions::with_preset(9))?.auto_finish().write_all(vial_cfg.as_bytes())?;
+    Ok(compressed)
 }
 
 /// Formats all Vial configuration constants into a Rust source string.
 ///
 /// Derives `VIAL_SERIAL` from the first 4 bytes of `keyboard_id` and
 /// delegates byte array formatting to [`format_byte_array`].
-fn format_constants(compressed: &[u8], keyboard_id: &[u8; 8]) -> String {
+fn format_constants(compressed: &[u8], keyboard_id: [u8; 8]) -> String {
     let id = |i: usize| keyboard_id.get(i).copied().unwrap_or(0);
-    let vial_serial = format!("vial:{:02x}{:02x}{:02x}{:02x}:000001", id(0), id(1), id(2), id(3),);
+    let vial_serial = format!("vial:{:02x}{:02x}{:02x}{:02x}:000001", id(0), id(1), id(2), id(3));
 
     let def_bytes = format_byte_array(compressed);
-    let id_bytes = format_byte_array(keyboard_id);
+    let id_bytes = format_byte_array(&keyboard_id);
 
     format!(
         "/// XZ-compressed Vial keyboard definition, derived from `vial.json`.\n\
@@ -95,11 +94,5 @@ fn format_constants(compressed: &[u8], keyboard_id: &[u8; 8]) -> String {
 /// `clippy::unseparated_literal_suffix` lint without requiring any allow
 /// attributes in the generated file.
 fn format_byte_array(bytes: &[u8]) -> String {
-    bytes.iter().enumerate().fold(String::new(), |mut acc, (i, b)| {
-        if i > 0 {
-            acc.push_str(", ");
-        }
-        write!(acc, "0x{b:02X}_u8").unwrap();
-        acc
-    })
+    bytes.iter().map(|byte| format!("0x{byte:02X}_u8")).collect::<Vec<_>>().join(", ")
 }

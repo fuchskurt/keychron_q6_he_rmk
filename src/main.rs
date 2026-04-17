@@ -1,7 +1,5 @@
 #![no_main]
 #![no_std]
-#![deny(warnings)]
-#![warn(clippy::all, clippy::pedantic, clippy::restriction, clippy::nursery)]
 #![feature(
     const_convert,
     const_trait_impl,
@@ -11,17 +9,6 @@
     const_result_trait_fn,
     optimize_attribute,
     likely_unlikely
-)]
-#![expect(
-    clippy::blanket_clippy_restriction_lints,
-    clippy::future_not_send,
-    clippy::implicit_return,
-    clippy::separated_literal_suffix,
-    clippy::single_call_fn,
-    clippy::self_named_module_files,
-    clippy::pub_with_shorthand,
-    clippy::pub_use,
-    reason = "Implementation specific ignored lints"
 )]
 /// Backlight driver integration.
 mod backlight;

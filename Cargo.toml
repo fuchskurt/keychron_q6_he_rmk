@@ -1,10 +1,11 @@
 cargo-features = ["panic-immediate-abort"]
 
+[workspace]
+
 [package]
-name = "rmk-q6_he_ansi"
+name = "keychron-q6-he-rmk"
 version = "1.2.0"
-description = "Keychron Q6 HE ANSI keyboard firmware written in Rust using RMK and Embassy"
-homepage = "https://github.com/fuchskurt/keychron_q6_he_rmk"
+description = "Keychron Q6 HE keyboard firmware written in Rust using RMK and Embassy"
 repository = "https://github.com/fuchskurt/keychron_q6_he_rmk"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -35,8 +36,29 @@ embassy-usb = { git = "https://github.com/embassy-rs/embassy.git" }
 lzma-rust2 = "0"
 serde_json = { version = "1", features = ["preserve_order"] }
 
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"
+restriction = "deny"
+nursery = "deny"
+blanket_clippy_restriction_lints = "allow"
+future_not_send = "allow"
+implicit_return = "allow"
+separated_literal_suffix = "allow"
+single_call_fn = "allow"
+self_named_module_files = "allow"
+pub_with_shorthand = "allow"
+pub_use = "allow"
+
+[lints]
+workspace = true
+
 [[bin]]
-name = "rmk-q6_he_ansi"
+name = "keychron-q6-he-rmk"
 test = false
 bench = false
 
