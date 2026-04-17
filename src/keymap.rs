@@ -23,11 +23,10 @@ pub const NUM_LAYER: usize = 2;
 pub const NUM_ENCODER: usize = 1;
 
 #[rustfmt::skip]
-#[expect(clippy::min_ident_chars, reason = "RMK-side implementation")]
 mod definition {
     use crate::keymap::{COL, NUM_ENCODER};
-    pub use rmk::types::action::{EncoderAction, KeyAction};
-    use rmk::{a, df, encoder, k};
+pub use rmk::types::action::{EncoderAction, KeyAction};
+use rmk::{a, df, encoder, k};
 
     pub const ROW0: [KeyAction; COL]     = [k!(Escape),   k!(F1),   k!(F2),    k!(F3),  k!(F4),  k!(F5),  k!(F6),    k!(F7),  k!(F8),  k!(F9),    k!(F10),       k!(F11),         k!(F12),          k!(AudioMute), k!(PrintScreen), k!(ScrollLock), k!(Pause),    k!(F13),     k!(F14),     k!(F15),        k!(F16)];
     pub const ROW1: [KeyAction; COL]     = [k!(Grave),    k!(Kc1),  k!(Kc2),   k!(Kc3), k!(Kc4), k!(Kc5), k!(Kc6),   k!(Kc7), k!(Kc8), k!(Kc9),   k!(Kc0),       k!(Minus),       k!(Equal),        k!(Backspace), k!(Insert),      k!(Home),       k!(PageUp),   k!(NumLock), k!(KpSlash), k!(KpAsterisk), k!(KpMinus)];

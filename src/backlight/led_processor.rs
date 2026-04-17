@@ -1,4 +1,3 @@
-use BacklightCmd::Indicators;
 use rmk::{
     channel::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel},
     event::LedIndicatorEvent,
@@ -64,6 +63,6 @@ impl LedIndicatorProcessor {
         let caps = event.caps_lock();
         let num = event.num_lock();
 
-        BACKLIGHT_CH.sender().send(Indicators { caps, num }).await;
+        BACKLIGHT_CH.sender().try_send(BacklightCmd::Indicators { caps, num }).ok();
     }
 }
