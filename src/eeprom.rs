@@ -12,6 +12,8 @@ const DEVICE_ADDR: u8 = 0x51;
 const EEPROM_SIZE: usize = 8192;
 /// Page write size in bytes per the FT24C64 datasheet.
 const PAGE_SIZE: usize = 32;
+/// Delay between successive I²C acknowledgement polls.
+const READY_POLL_INTERVAL: Duration = Duration::from_micros(20);
 
 /// Driver for the FT24C64 64-Kbit (8 K × 8) I²C EEPROM.
 pub struct Ft24c64<'peripherals, IM: MasterMode> {
@@ -31,11 +33,14 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     }
 
     /// Poll the device with a zero-length write until it ACKs, indicating
-    /// the internal write cycle has completed. Retries up to `max_attempts`
-    /// times with a short yield between each attempt.
+    /// the device is ready to accept commands. Used both after page writes
+    /// to wait for the internal write cycle to complete, and on first access
+    /// after power-on to wait out the reset delay.
     ///
-    /// Returns `Ok(())` as soon as the device acknowledges. Returns
-    /// [`Error`] if the device does not become ready within `max_attempts`.
+    /// Retries up to `max_attempts` times with [`READY_POLL_INTERVAL`]
+    /// between each attempt. Returns `Ok(())` as soon as the device
+    /// acknowledges, or [`Error`] if it does not become ready within
+    /// `max_attempts`.
     async fn poll_until_ready(&mut self, max_attempts: u8) -> Result<(), Error> {
         let mut attempts = 0_u8;
         loop {
@@ -47,7 +52,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
             if attempts >= max_attempts {
                 return result;
             }
-            Timer::after(Duration::from_micros(20)).await;
+            Timer::after(READY_POLL_INTERVAL).await;
         }
     }
 
