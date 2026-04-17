@@ -293,7 +293,7 @@ where
         // Allow the backlight channel to drain before starting the I²C write.
         Timer::after_micros(200).await;
         calib_store::serialize(entries, eeprom_buf);
-        let erase_ok = eeprom.zero_out().await.is_ok();
+        let erase_ok = eeprom.erase().await.is_ok();
         let write_ok = eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
 
         // Verify by reading back into the same buffer and re-deserializing.

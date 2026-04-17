@@ -111,18 +111,17 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// Erase the entire EEPROM by writing `0xFF` to all 8 192 bytes.
     ///
     /// Pages are written sequentially from address `0x0000` to `0x1FFF` (256
-    /// pages × 32 bytes). After each page write, the driver waits for the
-    /// device to become ready again using the polling-based readiness check
-    /// before continuing with the next page.
+    /// pages × 32 bytes). After each page write the driver polls for
+    /// readiness before continuing with the next page.
     ///
-    /// Call this once on first boot before starting a calibration run to
-    /// guarantee no stale data survives in any region of the device.
+    /// Call this before writing new calibration data to guarantee no stale
+    /// data survives in any region of the device.
     ///
     /// # Errors
     ///
     /// Returns the first [`Error`] encountered. Any pages written before the
     /// failure are not rolled back.
-    pub async fn zero_out(&mut self) -> Result<(), Error> {
+    pub async fn erase(&mut self) -> Result<(), Error> {
         let blank = [0xFF_u8; PAGE_SIZE];
         let mut offset = 0_usize;
         while offset < EEPROM_SIZE {
