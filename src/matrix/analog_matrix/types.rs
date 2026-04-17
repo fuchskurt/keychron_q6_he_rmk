@@ -192,9 +192,6 @@ pub struct HallCfg {
     /// Number of full-matrix passes averaged together during zero-travel
     /// calibration.
     pub calib_passes: u32,
-    /// Time to wait after selecting a new column before reading ADC values,
-    /// allowing the analog bus to settle.
-    pub col_settle_us: Duration,
     /// Duration of the full-travel sampling window during first-boot
     /// calibration.
     pub full_calib_duration: Duration,
@@ -207,8 +204,6 @@ pub struct HallCfg {
     /// Minimum downward travel from the peak required to register a release,
     /// in mm/10 units (e.g. 1 = 0.1 mm).
     pub rt_sensitivity_release: u8,
-    /// CPU cycles to hold each HC164 pin transition stable.
-    pub shifter_delay_cycles: u32,
 }
 
 impl Default for HallCfg {
@@ -217,12 +212,10 @@ impl Default for HallCfg {
         Self {
             actuation_pt: 8,
             calib_passes: 512,
-            col_settle_us: Duration::from_micros(5),
             full_calib_duration: Duration::from_secs(360),
             noise_gate: 10,
             rt_sensitivity_press: 3,
             rt_sensitivity_release: 3,
-            shifter_delay_cycles: 4,
         }
     }
 }

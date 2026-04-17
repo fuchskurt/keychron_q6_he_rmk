@@ -174,7 +174,7 @@ async fn main(spawner: Spawner) {
     let ds = Output::new(peripheral.PB3, Level::Low, Speed::VeryHigh);
     let cp = Output::new(peripheral.PB5, Level::Low, Speed::VeryHigh);
     let mr = Output::new(peripheral.PD2, Level::Low, Speed::VeryHigh);
-    let cols = Hc164Cols::new(ds, cp, mr, HallCfg::default().shifter_delay_cycles);
+    let cols = Hc164Cols::new(ds, cp, mr);
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(peripheral.ADC1);

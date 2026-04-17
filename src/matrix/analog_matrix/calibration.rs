@@ -79,7 +79,6 @@ where
         for _ in 0..cfg.calib_passes {
             for col in 0..COL {
                 cols.select(col);
-                Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
                 for (acc_row, &raw) in acc.iter_mut().zip(buf.iter()) {
                     if let Some(cell) = acc_row.get_mut(col) {
@@ -118,7 +117,6 @@ where
         cols: &mut Hc164Cols<'_>,
         seq: &mut ConfiguredSequence<'_, adc::Adc>,
         buf: &mut [u16; ROW],
-        cfg: HallCfg,
         duration: Duration,
         zero_raw: &[[u16; COL]; ROW],
     ) -> [[u16; COL]; ROW] {
@@ -153,7 +151,6 @@ where
         while Instant::now() < deadline && calibrated_count < total_keys {
             for col in 0..COL {
                 cols.select(col);
-                Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
 
                 for (row, &raw) in buf.iter().enumerate() {
@@ -237,7 +234,6 @@ where
         while Instant::now() < settle_deadline {
             for col in 0..COL {
                 cols.select(col);
-                Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
                 for (row, &raw) in buf.iter().enumerate() {
                     update_min(row, col, raw);
@@ -275,7 +271,7 @@ where
         let zero_raw = Self::calibrate_zero_raw(cols, seq, buf, cfg).await;
 
         BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Full)).ok();
-        let full_raw = Self::sample_full_raw(cols, seq, buf, cfg, cfg.full_calib_duration, &zero_raw).await;
+        let full_raw = Self::sample_full_raw(cols, seq, buf, cfg.full_calib_duration, &zero_raw).await;
 
         for ((entry_row, zero_row), full_row) in entries.iter_mut().zip(zero_raw.iter()).zip(full_raw.iter()) {
             for ((entry, &zero), &seen_min) in entry_row.iter_mut().zip(zero_row.iter()).zip(full_row.iter()) {

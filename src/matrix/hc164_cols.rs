@@ -1,5 +1,4 @@
 use core::hint::unlikely;
-use cortex_m::asm::delay;
 use embassy_stm32::gpio::Output;
 
 /// Column selector driven by an HC164 shift register.
@@ -10,27 +9,18 @@ pub struct Hc164Cols<'peripherals> {
     ds: Output<'peripherals>,
     /// Master reset (`MR`) input for clearing the register.
     mr: Output<'peripherals>,
-    /// CPU cycles between pin transitions.
-    shifter_delay_cycles: u32,
 }
 
 impl<'peripherals> Hc164Cols<'peripherals> {
     /// Create a new column selector for the HC164.
-    pub const fn new(
-        ds: Output<'peripherals>,
-        cp: Output<'peripherals>,
-        mr: Output<'peripherals>,
-        shifter_delay_cycles: u32,
-    ) -> Self {
-        Self { cp, ds, mr, shifter_delay_cycles }
+    pub const fn new(ds: Output<'peripherals>, cp: Output<'peripherals>, mr: Output<'peripherals>) -> Self {
+        Self { cp, ds, mr }
     }
 
     /// Pulse the clock pin for one shift step.
     fn pulse_cp(&mut self) {
         self.cp.set_high();
-        delay(self.shifter_delay_cycles);
         self.cp.set_low();
-        delay(self.shifter_delay_cycles);
     }
 
     /// Select the given column.
@@ -45,13 +35,10 @@ impl<'peripherals> Hc164Cols<'peripherals> {
         if unlikely(col == 0) {
             // Clear all outputs by pulsing MR low.
             self.mr.set_low();
-            delay(self.shifter_delay_cycles);
             self.mr.set_high();
-            delay(self.shifter_delay_cycles);
 
             // Clock in the walking-one at position 0.
             self.ds.set_high();
-            delay(self.shifter_delay_cycles);
             self.pulse_cp();
             self.ds.set_low();
         } else {

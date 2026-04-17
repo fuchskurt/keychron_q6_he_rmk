@@ -31,7 +31,6 @@ use embassy_stm32::{
     interrupt::typelevel::Binding,
     pac::adc,
 };
-use embassy_time::Timer;
 use num_traits::ToPrimitive as _;
 use rmk::event::{KeyboardEvent, publish_event_async};
 
@@ -170,7 +169,6 @@ where
         loop {
             for col in 0..COL {
                 cols.select(col);
-                Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
 
                 for (row, &raw) in buf.iter().enumerate() {
