@@ -1,7 +1,17 @@
 //! Default keymap definitions and sizes.
 
-use crate::keymap::keymap::{ENCODER_VOLUME, MAC_ROW5, ROW0, ROW1, ROW2, ROW3, ROW4, WIN_ROW5};
-use rmk::types::action::{EncoderAction, KeyAction};
+use crate::keymap::keymap::{
+    ENCODER_VOLUME,
+    EncoderAction,
+    KeyAction,
+    MAC_ROW5,
+    ROW0,
+    ROW1,
+    ROW2,
+    ROW3,
+    ROW4,
+    WIN_ROW5,
+};
 
 /// Number of columns in the key matrix.
 pub const COL: usize = 21;
@@ -14,10 +24,10 @@ pub const NUM_ENCODER: usize = 1;
 
 #[rustfmt::skip]
 #[expect(clippy::min_ident_chars, reason = "RMK-side implementation")]
-pub mod keymap {
+mod keymap {
     use crate::keymap::{COL, NUM_ENCODER};
-use rmk::types::action::{EncoderAction, KeyAction};
-use rmk::{a, df, encoder, k};
+    pub use rmk::types::action::{EncoderAction, KeyAction};
+    use rmk::{a, df, encoder, k};
 
     pub const ROW0: [KeyAction; COL]     = [k!(Escape),   k!(F1),   k!(F2),    k!(F3),  k!(F4),  k!(F5),  k!(F6),    k!(F7),  k!(F8),  k!(F9),    k!(F10),       k!(F11),         k!(F12),          k!(AudioMute), k!(PrintScreen), k!(ScrollLock), k!(Pause),    k!(F13),     k!(F14),     k!(F15),        k!(F16)];
     pub const ROW1: [KeyAction; COL]     = [k!(Grave),    k!(Kc1),  k!(Kc2),   k!(Kc3), k!(Kc4), k!(Kc5), k!(Kc6),   k!(Kc7), k!(Kc8), k!(Kc9),   k!(Kc0),       k!(Minus),       k!(Equal),        k!(Backspace), k!(Insert),      k!(Home),       k!(PageUp),   k!(NumLock), k!(KpSlash), k!(KpAsterisk), k!(KpMinus)];
@@ -27,7 +37,7 @@ use rmk::{a, df, encoder, k};
     pub const MAC_ROW5: [KeyAction; COL] = [k!(LCtrl),    k!(LAlt), k!(LGui),  a!(No),  a!(No),  a!(No),  k!(Space), df!(0),  df!(1),  k!(RGui),  k!(RAlt),      k!(Menu),        k!(RCtrl),        a!(No),        k!(Left),        k!(Down),       k!(Right),    k!(Kp0),     k!(KpDot),   a!(No),         a!(No)];
     pub const WIN_ROW5: [KeyAction; COL] = [k!(LCtrl),    k!(LGui), k!(LAlt),  a!(No),  a!(No),  a!(No),  k!(Space), df!(0),  df!(1),  k!(RAlt),  k!(RGui),      k!(Menu),        k!(RCtrl),        a!(No),        k!(Left),        k!(Down),       k!(Right),    k!(Kp0),     k!(KpDot),   a!(No),         a!(No)];
     pub const ENCODER_VOLUME: [EncoderAction; NUM_ENCODER] = [encoder!(k!(KbVolumeUp), k!(KbVolumeDown))];
-    }
+}
 
 /// Return the default keymap for all layers.
 pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
