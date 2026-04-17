@@ -138,7 +138,9 @@ fn travel_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
         return None;
     }
 
-    let scaled = ((KeyCalib::poly(f32::from(raw)).algebraic_sub(cal.poly_zero)).algebraic_mul(cal.inv_scale))
+    let scaled = KeyCalib::poly(f32::from(raw))
+        .algebraic_sub(cal.poly_zero)
+        .algebraic_mul(cal.inv_scale)
         .clamp(0.0, f32::from(FULL_TRAVEL_UNIT));
     Some(scaled.to_u8().unwrap_or(FULL_TRAVEL_UNIT))
 }
@@ -227,8 +229,14 @@ where
                     // climbs at least `sensitivity_press` above it AND exceeds
                     // the actuation floor. The trough is not required to have
                     // dipped below the floor first, so a finger hovering
-                    // mid-travel after an RT-release can re-fire immediately.
+                    // mid-travel after an RT-release can re-fire immediately. When travel drops
+                    // below the actuation floor the trough is additionally
+                    // clamped so the key re-presses cleanly at `act_threshold`
+                    // without requiring an extra delta above it.
                     st.extremum = st.extremum.min(new_travel);
+                    if new_travel < act_threshold {
+                        st.extremum = st.extremum.min(act_threshold.saturating_sub(sensitivity_press));
+                    }
                     new_travel >= act_threshold && new_travel >= st.extremum.saturating_add(sensitivity_press)
                 };
 
