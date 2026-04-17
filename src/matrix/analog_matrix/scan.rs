@@ -5,7 +5,7 @@
 //! inlined into [`AnalogHallMatrix::run_scan_loop`] without going
 //! through an extra method dispatch.
 
-use super::{AdcSampleTime, AnalogHallMatrix, AutoCalib, HallCfg, KeyCalib, KeyState, get2, get2_mut};
+use super::{AdcSampleTime, AnalogHallMatrix, AutoCalib, HallCfg, KeyCalib, KeyState, get2_mut};
 use crate::matrix::{
     analog_matrix::types::{
         AUTO_CALIB_CONFIDENCE_THRESHOLD,
@@ -48,15 +48,7 @@ use rmk::event::{KeyboardEvent, publish_event_async};
 /// [`AUTO_CALIB_MIN_RANGE`]; partial presses or noisy readings are
 /// discarded. Updated calibration takes effect immediately on the next
 /// travel computation within the same scan pass.
-fn auto_calib_update<const ROW: usize, const COL: usize>(
-    auto_calib: &mut [[AutoCalib; COL]; ROW],
-    calib: &mut [[KeyCalib; COL]; ROW],
-    row: usize,
-    col: usize,
-    raw: u16,
-) {
-    let Some(ac) = get2_mut(auto_calib, row, col) else { return };
-
+fn auto_calib_update(ac: &mut AutoCalib, cal: &mut KeyCalib, raw: u16) {
     match ac.phase {
         AutoCalibPhase::Idle => {
             if raw < AUTO_CALIB_FULL_TRAVEL_THRESHOLD {
@@ -103,10 +95,8 @@ fn auto_calib_update<const ROW: usize, const COL: usize>(
                     // meaningfully from the current one, avoiding
                     // unnecessary churn in the precomputed polynomial
                     // calibration data derived by `KeyCalib::new`.
-                    if let Some(cal) = get2_mut(calib, row, col) {
-                        if cal.zero.abs_diff(new_zero) > 10 {
-                            *cal = KeyCalib::new(new_zero, new_full);
-                        }
+                    if cal.zero.abs_diff(new_zero) > 10 {
+                        *cal = KeyCalib::new(new_zero, new_full);
                     }
                 }
 
@@ -206,9 +196,13 @@ where
 
                     // Update the auto-calibrator with this reading before the
                     // travel computation so any refined KeyCalib is used immediately.
-                    auto_calib_update(auto_calib, calib, row, col, raw);
+                    let Some(ac) = get2_mut(auto_calib, row, col) else { continue };
+                    let Some(cal_mut) = get2_mut(calib, row, col) else { continue };
+                    auto_calib_update(ac, cal_mut, raw);
+                    // Copy the (potentially updated) calibration data before the mutable
+                    // borrow is released.
+                    let cal = *cal_mut;
 
-                    let Some(cal) = get2(calib, row, col) else { continue };
                     let prev_travel = st.travel;
                     let was_pressed = st.pressed;
                     let Some(new_travel) = travel_from(&cal, raw) else { continue };
