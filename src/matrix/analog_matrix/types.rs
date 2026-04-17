@@ -83,15 +83,6 @@ pub(crate) const CALIB_SETTLE_AFTER_ALL_DONE: Duration = Duration::from_millis(2
 /// considered to have a valid hall-effect sensor at its position.
 pub(crate) const CALIB_ZERO_TOLERANCE: u16 = 500;
 
-/// Number of additional ADC reads used to confirm a column reading is stable
-/// before processing any key state changes within it.
-///
-/// After the initial column read, the column is re-sampled this many times
-/// immediately with no settle delay. If any re-sample differs from the first
-/// read by more than [`HallCfg::noise_gate`] on any row, the entire column
-/// pass is discarded and no key state is mutated.
-pub(crate) const DEBOUNCE_PASSES: u8 = 2;
-
 /// Default full-range calibration delta used when no better value is available.
 pub(crate) const DEFAULT_FULL_RANGE: u16 = 900;
 
@@ -230,12 +221,12 @@ impl Default for HallCfg {
         Self {
             actuation_pt: 8,
             calib_passes: 512,
-            col_settle_us: Duration::from_micros(35),
+            col_settle_us: Duration::from_micros(5),
             full_calib_duration: Duration::from_secs(360),
-            noise_gate: 5,
+            noise_gate: 10,
             rt_sensitivity_press: 3,
             rt_sensitivity_release: 3,
-            shifter_delay_cycles: 8,
+            shifter_delay_cycles: 4,
         }
     }
 }
@@ -243,9 +234,9 @@ impl Default for HallCfg {
 /// Calibration values for a single key.
 #[derive(Clone, Copy)]
 pub(crate) struct KeyCalib {
-    /// Polynomial Value at full pressed state, precomputed on construction.
-    pub poly_delta_full: f32,
-    /// Polynomial Value at zero state, precomputed on construction.
+    /// Reciprocal scale factor precomputed on construction:
+    pub inv_scale: f32,
+    /// Polynomial value at zero travel (key fully released)
     pub poly_zero: f32,
     /// Whether this matrix position has a valid hall-effect sensor.
     ///
@@ -258,11 +249,14 @@ pub(crate) struct KeyCalib {
 
 impl KeyCalib {
     /// Build calibration data from zero and full-travel ADC readings.
+    ///
+    /// Precomputes [`Self::poly_zero`] and [`Self::inv_scale`] so the hot
+    /// scan path only needs a polynomial evaluation and a multiply.
     pub(crate) fn new(zero: u16, full: u16) -> Self {
         let poly_zero = Self::poly(f32::from(zero));
-        let poly_full = Self::poly(f32::from(full));
+        let delta = Self::poly(f32::from(full)).algebraic_sub(poly_zero);
         Self {
-            poly_delta_full: poly_full - poly_zero,
+            inv_scale: (delta > 0.0).then(|| f32::from(FULL_TRAVEL_UNIT).algebraic_div(delta)).unwrap_or(0.0),
             poly_zero,
             used: zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE,
             zero,
@@ -272,8 +266,9 @@ impl KeyCalib {
     /// Evaluate the Hall sensor transfer polynomial at `x` using Horner's
     /// method.
     ///
-    /// Implements `f(x) = A3·x³ + A2·x² + A1·x + A0` in Horner form to minimize
-    /// floating-point rounding and avoid redundant multiplications.
+    /// Implements `f(x) = A3·x³ + A2·x² + A1·x + A0` in Horner form to
+    /// minimize floating-point rounding and use the VFMA instruction on
+    /// Cortex-M4.
     pub(crate) fn poly(x: f32) -> f32 { POLY_A3.mul_add(x, POLY_A2).mul_add(x, POLY_A1).mul_add(x, POLY_A0) }
 
     /// Build an uncalibrated placeholder.
@@ -281,7 +276,7 @@ impl KeyCalib {
     /// `used` is `false` so the scanner ignores this position entirely until
     /// real calibration data is applied.
     pub(crate) const fn uncalibrated() -> Self {
-        Self { poly_delta_full: 1.0, poly_zero: 0.0, used: false, zero: UNCALIBRATED_ZERO }
+        Self { inv_scale: 0.0, poly_zero: 0.0, used: false, zero: UNCALIBRATED_ZERO }
     }
 }
 

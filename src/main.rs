@@ -7,6 +7,7 @@
     const_index,
     const_option_ops,
     const_result_trait_fn,
+    float_algebraic,
     optimize_attribute,
     likely_unlikely
 )]
@@ -205,7 +206,7 @@ async fn main(spawner: Spawner) {
     );
     let eeprom_wp = Flex::new(peripheral.PB10);
     let eeprom = Ft24c64::new(i2c3, eeprom_wp);
-    let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::Cycles56);
+    let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::Cycles28);
     let mut matrix = AnalogHallMatrix::<_, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom);
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);

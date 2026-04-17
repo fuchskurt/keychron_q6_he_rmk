@@ -1,5 +1,5 @@
-//! Hot-path matrix scanning: column stability check, rapid-trigger logic,
-//! and per-key travel computation.
+//! Hot-path matrix scanning: rapid-trigger logic and per-key travel
+//! computation.
 //!
 //! [`auto_calib_update`] and [`travel_from`] are free functions so they can be
 //! inlined into [`AnalogHallMatrix::scan_for_next_change`] without going
@@ -15,7 +15,6 @@ use crate::matrix::{
         AUTO_CALIB_ZERO_JITTER,
         AutoCalibPhase,
         BOTTOM_JITTER,
-        DEBOUNCE_PASSES,
         FULL_TRAVEL_UNIT,
         MIN_USEFUL_FULL_RANGE,
         VALID_RAW_MAX,
@@ -25,10 +24,7 @@ use crate::matrix::{
     hc164_cols::Hc164Cols,
     sensor_mapping::SENSOR_POSITIONS,
 };
-use core::{
-    array::from_fn,
-    hint::{likely, unlikely},
-};
+use core::hint::{likely, unlikely};
 use embassy_stm32::{
     adc::{BasicInstance, ConfiguredSequence, Instance, RxDma},
     dma::InterruptHandler,
@@ -79,8 +75,7 @@ fn auto_calib_update<const ROW: usize, const COL: usize>(
             } else {
                 // Reading is between full_candidate and full_candidate +
                 // AUTO_CALIB_RELEASE_THRESHOLD: bottom-of-travel jitter or
-                // a partial early lift. Stay in
-                // Pressing until a decisive rise.
+                // a partial early lift. Stay in Pressing until a decisive rise.
             }
         }
         AutoCalibPhase::Releasing => {
@@ -128,7 +123,8 @@ fn auto_calib_update<const ROW: usize, const COL: usize>(
 /// Convert a raw ADC reading into a travel value.
 ///
 /// Returns `None` if the position is uncalibrated, if `raw` is outside
-/// [`VALID_RAW_MIN`]..=[`VALID_RAW_MAX`], or if the computation overflows.
+/// [`VALID_RAW_MIN`]..=[`VALID_RAW_MAX`], or if [`KeyCalib::inv_scale`] is
+/// not positive (degenerate or uninitialised calibration).
 #[inline]
 #[optimize(speed)]
 fn travel_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
@@ -138,14 +134,12 @@ fn travel_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
     if unlikely(!(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw)) {
         return None;
     }
-    if cal.poly_delta_full <= 0.0 {
+    if cal.inv_scale <= 0.0 {
         return None;
     }
 
-    let delta_raw = KeyCalib::poly(f32::from(raw)) - cal.poly_zero;
-
-    let scaled =
-        (delta_raw / cal.poly_delta_full * f32::from(FULL_TRAVEL_UNIT)).clamp(0.0, f32::from(FULL_TRAVEL_UNIT));
+    let scaled = ((KeyCalib::poly(f32::from(raw)).algebraic_sub(cal.poly_zero)).algebraic_mul(cal.inv_scale))
+        .clamp(0.0, f32::from(FULL_TRAVEL_UNIT));
     Some(scaled.to_u8().unwrap_or(FULL_TRAVEL_UNIT))
 }
 
@@ -184,47 +178,6 @@ where
             cols.select(col);
             Timer::after(cfg.col_settle_us).await;
             seq.read(buf).await;
-
-            // Column stability check: re-read the same column DEBOUNCE_PASSES
-            // times and compare each re-read to the first. If any key's
-            // pressed state (above / below the actuation threshold) disagrees
-            // between the first and a subsequent read, the entire column is
-            // skipped for this scan pass. One noisy key invalidates the whole
-            // column so no state is mutated on a transient spike.
-            //
-            // `calib` is read-only here - `auto_calib_update` only runs later,
-            // after the stability gate passes, so the calibration data used for
-            // both reads is identical.
-            //
-            // `buf` is restored to `first_read` unconditionally so the per-key
-            // noise gate always compares against the same initial reading,
-            // regardless of the stability outcome.
-            let first_read = *buf;
-            // Pre-compute each row's pressed state from the first reading.
-            // first_read is constant across all debounce passes, so computing
-            // it here avoids repeating the travel conversion / polynomial
-            // evaluation inside the pass loop for the baseline side of the
-            // comparison.
-            let first_pressed: [bool; ROW] = from_fn(|row| {
-                get2(calib, row, col).and_then(|c| travel_from(&c, first_read[row])).is_some_and(|t| t >= act_threshold)
-            });
-            let mut stable = true;
-            for _ in 0..DEBOUNCE_PASSES {
-                seq.read(buf).await;
-                let state_changed =
-                    buf.iter().zip(first_pressed.iter()).enumerate().any(|(row, (&recheck, &was_pressed))| {
-                        get2(calib, row, col).and_then(|c| travel_from(&c, recheck)).is_some_and(|t| t >= act_threshold)
-                            != was_pressed
-                    });
-                if state_changed {
-                    stable = false;
-                    break;
-                }
-            }
-            *buf = first_read;
-            if !stable {
-                continue;
-            }
 
             for (row, &raw) in buf.iter().enumerate() {
                 // Skip positions with no physical hall-effect sensor. Their
