@@ -47,12 +47,17 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
             if attempts >= max_attempts {
                 return result;
             }
-            Timer::after(Duration::from_micros(200)).await;
+            Timer::after(Duration::from_micros(20)).await;
         }
     }
 
     /// Read `buf.len()` bytes starting at 16-bit word address `addr`.
+    ///
+    /// Polls the device until it acknowledges before issuing the read,
+    /// accommodating the power-on reset delay without requiring a fixed
+    /// worst-case wait from the caller.
     pub async fn read(&mut self, addr: u16, buf: &mut [u8]) -> Result<(), Error> {
+        self.poll_until_ready(20).await?;
         self.i2c.write_read(DEVICE_ADDR, &addr.to_be_bytes(), buf).await
     }
 
@@ -85,7 +90,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
                 break;
             }
 
-            result = self.poll_until_ready(30).await;
+            result = self.poll_until_ready(255).await;
             if result.is_err() {
                 break;
             }

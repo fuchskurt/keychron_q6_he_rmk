@@ -86,10 +86,6 @@ pub(crate) const CALIB_ZERO_TOLERANCE: u16 = 500;
 /// Default full-range calibration delta used when no better value is available.
 pub(crate) const DEFAULT_FULL_RANGE: u16 = 900;
 
-/// Time the EEPROM requires after power-on before acknowledging I²C
-/// transactions.
-pub(crate) const EEPROM_POWER_ON_DELAY: Duration = Duration::from_micros(300);
-
 /// Expected travel distance in physical units, represents 4.0 mm.
 pub(crate) const FULL_TRAVEL_UNIT: u8 = 40;
 

@@ -5,13 +5,7 @@ mod calibration;
 mod scan;
 mod types;
 
-pub(crate) use crate::matrix::analog_matrix::types::{
-    AdcSampleTime,
-    AutoCalib,
-    EEPROM_POWER_ON_DELAY,
-    KeyCalib,
-    KeyState,
-};
+pub(crate) use crate::matrix::analog_matrix::types::{AdcSampleTime, AutoCalib, KeyCalib, KeyState};
 use crate::{
     eeprom::Ft24c64,
     matrix::{
@@ -28,7 +22,6 @@ use embassy_stm32::{
     interrupt::typelevel::Binding,
     pac::adc,
 };
-use embassy_time::Timer;
 use rmk::{
     event::KeyboardEvent,
     input_device::{InputDevice, Runnable},
@@ -214,10 +207,6 @@ where
     async fn run(&mut self) -> ! {
         let mut eeprom_buf = [0_u8; CALIB_BUF_LEN];
         let mut entries = Self::default_entries();
-
-        // Wait for the EEPROM to complete its power-on reset before issuing
-        // the first I²C transaction.
-        Timer::after(EEPROM_POWER_ON_DELAY).await;
 
         let loaded = self.eeprom.read(EEPROM_BASE_ADDR, &mut eeprom_buf).await.is_ok()
             && try_deserialize::<ROW, COL>(&eeprom_buf, &mut entries);
