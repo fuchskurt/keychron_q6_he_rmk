@@ -17,6 +17,7 @@ use core::future::pending;
 use embassy_stm32::{
     Peri,
     adc::{Adc, AnyAdcChannel, BasicInstance, Instance, RxDma},
+    crc::Crc,
     dma::InterruptHandler,
     i2c::mode::MasterMode,
     interrupt::typelevel::Binding,
@@ -122,6 +123,8 @@ where
     cfg: HallCfg,
     /// Column driver used to select the active column via the HC164.
     cols: Hc164Cols<'peripherals>,
+    /// Hardware CRC peripheral used for EEPROM calibration block checksums.
+    crc: Crc<'peripherals>,
     /// EEPROM driver for loading and persisting calibration data.
     eeprom: Ft24c64<'peripherals, IM>,
     /// DMA interrupt binding reused for every ADC sequence read.
@@ -149,6 +152,7 @@ where
         cols: Hc164Cols<'peripherals>,
         cfg: HallCfg,
         eeprom: Ft24c64<'peripherals, IM>,
+        crc: Crc<'peripherals>,
     ) -> Self {
         Self {
             adc_part,
@@ -156,6 +160,7 @@ where
             calib: [[KeyCalib::uncalibrated(); COL]; ROW],
             cfg,
             cols,
+            crc,
             eeprom,
             irq,
             state: [[KeyState::new(); COL]; ROW],
@@ -210,7 +215,7 @@ where
         let mut entries = Self::default_entries();
 
         let loaded = self.eeprom.read(EEPROM_BASE_ADDR, &mut eeprom_buf).await.is_ok()
-            && try_deserialize::<ROW, COL>(&eeprom_buf, &mut entries);
+            && try_deserialize::<ROW, COL>(&eeprom_buf, &mut entries, &mut self.crc);
         let mut buf = [0_u16; ROW];
         let mut seq = self.adc_part.configured_sequence(self.irq);
         if loaded {
@@ -225,6 +230,7 @@ where
                 &mut buf,
                 self.cfg,
                 &mut self.eeprom,
+                &mut self.crc,
                 &mut self.calib,
                 &mut eeprom_buf,
                 &mut entries,

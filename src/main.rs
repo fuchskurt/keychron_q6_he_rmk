@@ -42,6 +42,7 @@ use embassy_stm32::{
     Config,
     adc::{Adc, AdcChannel as _, AnyAdcChannel, SampleTime},
     bind_interrupts,
+    crc::Crc,
     dma,
     exti::{self, ExtiInput},
     flash,
@@ -209,8 +210,13 @@ async fn main(spawner: Spawner) {
     );
     let eeprom_wp = Flex::new(peripheral.PB10);
     let eeprom = Ft24c64::new(i2c3, eeprom_wp);
+
+    // Hardware CRC peripheral for EEPROM calibration block checksums.
+    let crc = Crc::new(peripheral.CRC);
+
     let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::Cycles56);
-    let mut matrix = AnalogHallMatrix::<_, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom);
+    let mut matrix =
+        AnalogHallMatrix::<_, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom, crc);
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
     let pin_b = ExtiInput::new(peripheral.PB15, peripheral.EXTI15, Pull::None, Irqs);

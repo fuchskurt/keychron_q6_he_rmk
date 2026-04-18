@@ -1,13 +1,11 @@
 use crate::keymap::{COL, ROW};
 use core::mem::size_of;
-use crc::{CRC_16_IBM_3740, Crc, NoTable};
+use embassy_stm32::crc::Crc;
 
 /// Pre-computed buffer length for the HE matrix.
 pub const CALIB_BUF_LEN: usize = total_len(ROW, COL);
-/// CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF).
-const CRC16: Crc<u16, NoTable> = Crc::<u16, NoTable>::new(&CRC_16_IBM_3740);
 /// Byte length of the trailing CRC field.
-const CRC_LEN: usize = size_of::<u16>();
+const CRC_LEN: usize = size_of::<u32>();
 /// EEPROM word address at which the calibration block begins.
 pub const EEPROM_BASE_ADDR: u16 = 0x0000;
 /// Byte length of a single serialized entry (one u16 full-travel value).
@@ -37,14 +35,35 @@ fn read_array<const N: usize>(buf: &[u8], start: usize, end: usize) -> Option<[u
     buf.get(start..end)?.try_into().ok()
 }
 
+/// Compute CRC-32 over `data` using the STM32 hardware CRC peripheral.
+///
+/// Feeds data as 32-bit little-endian words. If `data.len()` is not a
+/// multiple of 4 the final word is zero-padded before feeding.
+fn crc32_of(crc: &mut Crc<'_>, data: &[u8]) -> u32 {
+    crc.reset();
+    let mut chunks = data.chunks_exact(4);
+    for chunk in chunks.by_ref() {
+        // chunks_exact guarantees 4 bytes; unwrap_or is unreachable.
+        crc.feed_word(u32::from_le_bytes(chunk.try_into().unwrap_or([0u8; 4])));
+    }
+    let remainder = chunks.remainder();
+    if !remainder.is_empty() {
+        let mut last = [0u8; 4];
+        last[..remainder.len()].copy_from_slice(remainder);
+        crc.feed_word(u32::from_le_bytes(last));
+    }
+    crc.read()
+}
+
 /// Serialize `entries` (row-major, `ROW × COL`) into `buf`.
 ///
 /// Writes the magic number, version byte, all full-travel entries, and a
-/// CRC-16/CCITT checksum over all preceding bytes.
+/// CRC-32 checksum over all preceding bytes.
 /// `buf` must be at least [`total_len`]`(ROW, COL)` bytes.
 pub fn serialize<const ROW: usize, const COL: usize>(
     entries: &[[CalibEntry; COL]; ROW],
     buf: &mut [u8; CALIB_BUF_LEN],
+    crc: &mut Crc<'_>,
 ) {
     // Write magic number, 4 bytes little-endian.
     if let Some(dst) = buf.get_mut(0..size_of::<u32>()) {
@@ -70,19 +89,23 @@ pub fn serialize<const ROW: usize, const COL: usize>(
     // Compute CRC over the header + all entry bytes.
     let crc_start = pos;
     let crc_end = crc_start.saturating_add(CRC_LEN);
-    let crc = buf.get(..crc_start).map_or(0, |data| CRC16.checksum(data));
+    let checksum = buf.get(..crc_start).map_or(0, |data| crc32_of(crc, data));
     if let Some(dst) = buf.get_mut(crc_start..crc_end) {
-        dst.copy_from_slice(&crc.to_le_bytes());
+        dst.copy_from_slice(&checksum.to_le_bytes());
     }
 }
 
 /// Attempt to deserialize a calibration block from `buf` into `out`.
 ///
-/// Validates the magic number, version byte, and CRC-16/CCITT checksum.
+/// Validates the magic number, version byte, and CRC-32 checksum.
 /// Returns `true` and populates `out` on success. Returns `false` without
 /// modifying `out` on any validation failure, including a VERSION mismatch
 /// which rejects data written by an incompatible layout.
-pub fn try_deserialize<const ROW: usize, const COL: usize>(buf: &[u8], out: &mut [[CalibEntry; COL]; ROW]) -> bool {
+pub fn try_deserialize<const ROW: usize, const COL: usize>(
+    buf: &[u8],
+    out: &mut [[CalibEntry; COL]; ROW],
+    crc: &mut Crc<'_>,
+) -> bool {
     if buf.len() < CALIB_BUF_LEN {
         return false;
     }
@@ -104,9 +127,9 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(buf: &[u8], out: &mut
     let data_end = HEADER_LEN.saturating_add(ROW.saturating_mul(COL).saturating_mul(ENTRY_LEN));
     let crc_end = data_end.saturating_add(CRC_LEN);
     // None must not be silently replaced with 0 (0 is a valid CRC value).
-    let Some(stored_crc_bytes) = read_array::<2>(buf, data_end, crc_end) else { return false };
-    let stored_crc = u16::from_le_bytes(stored_crc_bytes);
-    let computed_crc = buf.get(..data_end).map_or(0, |data| CRC16.checksum(data));
+    let Some(stored_crc_bytes) = read_array::<4>(buf, data_end, crc_end) else { return false };
+    let stored_crc = u32::from_le_bytes(stored_crc_bytes);
+    let computed_crc = buf.get(..data_end).map_or(0, |data| crc32_of(crc, data));
     if computed_crc != stored_crc {
         return false;
     }

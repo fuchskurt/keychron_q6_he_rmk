@@ -37,6 +37,7 @@ use crate::{
 use calib_store::try_deserialize;
 use embassy_stm32::{
     adc::{BasicInstance, ConfiguredSequence, Instance, RxDma},
+    crc::Crc,
     dma::InterruptHandler,
     i2c::mode::MasterMode,
     interrupt::typelevel::Binding,
@@ -263,6 +264,7 @@ where
         buf: &mut [u16; ROW],
         cfg: HallCfg,
         eeprom: &mut Ft24c64<'_, IM>,
+        crc: &mut Crc<'_>,
         calib: &mut [[KeyCalib; COL]; ROW],
         eeprom_buf: &mut [u8; CALIB_BUF_LEN],
         entries: &mut [[CalibEntry; COL]; ROW],
@@ -288,7 +290,7 @@ where
 
         // Allow the backlight channel to drain before starting the I²C write.
         Timer::after_micros(200).await;
-        calib_store::serialize(entries, eeprom_buf);
+        calib_store::serialize(entries, eeprom_buf, crc);
         let erase_ok = eeprom.erase().await.is_ok();
         let write_ok = eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
 
@@ -297,7 +299,7 @@ where
         let verified = erase_ok
             && write_ok
             && eeprom.read(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
-            && try_deserialize::<ROW, COL>(eeprom_buf, entries);
+            && try_deserialize::<ROW, COL>(eeprom_buf, entries, crc);
 
         if !verified {
             // Signal amber so the user knows calibration will repeat on the
