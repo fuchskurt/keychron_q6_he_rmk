@@ -35,6 +35,7 @@ use crate::{
     },
 };
 use calib_store::try_deserialize;
+use core::hint::{likely, unlikely};
 use embassy_stm32::{
     adc::{BasicInstance, ConfiguredSequence, Instance, RxDma},
     crc::Crc,
@@ -161,7 +162,7 @@ where
                     // whether the key has been accepted yet.
                     update_min(row, col, raw);
 
-                    if !SENSOR_POSITIONS.get(row).and_then(|r| r.get(col)).copied().unwrap_or(false) {
+                    if unlikely(!SENSOR_POSITIONS.get(row).and_then(|r| r.get(col)).copied().unwrap_or(false)) {
                         continue;
                     }
 
@@ -170,7 +171,7 @@ where
                     };
 
                     // Skip keys already accepted.
-                    if matches!(*key_state, KeyCalibState::Accepted) {
+                    if likely(matches!(*key_state, KeyCalibState::Accepted)) {
                         continue;
                     }
 
@@ -186,7 +187,7 @@ where
                         }
                         KeyCalibState::Holding(first_seen) => {
                             if pressed {
-                                if first_seen.elapsed() >= hold_duration {
+                                if unlikely(first_seen.elapsed() >= hold_duration) {
                                     // Hold duration satisfied; accept this key.
                                     *key_state = KeyCalibState::Accepted;
                                     calibrated_count = calibrated_count.saturating_add(1);

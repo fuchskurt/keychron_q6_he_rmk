@@ -118,13 +118,15 @@ fn auto_calib_update(ac: &mut AutoCalib, cal: &mut KeyCalib, raw: u16) {
 #[inline]
 #[optimize(speed)]
 fn travel_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
-    if !cal.used {
+    // Unpopulated positions are skipped before travel_from is called.
+    if unlikely(!cal.used) {
         return None;
     }
     if unlikely(!(VALID_RAW_MIN..=VALID_RAW_MAX).contains(&raw)) {
         return None;
     }
-    if cal.inv_scale <= 0.0 {
+    // inv_scale <= 0 only on uninitialised or corrupt calibration.
+    if unlikely(cal.inv_scale <= 0.0) {
         return None;
     }
 
@@ -177,7 +179,7 @@ where
                     // Skip positions with no physical hall-effect sensor. Their
                     // ADC readings are undefined and must never feed the key-state
                     // machine or auto-calibrator.
-                    if !SENSOR_POSITIONS.get(row).and_then(|r| r.get(col)).copied().unwrap_or(false) {
+                    if unlikely(!SENSOR_POSITIONS.get(row).and_then(|r| r.get(col)).copied().unwrap_or(false)) {
                         continue;
                     }
 
@@ -207,7 +209,9 @@ where
                     let was_pressed = st.pressed;
                     let Some(new_travel) = travel_from(&cal, raw) else { continue };
 
-                    if new_travel == prev_travel {
+                    // After noise gate, travel often resolves to the same
+                    // quantized value, skip redundant RT logic.
+                    if likely(new_travel == prev_travel) {
                         continue;
                     }
 
@@ -236,7 +240,7 @@ where
                         new_travel >= act_threshold && new_travel >= st.extremum.saturating_add(sensitivity_press)
                     };
 
-                    if now_pressed != st.pressed {
+                    if unlikely(now_pressed != st.pressed) {
                         // Reset extremum so the next direction starts fresh from
                         // the transition point.
                         st.extremum = new_travel;
