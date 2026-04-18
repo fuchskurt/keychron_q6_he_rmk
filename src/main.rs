@@ -179,6 +179,8 @@ async fn main(spawner: Spawner) {
 
     // ADC matrix (rows are ADC pins)
     let adc: Adc<'_, ADC1> = Adc::new(peripheral.ADC1);
+    // Set ADC prescaler to /2 (42MHz, overclocked from 36MHz spec)
+    pac::ADC1_COMMON.ccr().modify(|w| w.set_adcpre(pac::adccommon::vals::Adcpre::Div2));
     // Apply STM32 AN4073 Option 2 workaround to reduce ADC noise coupling from USB
     // activity on STM32F401.
     SYSCFG.pmc().modify(|w| w.set_adc1dc2(true));
@@ -207,7 +209,7 @@ async fn main(spawner: Spawner) {
     );
     let eeprom_wp = Flex::new(peripheral.PB10);
     let eeprom = Ft24c64::new(i2c3, eeprom_wp);
-    let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::Cycles28);
+    let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::Cycles56);
     let mut matrix = AnalogHallMatrix::<_, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom);
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
