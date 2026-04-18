@@ -198,8 +198,7 @@ pub struct HallCfg {
     /// Duration of the full-travel sampling window during first-boot
     /// calibration.
     pub full_calib_duration: Duration,
-    /// Raw ADC delta below which back-to-back readings from the same key are
-    /// treated as noise and discarded.
+    /// Raw ADC delta below which readings are treated as noise and discarded.
     pub noise_gate: u16,
     /// Minimum upward travel from the trough required to register a new press,
     /// in mm/10 units (e.g. 1 = 0.1 mm).
