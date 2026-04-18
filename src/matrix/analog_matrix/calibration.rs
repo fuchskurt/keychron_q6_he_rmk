@@ -80,6 +80,7 @@ where
         for _ in 0..cfg.calib_passes {
             for col in 0..COL {
                 cols.select(col);
+                Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
                 for (acc_row, &raw) in acc.iter_mut().zip(buf.iter()) {
                     if let Some(cell) = acc_row.get_mut(col) {
@@ -118,10 +119,10 @@ where
         cols: &mut Hc164Cols<'_>,
         seq: &mut ConfiguredSequence<'_, adc::Adc>,
         buf: &mut [u16; ROW],
-        duration: Duration,
+        cfg: HallCfg,
         zero_raw: &[[u16; COL]; ROW],
     ) -> [[u16; COL]; ROW] {
-        let deadline = Instant::now() + duration;
+        let deadline = Instant::now() + cfg.full_calib_duration;
         let mut min_raw = [[u16::MAX; COL]; ROW];
 
         // Closure to update the running minimum for a single position.
@@ -152,6 +153,7 @@ where
         while Instant::now() < deadline && calibrated_count < total_keys {
             for col in 0..COL {
                 cols.select(col);
+                Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
 
                 for (row, &raw) in buf.iter().enumerate() {
@@ -235,6 +237,7 @@ where
         while Instant::now() < settle_deadline {
             for col in 0..COL {
                 cols.select(col);
+                Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
                 for (row, &raw) in buf.iter().enumerate() {
                     update_min(row, col, raw);
@@ -273,7 +276,7 @@ where
         let zero_raw = Self::calibrate_zero_raw(cols, seq, buf, cfg).await;
 
         BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Full)).ok();
-        let full_raw = Self::sample_full_raw(cols, seq, buf, cfg.full_calib_duration, &zero_raw).await;
+        let full_raw = Self::sample_full_raw(cols, seq, buf, cfg, &zero_raw).await;
 
         for ((entry_row, zero_row), full_row) in entries.iter_mut().zip(zero_raw.iter()).zip(full_raw.iter()) {
             for ((entry, &zero), &seen_min) in entry_row.iter_mut().zip(zero_row.iter()).zip(full_row.iter()) {
@@ -288,8 +291,6 @@ where
 
         Self::apply_calib(calib, entries, &zero_raw);
 
-        // Allow the backlight channel to drain before starting the I²C write.
-        Timer::after_micros(200).await;
         calib_store::serialize(entries, eeprom_buf, crc);
         let erase_ok = eeprom.erase().await.is_ok();
         let write_ok = eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();

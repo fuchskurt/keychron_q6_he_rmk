@@ -55,10 +55,10 @@ pub(crate) const AUTO_CALIB_ZERO_JITTER: u16 = 50;
 /// floor satisfies the rapid-trigger release condition, firing a spurious
 /// release even though the key never moved.
 ///
-/// By raising the stored floor 80 counts above the physical minimum the scale
-/// factor is anchored to a point the key cannot reach in normal use, so
-/// bottom-of-travel travel values stay comfortably below [`FULL_TRAVEL_UNIT`]
-/// and RT jitter cannot accumulate a phantom peak.
+/// By raising the stored floor [`BOTTOM_JITTER`] counts above the physical
+/// minimum the scale factor is anchored to a point the key cannot reach in
+/// normal use. Using this, Bottom-of-travel travel values stay below
+/// [`FULL_TRAVEL_UNIT`] and RT jitter cannot accumulate a phantom peak.
 pub(crate) const BOTTOM_JITTER: u16 = 80;
 
 /// Duration a key must remain continuously pressed past
@@ -192,6 +192,9 @@ pub struct HallCfg {
     /// Number of full-matrix passes averaged together during zero-travel
     /// calibration.
     pub calib_passes: u32,
+    /// Time to wait after selecting a new column before reading ADC values,
+    /// allowing the analog bus to settle.
+    pub col_settle_us: Duration,
     /// Duration of the full-travel sampling window during first-boot
     /// calibration.
     pub full_calib_duration: Duration,
@@ -212,6 +215,7 @@ impl Default for HallCfg {
         Self {
             actuation_pt: 8,
             calib_passes: 512,
+            col_settle_us: Duration::from_micros(1),
             full_calib_duration: Duration::from_secs(360),
             noise_gate: 10,
             rt_sensitivity_press: 3,
