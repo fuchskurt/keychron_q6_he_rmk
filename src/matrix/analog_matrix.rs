@@ -13,7 +13,6 @@ use crate::{
         hc164_cols::Hc164Cols,
     },
 };
-use core::future::pending;
 use embassy_stm32::{
     Peri,
     adc::{Adc, AnyAdcChannel, BasicInstance, Instance, RxDma},
@@ -23,10 +22,7 @@ use embassy_stm32::{
     interrupt::typelevel::Binding,
     pac::adc,
 };
-use rmk::{
-    event::KeyboardEvent,
-    input_device::{InputDevice, Runnable},
-};
+use rmk::input_device::Runnable;
 pub use types::HallCfg;
 
 /// ADC-related peripherals grouped to allow split borrows when constructing
@@ -181,24 +177,6 @@ where
             }
         }
     }
-}
-
-impl<'peripherals, ADC, D, IRQ, IM, const ROW: usize, const COL: usize> InputDevice
-    for AnalogHallMatrix<'peripherals, ADC, D, IRQ, IM, ROW, COL>
-where
-    ADC: Instance<Regs = adc::Adc> + BasicInstance,
-    D: RxDma<ADC>,
-    IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
-    IM: MasterMode,
-    AdcSampleTime<ADC>: Clone,
-{
-    type Event = KeyboardEvent;
-
-    /// Not used - events are published directly via
-    /// [`rmk::event::publish_event_async`] in [`Runnable::run`]. Returns
-    /// [`pending`] to satisfy the trait bound without competing with the
-    /// scan loop.
-    async fn read_event(&mut self) -> Self::Event { pending().await }
 }
 
 impl<'peripherals, ADC, D, IRQ, IM, const ROW: usize, const COL: usize> Runnable
