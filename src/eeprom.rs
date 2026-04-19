@@ -21,7 +21,7 @@ pub struct Ft24c64<'peripherals, IM: MasterMode> {
     i2c: I2c<'peripherals, Async, IM>,
     /// Write-protect pin managed as input pull-up when idle, output-low when
     /// writing.
-    wp: Flex<'peripherals>,
+    wp:  Flex<'peripherals>,
 }
 
 impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {

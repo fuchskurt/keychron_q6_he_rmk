@@ -15,17 +15,17 @@ pub struct MatrixPos {
 #[input_device(publish = KeyboardEvent)]
 pub struct LayerToggle<'peripherals> {
     /// Debounce duration applied to input level changes.
-    debounce: Duration,
+    debounce:        Duration,
     /// Matrix position activated when the input is at a high logic level.
-    high_pos: MatrixPos,
+    high_pos:        MatrixPos,
     /// Last observed logic level of the input pin.
-    last_level: Option<bool>,
+    last_level:      Option<bool>,
     /// Matrix position activated when the input is at a low logic level.
-    low_pos: MatrixPos,
+    low_pos:         MatrixPos,
     /// Matrix position pending release after a level change.
     pending_release: Option<MatrixPos>,
     /// External interrupt input pin used to read the switch state.
-    pin: ExtiInput<'peripherals, Async>,
+    pin:             ExtiInput<'peripherals, Async>,
 }
 
 impl<'peripherals> LayerToggle<'peripherals> {

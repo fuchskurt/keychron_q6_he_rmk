@@ -6,15 +6,15 @@ use rmk::{event::KeyboardEvent, macros::input_device};
 #[input_device(publish = KeyboardEvent)]
 pub struct EncoderSwitch<'peripherals> {
     /// Logical column index reported to the input system.
-    col: u8,
+    col:          u8,
     /// Debounce duration applied to state changes.
-    debounce: Duration,
+    debounce:     Duration,
     /// Last debounced logical state of the switch.
     last_pressed: bool,
     /// External interrupt–backed input pin for the switch.
-    pin: ExtiInput<'peripherals, Async>,
+    pin:          ExtiInput<'peripherals, Async>,
     /// Logical row index reported to the input system.
-    row: u8,
+    row:          u8,
 }
 
 impl<'peripherals> EncoderSwitch<'peripherals> {

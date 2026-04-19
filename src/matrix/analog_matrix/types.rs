@@ -161,12 +161,12 @@ pub(crate) enum AutoCalibPhase {
 pub(crate) struct AutoCalib {
     /// Accumulated confidence score. Incremented by one per scored cycle;
     /// reset to zero after a calibration update is applied.
-    pub confidence: u8,
+    pub confidence:     u8,
     /// Deepest (lowest) ADC reading seen during the current press, i.e. the
     /// candidate full-travel value.
     pub full_candidate: u16,
     /// Current phase of the press/release state machine.
-    pub phase: AutoCalibPhase,
+    pub phase:          AutoCalibPhase,
     /// Highest ADC reading seen while the key was releasing after the most
     /// recent press, i.e. the candidate zero-travel value.
     pub zero_candidate: u16,
@@ -188,21 +188,21 @@ impl Default for AutoCalib {
 pub struct HallCfg {
     /// Minimum travel threshold in mm/10 units before a key is considered
     /// actuated.
-    pub actuation_pt: u8,
+    pub actuation_pt:           u8,
     /// Number of full-matrix passes averaged together during zero-travel
     /// calibration.
-    pub calib_passes: u32,
+    pub calib_passes:           u32,
     /// Time to wait after selecting a new column before reading ADC values,
     /// allowing the analog bus to settle.
-    pub col_settle_us: Duration,
+    pub col_settle_us:          Duration,
     /// Duration of the full-travel sampling window during first-boot
     /// calibration.
-    pub full_calib_duration: Duration,
+    pub full_calib_duration:    Duration,
     /// Raw ADC delta below which readings are treated as noise and discarded.
-    pub noise_gate: u16,
+    pub noise_gate:             u16,
     /// Minimum upward travel from the trough required to register a new press,
     /// in mm/10 units (e.g. 1 = 0.1 mm).
-    pub rt_sensitivity_press: u8,
+    pub rt_sensitivity_press:   u8,
     /// Minimum downward travel from the peak required to register a release,
     /// in mm/10 units (e.g. 1 = 0.1 mm).
     pub rt_sensitivity_release: u8,
@@ -212,12 +212,12 @@ impl Default for HallCfg {
     /// Provide default hall configuration values.
     fn default() -> Self {
         Self {
-            actuation_pt: 8,
-            calib_passes: 512,
-            col_settle_us: Duration::from_micros(1),
-            full_calib_duration: Duration::from_secs(360),
-            noise_gate: 10,
-            rt_sensitivity_press: 3,
+            actuation_pt:           8,
+            calib_passes:           512,
+            col_settle_us:          Duration::from_micros(1),
+            full_calib_duration:    Duration::from_secs(360),
+            noise_gate:             10,
+            rt_sensitivity_press:   3,
             rt_sensitivity_release: 3,
         }
     }
@@ -234,9 +234,9 @@ pub(crate) struct KeyCalib {
     ///
     /// `false` for unpopulated positions or those whose zero-travel reading
     /// is too far from [`REF_ZERO_TRAVEL`] to be a real key.
-    pub used: bool,
+    pub used:      bool,
     /// Raw ADC value corresponding to zero travel (key fully released).
-    pub zero: u16,
+    pub zero:      u16,
 }
 
 impl KeyCalib {
@@ -292,12 +292,12 @@ pub(crate) struct KeyState {
     /// reading always passes the gate.
     pub last_raw: u16,
     /// Whether the key is currently considered pressed.
-    pub pressed: bool,
+    pub pressed:  bool,
     /// Travel value from the previous scan cycle.
     ///
     /// Used to skip redundant RT computations when travel has not changed
     /// after the noise gate passes.
-    pub travel: u8,
+    pub travel:   u8,
 }
 
 impl KeyState {

@@ -26,7 +26,7 @@ pub enum BacklightCmd {
         /// Whether Caps Lock is currently active.
         caps: bool,
         /// Whether Num Lock is currently active.
-        num: bool,
+        num:  bool,
     },
 }
 

@@ -12,6 +12,7 @@
     optimize_attribute,
     likely_unlikely
 )]
+extern crate cortex_m as _;
 /// Backlight driver integration.
 mod backlight;
 mod eeprom;
@@ -87,7 +88,6 @@ use rmk::{
 };
 use static_cell::ConstStaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
-extern crate cortex_m as _;
 
 bind_interrupts!(struct Irqs {
     DMA2_STREAM0 => dma::InterruptHandler<peripherals::DMA2_CH0>;
@@ -115,11 +115,11 @@ async fn main(spawner: Spawner) {
         config.rcc.hsi = false;
         config.rcc.pll_src = PllSource::Hse;
         config.rcc.pll = Some(Pll {
-            prediv: PllPreDiv::Div8,   // 16/8 = 2 MHz
-            mul: PllMul::Mul168,       // 2*168 = 336 MHz (VCO)
-            divp: Some(PllPDiv::Div4), // 336/4 = 84 MHz (SYSCLK)
-            divq: Some(PllQDiv::Div7), // 336/7 = 48 MHz
-            divr: None,
+            prediv: PllPreDiv::Div8,     // 16/8 = 2 MHz
+            mul:    PllMul::Mul168,      // 2*168 = 336 MHz (VCO)
+            divp:   Some(PllPDiv::Div4), // 336/4 = 84 MHz (SYSCLK)
+            divq:   Some(PllQDiv::Div7), // 336/7 = 48 MHz
+            divr:   None,
         });
         config.rcc.ahb_pre = AHBPrescaler::Div1; // 84 MHz
         config.rcc.apb1_pre = APBPrescaler::Div2; // 42 MHz
@@ -158,10 +158,10 @@ async fn main(spawner: Spawner) {
     let rmk_config = RmkConfig {
         vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0), (4, 20)]),
         device_config: DeviceConfig {
-            manufacturer: "Keychron",
-            product_name: PRODUCT_NAME,
-            vid: USB_VID,
-            pid: USB_PID,
+            manufacturer:  "Keychron",
+            product_name:  PRODUCT_NAME,
+            vid:           USB_VID,
+            pid:           USB_PID,
             serial_number: VIAL_SERIAL,
         },
         ..Default::default()

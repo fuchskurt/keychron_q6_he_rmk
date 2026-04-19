@@ -57,7 +57,7 @@ fn auto_calib_update(ac: &mut AutoCalib, cal: &mut KeyCalib, raw: u16) {
                 ac.full_candidate = raw;
                 ac.phase = AutoCalibPhase::Pressing;
             }
-        }
+        },
         AutoCalibPhase::Pressing => {
             if raw < ac.full_candidate {
                 // Key is pressing deeper; track the running minimum.
@@ -71,7 +71,7 @@ fn auto_calib_update(ac: &mut AutoCalib, cal: &mut KeyCalib, raw: u16) {
                 // AUTO_CALIB_RELEASE_THRESHOLD: bottom-of-travel jitter or
                 // a partial early lift. Stay in Pressing until a decisive rise.
             }
-        }
+        },
         AutoCalibPhase::Releasing => {
             if raw > ac.zero_candidate {
                 // Key still rising; update the zero-travel peak.
@@ -108,7 +108,7 @@ fn auto_calib_update(ac: &mut AutoCalib, cal: &mut KeyCalib, raw: u16) {
                 // re-pressed before fully releasing. Restart the machine.
                 ac.phase = AutoCalibPhase::Idle;
             }
-        }
+        },
     }
 }
 

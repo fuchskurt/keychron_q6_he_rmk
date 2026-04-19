@@ -90,7 +90,8 @@ const fn scale(value: u8, brightness_percent: u8) -> u8 {
     let value_u16 = u16::from(value);
     let percent_clamped = u16::from(brightness_percent.min(100));
     // +50 rounds to nearest; /100 cannot overflow u8 because v*p/100 ≤ 255.
-    u8::try_from(value_u16.saturating_mul(percent_clamped).saturating_add(50).checked_div(100).unwrap_or_default()).unwrap_or(255)
+    u8::try_from(value_u16.saturating_mul(percent_clamped).saturating_add(50).checked_div(100).unwrap_or_default())
+        .unwrap_or(255)
 }
 
 /// Apply brightness scaling and gamma correction to an RGB colour.
@@ -131,11 +132,11 @@ async fn fill_all_leds(driver: &mut BacklightDriver, color: (u8, u8, u8), bright
 #[derive(Clone, Copy)]
 struct BacklightState {
     /// Whether Caps Lock is currently active.
-    caps_lock: bool,
+    caps_lock:       bool,
     /// Whether Num Lock is currently active.
-    num_lock: bool,
+    num_lock:        bool,
     /// Global brightness percentage (0–100); reduced under thermal throttle.
-    brightness: u8,
+    brightness:      u8,
     /// Whether the USB host is currently connected and enumerated.
     ///
     /// Tracked across [`CONNECTION_POLL`] ticks to detect connect and
@@ -144,14 +145,14 @@ struct BacklightState {
     /// restored and an empty keyboard report is sent to prompt the host to
     /// resend its current LED indicator state, ensuring Num Lock and Caps Lock
     /// reflect the correct state from the first moment the keyboard is ready.
-    host_connected: bool,
+    host_connected:  bool,
     /// Whether a first-boot calibration pass is currently in progress.
     ///
     /// `true` from [`Zero`] until [`Done`] completes.
     /// Used by the thermal throttle path to call [`render_calib`] instead of
     /// [`render_all`] so a thermal event never clobbers the calibration
     /// display.
-    in_calib: bool,
+    in_calib:        bool,
     /// Bitset of LED indices confirmed calibrated during the full-travel pass.
     ///
     /// Bit `i` set means LED `i` should be painted solid green by
@@ -163,19 +164,19 @@ struct BacklightState {
     /// Drives the red→blue background interpolation in [`render_calib`].
     /// Cleared to zero alongside [`self::BacklightState::calib_leds_done`] on
     /// calibration completion.
-    calib_pct: u8,
+    calib_pct:       u8,
 }
 
 impl BacklightState {
     const fn new() -> Self {
         Self {
-            brightness: 100,
+            brightness:      100,
             calib_leds_done: 0,
-            calib_pct: 0,
-            caps_lock: false,
-            host_connected: false,
-            in_calib: false,
-            num_lock: false,
+            calib_pct:       0,
+            caps_lock:       false,
+            host_connected:  false,
+            in_calib:        false,
+            num_lock:        false,
         }
     }
 }
@@ -342,14 +343,14 @@ pub async fn backlight_runner(
                         // Amber: zero-travel pass, all keys should be fully released.
                         state.in_calib = true;
                         let _ = fill_all_leds(&mut driver, CALIB_AMBER, state.brightness).await;
-                    }
+                    },
                     Full => {
                         // Reset calib tracking and render the initial red frame via
                         // render_calib so the full-travel phase starts consistently.
                         state.calib_leds_done = 0;
                         state.calib_pct = 0;
                         let _ = render_calib(&mut driver, state).await;
-                    }
+                    },
                     AllAccepted => {
                         // Blink solid green × CALIB_ALL_DONE_BLINK_COUNT to signal
                         // that every key has been recorded and keys may be released.
@@ -363,7 +364,7 @@ pub async fn backlight_runner(
                             }
                         }
                         // Leave the keyboard solid green heading into Done.
-                    }
+                    },
                     Done => {
                         // Solid green hold for 2 s to confirm calibration is stored.
                         let _ = fill_all_leds(&mut driver, CALIB_GREEN, state.brightness).await;
@@ -374,12 +375,12 @@ pub async fn backlight_runner(
                         state.calib_leds_done = 0;
                         state.calib_pct = 0;
                         let _ = render_all(&mut driver, state).await;
-                    }
+                    },
                 },
                 BacklightCmd::CalibProgress(pct) => {
                     state.calib_pct = pct;
                     let _ = render_calib(&mut driver, state).await;
-                }
+                },
                 BacklightCmd::CalibKeyDone(led_idx) => {
                     // Mark this LED calibrated and repaint immediately so the
                     // key turns green the moment it crosses the threshold.
@@ -389,13 +390,13 @@ pub async fn backlight_runner(
                         state.calib_leds_done |= 1_u128.checked_shl(u32::from(led_idx)).unwrap_or(0);
                     }
                     let _ = render_calib(&mut driver, state).await;
-                }
+                },
                 BacklightCmd::Indicators { caps, num } => {
                     state.caps_lock = caps;
                     state.num_lock = num;
                     // Background is already correct; only repaint indicator LEDs.
                     let _ = render_indicators(&mut driver, state).await;
-                }
+                },
             },
             Either3::Second(_) => {
                 // Read the thermal flag from both driver chips. If either reports
@@ -415,7 +416,7 @@ pub async fn backlight_runner(
                         let _ = render_all(&mut driver, state).await;
                     }
                 }
-            }
+            },
             Either3::Third(_) => {
                 // Poll the USB connection state. On disconnect all LEDs are turned
                 // off to avoid driving the backlight unnecessarily. On reconnect
@@ -439,7 +440,7 @@ pub async fn backlight_runner(
                         let _ = fill_all_leds(&mut driver, INDICATOR_OFF, state.brightness).await;
                     }
                 }
-            }
+            },
         }
     }
 }

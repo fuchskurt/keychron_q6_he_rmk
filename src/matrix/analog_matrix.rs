@@ -34,11 +34,11 @@ where
     AdcSampleTime<ADC>: Clone,
 {
     /// ADC peripheral used for sampling hall sensors.
-    pub adc: Adc<'peripherals, ADC>,
+    pub adc:         Adc<'peripherals, ADC>,
     /// DMA channel used for non-blocking ADC sequence reads.
-    pub dma: Peri<'peripherals, D>,
+    pub dma:         Peri<'peripherals, D>,
     /// ADC channels corresponding to each matrix row.
-    pub row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
+    pub row_adc:     [AnyAdcChannel<'peripherals, ADC>; ROW],
     /// ADC sample time applied to every channel in the sequence.
     pub sample_time: AdcSampleTime<ADC>,
 }
@@ -109,24 +109,24 @@ where
     AdcSampleTime<ADC>: Clone,
 {
     /// ADC peripherals and channels grouped for split-borrow compatibility.
-    adc_part: AdcPart<'peripherals, ADC, D, ROW>,
+    adc_part:   AdcPart<'peripherals, ADC, D, ROW>,
     /// Per-key auto-calibration state used to refine
     /// [`self::AnalogHallMatrix::calib`] during normal operation.
     auto_calib: [[AutoCalib; COL]; ROW],
     /// Per-key calibration data applied during the scan loop.
-    calib: [[KeyCalib; COL]; ROW],
+    calib:      [[KeyCalib; COL]; ROW],
     /// Sensing and scanning configuration.
-    cfg: HallCfg,
+    cfg:        HallCfg,
     /// Column driver used to select the active column via the HC164.
-    cols: Hc164Cols<'peripherals>,
+    cols:       Hc164Cols<'peripherals>,
     /// Hardware CRC peripheral used for EEPROM calibration block checksums.
-    crc: Crc<'peripherals>,
+    crc:        Crc<'peripherals>,
     /// EEPROM driver for loading and persisting calibration data.
-    eeprom: Ft24c64<'peripherals, IM>,
+    eeprom:     Ft24c64<'peripherals, IM>,
     /// DMA interrupt binding reused for every ADC sequence read.
-    irq: IRQ,
+    irq:        IRQ,
     /// Dynamic per-key runtime state for the scan loop.
-    state: [[KeyState; COL]; ROW],
+    state:      [[KeyState; COL]; ROW],
 }
 
 impl<'peripherals, ADC, D, IRQ, IM, const ROW: usize, const COL: usize>

@@ -181,7 +181,7 @@ where
                                 // Start hold timer on first threshold crossing.
                                 *key_state = KeyCalibState::Holding(Instant::now());
                             }
-                        }
+                        },
                         KeyCalibState::Holding(first_seen) => {
                             if pressed {
                                 if unlikely(first_seen.elapsed() >= hold_duration) {
@@ -212,8 +212,8 @@ where
                                 // user must press it all the way down again.
                                 *key_state = KeyCalibState::Waiting;
                             }
-                        }
-                        KeyCalibState::Accepted => {}
+                        },
+                        KeyCalibState::Accepted => {},
                     }
                 }
             }
