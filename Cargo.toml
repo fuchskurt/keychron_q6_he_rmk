@@ -22,7 +22,7 @@ embassy-time = { features = ["tick-hz-1_000_000"], git = "https://github.com/emb
 embassy-stm32 = { features = ["stm32f401rc", "memory-x", "time-driver-tim5", "exti", "unstable-pac", "rt"], git = "https://github.com/embassy-rs/embassy.git" }
 embassy-executor = { features = ["platform-cortex-m", "executor-thread", "nightly"], git = "https://github.com/embassy-rs/embassy.git" }
 embedded-storage-async = "0"
-rmk = { default-features = false, features = ["async_matrix", "host", "host_security", "storage", "vial", "vial_lock"], git = "https://github.com/HaoboGu/rmk.git" }
+rmk = { default-features = false, features = ["async_matrix", "host", "host_security", "storage", "vial", "vial_lock"], git = "https://github.com/fuchskurt/rmk.git" }
 static_cell = "2"
 snled27351_driver = { git = "https://github.com/fuchskurt/snled27351_driver.git" }
 embedded-hal-async = "1"

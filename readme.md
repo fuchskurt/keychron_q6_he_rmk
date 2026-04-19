@@ -1,4 +1,4 @@
-# Keychron Q6 HE ANSI - Custom RMK Firmware
+# Keychron Q6 HE - Custom RMK Firmware
 
 [![Docs](https://img.shields.io/badge/docs-latest-blue?style=flat-square)](https://fuchskurt.github.io)
 [![Release](https://img.shields.io/github/v/release/fuchskurt/keychron_q6_he_rmk?style=flat-square)](https://github.com/fuchskurt/keychron_q6_he_rmk/releases)
@@ -7,15 +7,17 @@
 ![Keychron Q6 HE](https://cdn.shopify.com/s/files/1/0059/0630/1017/files/Keychron-Q6-HE-Wireless-QMK-Custom-Magnetic-Switch-Keyboard-White.jpg)
 
 Open-source replacement firmware in `RUST` based on [RMK](https://github.com/HaoboGu/rmk) for
-the [Keychron Q6 HE ANSI](https://www.keychron.com/products/keychron-q6-he-qmk-wireless-custom-keyboard).
+the [Keychron Q6 HE](https://www.keychron.com/products/keychron-q6-he-qmk-wireless-custom-keyboard).
 Compatible with [Vial](https://get.vial.today) for live keymap editing without reflashing.
+
+Supports **ANSI**, **ISO**, and **JIS** layouts, select the right build for your board variant.
 
 ---
 
 ## Features
 
-- **Analog actuation point**:  Keys actuate at 0.8 mm by default. Rapid Trigger re-actuates a key as soon as it moves
-  0.3 mm in the opposite direction, with no fixed reset point.
+- **Analog actuation point**: Keys actuate at 0.8 mm by default and Rapid Trigger sensitivity starts at 0.3 mm, both
+  adjustable in 0.1 mm increments, with no fixed reset point.
 - **Two hardware layers**: Mac and Windows base layers, switchable via the physical toggle on the side of the keyboard.
 - **Vial keymap editing**: Remap any key, encoder action, or layer live from [Vial](https://get.vial.today)
   or [vial.rocks](https://vial.rocks) without reflashing.
@@ -26,6 +28,19 @@ Compatible with [Vial](https://get.vial.today) for live keymap editing without r
   corrected without any user action.
 - **Thermal protection**: LED brightness is automatically reduced if the backlight driver chip gets too hot, and
   restored when it cools down.
+
+---
+
+## Layout variants
+
+| Layout | Feature flag  | Cargo profile                      |
+|--------|---------------|------------------------------------|
+| ANSI   | `ansi_layout` | `--features ansi_layout` (default) |
+| ISO    | `iso_layout`  | `--features iso_layout`            |
+| JIS    | `jis_layout`  | `--features jis_layout`            |
+
+Exactly one layout feature must be enabled at a time. Each layout ships its own `vial.json`, LED mapping, and sensor
+presence map.
 
 ---
 
@@ -42,10 +57,10 @@ rustup component add rust-src llvm-tools
 cargo make install
 ```
 
-### Build and flash
+### Build and flash (ANSI)
 
-1. Enter DFU mode: hold the reset button on the underside of the keyboard, then plug it in (or press reset while plugged
-   in).
+1. Enter DFU mode: hold the reset button on the underside of the keyboard, then plug it in (or press reset while
+   plugged in).
 
 2. Flash:
 
@@ -55,10 +70,25 @@ cargo make install
 
    The keyboard reboots automatically when flashing completes.
 
-### Pre-built binary
+> `cargo make flash` defaults to the ANSI layout. To flash a different layout, pass the feature flag directly:
+>
+> ```sh
+> cargo dfu --vid 0x483 --pid 0xdf11 --release --features iso_layout
+> cargo dfu --vid 0x483 --pid 0xdf11 --release --features jis_layout
+> ```
 
-Download a `.bin` from [Releases](https://github.com/fuchskurt/keychron_q6_he_rmk/releases) and flash it with any STM32
-DFU tool (e.g. `dfu-util`).
+### Pre-built binaries
+
+Download the `.bin` matching your layout from
+[Releases](https://github.com/fuchskurt/keychron_q6_he_rmk/releases) and flash with any STM32 DFU tool:
+
+```sh
+dfu-util -a 0 -s 0x08000000:mass-erase:force:leave \
+  -D keychron-q6-he-rmk-<layout>-<version>.bin \
+  -S <serial number>
+```
+
+Replace `<layout>` with `ansi`, `iso`, or `jis`.
 
 ---
 
