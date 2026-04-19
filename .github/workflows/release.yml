@@ -1,0 +1,86 @@
+name: Release Firmware
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7em-none-eabihf
+          components: rust-src, llvm-tools
+
+      - name: Install flip-link and cargo-binutils
+        run: cargo install flip-link cargo-binutils
+
+      - name: Build ANSI firmware
+        run: |
+          cargo objcopy --release --features ansi_layout -- -O binary keychron-q6-he-rmk-ansi-${{ github.ref_name }}.bin
+
+      - name: Build ISO firmware
+        run: |
+          cargo objcopy --release --features iso_layout -- -O binary keychron-q6-he-rmk-iso-${{ github.ref_name }}.bin
+
+
+      - name: Build JIS firmware
+        run: |
+          cargo objcopy --release --features jis_layout -- -O binary keychron-q6-he-rmk-jis-${{ github.ref_name }}.bin
+
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Keychron Q6 HE Firmware ${{ github.ref_name }}"
+          body: |
+            ## Keychron Q6 HE — RMK Firmware ${{ github.ref_name }}
+
+            ### Included Builds
+            | File                                                 | Layout |
+            |------------------------------------------------------|--------|
+            | `keychron-q6-he-rmk-ansi-${{ github.ref_name }}.bin` | ANSI   |
+            | `keychron-q6-he-rmk-iso-${{ github.ref_name }}.bin`  | ISO    |
+            | `keychron-q6-he-rmk-jis-${{ github.ref_name }}.bin`  | JIS    |
+
+            Download the `.bin` file matching your layout from the assets below.
+
+            ---
+
+            ### Flashing (Prebuilt)
+            1. Put your keyboard into DFU mode (hold BOOT while plugging in, or use the reset button).
+            2. Find your MCU's serial number:
+            ```sh
+            dfu-util -l
+            ```
+            3. Flash the firmware:
+            ```sh
+            dfu-util -a 0 -s 0x08000000:mass-erase:force:leave \
+              -D keychron-q6-he-rmk-<layout>-${{ github.ref_name }}.bin \
+              -S <serial number>
+            ```
+
+            ---
+
+            ### Building & Flashing from Source
+            ```sh
+            cargo make install   # install required tools (first time only)
+            cargo make flash     # build and flash via DFU
+            ```
+          files: |
+            keychron-q6-he-rmk-ansi-${{ github.ref_name }}.bin
+            keychron-q6-he-rmk-iso-${{ github.ref_name }}.bin
+            keychron-q6-he-rmk-jis-${{ github.ref_name }}.bin
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
