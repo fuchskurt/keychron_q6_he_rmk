@@ -87,10 +87,10 @@ const CONNECTION_NUDGE_DELAY: Duration = Duration::from_millis(50);
 /// `255 × 100 + 50 = 25 550 < 65 535`; neither saturating path can trigger.
 #[inline]
 const fn scale(value: u8, brightness_percent: u8) -> u8 {
-    let v = u16::from(value);
-    let p = u16::from(brightness_percent.min(100));
+    let value_u16 = u16::from(value);
+    let percent_clamped = u16::from(brightness_percent.min(100));
     // +50 rounds to nearest; /100 cannot overflow u8 because v*p/100 ≤ 255.
-    u8::try_from(v.saturating_mul(p).saturating_add(50).checked_div(100).unwrap_or_default()).unwrap_or(255)
+    u8::try_from(value_u16.saturating_mul(percent_clamped).saturating_add(50).checked_div(100).unwrap_or_default()).unwrap_or(255)
 }
 
 /// Apply brightness scaling and gamma correction to an RGB colour.
@@ -325,7 +325,7 @@ pub async fn backlight_runner(
     // ticker will handle the initial nudge and all subsequent transitions, so
     // host_connected starts false and the first CONNECTION_POLL tick after
     // enumeration triggers the connect path naturally.
-    while get_connection_state() != ConnectionState::Connected {
+    while get_connection_state() == ConnectionState::Disconnected {
         Timer::after_millis(10).await;
     }
 
