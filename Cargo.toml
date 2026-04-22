@@ -20,11 +20,13 @@ cortex-m = { version = "0", features = ["critical-section-single-core", "inline-
 cortex-m-rt = { version = "0", features = ["device", "zero-init-ram"] }
 embassy-time = { features = ["tick-hz-1_000_000"], git = "https://github.com/embassy-rs/embassy.git" }
 embassy-stm32 = { features = ["stm32f401rc", "memory-x", "time-driver-tim5", "exti", "unstable-pac", "rt"], git = "https://github.com/embassy-rs/embassy.git" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-executor = { features = ["platform-cortex-m", "executor-thread", "nightly"], git = "https://github.com/embassy-rs/embassy.git" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
 embedded-storage-async = "0"
 rmk = { default-features = false, features = ["async_matrix", "host", "host_security", "storage", "vial", "vial_lock"], git = "https://github.com/fuchskurt/rmk.git" }
 static_cell = "2"
-snled27351_driver = { git = "https://github.com/fuchskurt/snled27351_driver.git" }
+snled27351_driver = { git = "https://github.com/fuchskurt/snled27351_driver.git", features = ["spi"] }
 embedded-hal-async = "1"
 num-traits = { version = "0", default-features = false, features = ["libm"] }
 cfg-if = "1"
@@ -50,10 +52,10 @@ serde_json = { version = "1", features = ["preserve_order"] }
 warnings = "deny"
 
 [workspace.lints.clippy]
-all = "deny"
-pedantic = "deny"
-restriction = "deny"
-nursery = "deny"
+all = { level = "deny", priority = 1 }
+pedantic = { level = "deny", priority = 1 }
+restriction = { level = "deny", priority = 1 }
+nursery = { level = "deny", priority = 1 }
 blanket_clippy_restriction_lints = "allow"
 future_not_send = "allow"
 implicit_return = "allow"

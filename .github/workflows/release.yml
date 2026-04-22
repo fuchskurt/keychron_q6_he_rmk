@@ -43,7 +43,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Keychron Q6 HE Firmware ${{ github.ref_name }}"
+          name: "${{ github.ref_name }}"
           body: |
             ## Keychron Q6 HE — RMK Firmware ${{ github.ref_name }}
 
