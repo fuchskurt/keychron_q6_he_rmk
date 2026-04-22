@@ -8,29 +8,43 @@ use crate::{
     layout::LED_LAYOUT,
 };
 use CalibPhase::{AllAccepted, Done, Full, Zero};
+use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_stm32::{
     gpio::Output,
     mode::Async,
     spi::{self, Spi},
 };
+use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Ticker, Timer};
 use embedded_hal_async::spi::ErrorType;
 use rmk::{
+    channel::KEYBOARD_REPORT_CHANNEL,
+    descriptor::KeyboardReport,
     embassy_futures::select::{Either3, select3},
     hid::Report,
     state::{ConnectionState, get_connection_state},
 };
 use snled27351_driver::{
     driver::Driver,
-    transport::spi::{SpiTransport, SpiTransportError},
+    transport::spi::{Controller, TransportError},
 };
+use spi::mode::Master;
+use static_cell::StaticCell;
+
+/// Shared SPI bus protected by an async-aware mutex.
+static SPI_BUS: StaticCell<Mutex<ThreadModeRawMutex, Spi<'static, Async, Master>>> = StaticCell::new();
+
+/// Concrete SPI device type wrapping one chip-select pin.
+type Device = SpiDevice<'static, ThreadModeRawMutex, Spi<'static, Async, Master>, Output<'static>>;
 
 /// Concrete SPI transport type for this keyboard.
-type Transport = SpiTransport<Spi<'static, Async, spi::mode::Master>, Output<'static>, Output<'static>, 2>;
+type Transport = Controller<Device, Output<'static>, 2>;
+
 /// Concrete driver type for this keyboard.
 type BacklightDriver = Driver<Transport, 2>;
+
 /// Bus error type shared by all async driver helpers.
-type BusError = SpiTransportError<<Spi<'static, Async, spi::mode::Master> as ErrorType>::Error>;
+type BusError = TransportError<<Device as ErrorType>::Error>;
 
 /// LED index for the Caps Lock indicator key.
 const CAPS_LOCK_LED_INDEX: usize = 62;
@@ -44,17 +58,17 @@ const INDICATOR_RED: (u8, u8, u8) = (255, 0, 0);
 const INDICATOR_WHITE: (u8, u8, u8) = (255, 255, 255);
 /// RGB color for a disabled indicator (off).
 const INDICATOR_OFF: (u8, u8, u8) = (0, 0, 0);
-/// Background colour during the zero-travel calibration phase and the
+/// Background color during the zero-travel calibration phase and the
 /// EEPROM-write-failure signal (amber).
 const CALIB_AMBER: (u8, u8, u8) = (255, 120, 0);
-/// Solid colour used for the post-calibration success hold and for each
+/// Solid color used for the post-calibration success hold and for each
 /// individually confirmed key during the full-travel pass (green).
 const CALIB_GREEN: (u8, u8, u8) = (0, 220, 80);
 /// Number of brightness steps in the soft-start ramp.
 const SOFTSTART_STEPS: u8 = 50;
 /// Total duration of the soft-start ramp in milliseconds.
 const SOFTSTART_RAMP_MS: u32 = 1000;
-/// Brightness percentage applied when a driver chip reports temperature ≥ 70
+/// Brightness percentage applied when a driver chip reports temperature >= 70
 /// °C.
 const THERMAL_THROTTLE_BRIGHTNESS: u8 = 50;
 /// Interval between thermal register polls.
@@ -89,7 +103,7 @@ const CONNECTION_NUDGE_DELAY: Duration = Duration::from_millis(50);
 const fn scale(value: u8, brightness_percent: u8) -> u8 {
     let value_u16 = u16::from(value);
     let percent_clamped = u16::from(brightness_percent.min(100));
-    // +50 rounds to nearest; /100 cannot overflow u8 because v*p/100 ≤ 255.
+    // +50 rounds to nearest; /100 cannot overflow u8 because v*p/100 <= 255.
     u8::try_from(value_u16.saturating_mul(percent_clamped).saturating_add(50).checked_div(100).unwrap_or_default())
         .unwrap_or(255)
 }
@@ -118,12 +132,16 @@ const fn correct_color(color: (u8, u8, u8), brightness_percent: u8) -> (u8, u8, 
 
 /// Paint every LED with `color` at `brightness` and flush to hardware.
 ///
-/// Combines the three-step correct → stage_all_leds → flush sequence that
-/// appears in every solid-colour calibration frame, so each call site is a
+/// Combines the three-step correct -> stage_all_leds -> flush sequence that
+/// appears in every solid-color calibration frame, so each call site is a
 /// single expression.
+///
+/// # Errors
+///
+/// Returns `Err` if any bus transaction fails. See [`BacklightDriver::flush`].
 async fn fill_all_leds(driver: &mut BacklightDriver, color: (u8, u8, u8), brightness: u8) -> Result<(), BusError> {
-    let (r, g, b) = correct_color(color, brightness);
-    driver.stage_all_leds(r, g, b);
+    let (red, green, blue) = correct_color(color, brightness);
+    driver.stage_all_leds(red, green, blue);
     driver.flush().await
 }
 
@@ -161,8 +179,8 @@ struct BacklightState {
     calib_leds_done: u128,
     /// Whole-keyboard gradient percentage (0–100) during the full-travel pass.
     ///
-    /// Drives the red→blue background interpolation in [`render_calib`].
-    /// Cleared to zero alongside [`self::BacklightState::calib_leds_done`] on
+    /// Drives the red–blue background interpolation in [`render_calib`].
+    /// Cleared to zero alongside [`BacklightState::calib_leds_done`] on
     /// calibration completion.
     calib_pct:       u8,
 }
@@ -191,8 +209,8 @@ impl BacklightState {
 ///
 /// Returns `Err` if any bus transaction fails. See [`BacklightDriver::flush`].
 async fn render_all(driver: &mut BacklightDriver, state: BacklightState) -> Result<(), BusError> {
-    let (r, g, b) = correct_color(INDICATOR_WHITE, state.brightness);
-    driver.stage_all_leds(r, g, b);
+    let (red, green, blue) = correct_color(INDICATOR_WHITE, state.brightness);
+    driver.stage_all_leds(red, green, blue);
     render_indicators(driver, state).await
 }
 
@@ -208,20 +226,15 @@ async fn render_all(driver: &mut BacklightDriver, state: BacklightState) -> Resu
 ///
 /// Returns `Err` if any bus transaction fails. See [`BacklightDriver::flush`].
 async fn render_calib(driver: &mut BacklightDriver, state: BacklightState) -> Result<(), BusError> {
-    // Gradient background: starts red (0 %), shifts toward blue (100 %).
     let bg_red = scale(255, 100_u8.saturating_sub(state.calib_pct));
     let bg_blue = scale(220, state.calib_pct);
     let (bg_r, bg_g, bg_b) = correct(bg_red, 0, bg_blue, state.brightness);
-
-    // Per-key confirmed color: solid green.
     let (cal_r, cal_g, cal_b) = correct_color(CALIB_GREEN, state.brightness);
 
     driver.stage_all_leds(bg_r, bg_g, bg_b);
 
-    // Overlay individually confirmed LEDs in green.
     let mut bits = state.calib_leds_done;
     while bits != 0 {
-        // Isolate and consume the lowest set bit.
         let idx = usize::try_from(bits.trailing_zeros()).unwrap_or(usize::MAX);
         driver.stage_led(idx, cal_r, cal_g, cal_b);
         bits &= bits.saturating_sub(1);
@@ -239,15 +252,13 @@ async fn render_calib(driver: &mut BacklightDriver, state: BacklightState) -> Re
 ///
 /// Returns `Err` if any bus transaction fails. See [`BacklightDriver::flush`].
 async fn render_indicators(driver: &mut BacklightDriver, state: BacklightState) -> Result<(), BusError> {
-    // Caps Lock: red when active, white when inactive.
     let caps_color = if state.caps_lock { INDICATOR_RED } else { INDICATOR_WHITE };
-    let (r, g, b) = correct_color(caps_color, INDICATOR_BRIGHTNESS);
-    driver.stage_led(CAPS_LOCK_LED_INDEX, r, g, b);
+    let (red, green, blue) = correct_color(caps_color, INDICATOR_BRIGHTNESS);
+    driver.stage_led(CAPS_LOCK_LED_INDEX, red, green, blue);
 
-    // Num Lock: white when active, off when inactive.
     let num_color = if state.num_lock { INDICATOR_WHITE } else { INDICATOR_OFF };
-    let (r, g, b) = correct_color(num_color, INDICATOR_BRIGHTNESS);
-    driver.stage_led(NUM_LOCK_LED_INDEX, r, g, b);
+    let (red, green, blue) = correct_color(num_color, INDICATOR_BRIGHTNESS);
+    driver.stage_led(NUM_LOCK_LED_INDEX, red, green, blue);
 
     driver.flush().await
 }
@@ -268,19 +279,16 @@ async fn softstart(
     target_brightness: u8,
 ) -> Result<(), BusError> {
     let target = u32::from(target_brightness.min(100));
-    // SOFTSTART_STEPS is a non-zero constant; .max(1) is a belt-and-suspenders
-    // guard ensuring checked_div always returns Some.
     let steps = u32::from(SOFTSTART_STEPS.max(1));
     let delay_ms = u64::from(SOFTSTART_RAMP_MS.checked_div(steps).unwrap_or(0));
 
-    // `0..=steps` produces SOFTSTART_STEPS + 1 iterations so that both the
-    // 0 % start and the 100 % end are written. The final delay is skipped
-    // (step == steps guard) so the function returns immediately after the
-    // last write without an unnecessary pause.
     for step in 0..=steps {
         let percent = u8::try_from(target.saturating_mul(step).checked_div(steps).unwrap_or(0)).unwrap_or(0);
-        let (r, g, b) = correct(base_red, base_green, base_blue, percent);
-        driver.set_all_leds(r, g, b).await?;
+        let (red, green, blue) = correct(base_red, base_green, base_blue, percent);
+        match driver.set_all_leds(red, green, blue).await {
+            Ok(()) => {},
+            Err(err) => return Err(err),
+        }
         if step < steps {
             Timer::after_millis(delay_ms).await;
         }
@@ -307,12 +315,17 @@ async fn softstart(
 ///   the host into reporting its current indicator state, ensuring Num Lock and
 ///   Caps Lock are correct without requiring a key press.
 pub async fn backlight_runner(
-    spi: Spi<'static, Async, spi::mode::Master>,
+    spi: Spi<'static, Async, Master>,
     cs0: Output<'static>,
     cs1: Output<'static>,
     sdb: Output<'static>,
 ) -> ! {
-    let transport = SpiTransport::new(spi, [cs0, cs1], sdb);
+    // Initialize the shared async bus and wrap each CS pin in its own SpiDevice.
+    let spi_bus = SPI_BUS.init(Mutex::new(spi));
+    let device0 = SpiDevice::new(spi_bus, cs0);
+    let device1 = SpiDevice::new(spi_bus, cs1);
+
+    let transport = Controller::new([device0, device1], sdb);
     let mut driver = BacklightDriver::new(transport, LED_LAYOUT);
 
     // Backlight failures are non-critical: the keyboard remains fully functional
@@ -355,10 +368,10 @@ pub async fn backlight_runner(
                         // Blink solid green × CALIB_ALL_DONE_BLINK_COUNT to signal
                         // that every key has been recorded and keys may be released.
                         // Calibration is still in progress (in_calib stays true).
-                        for i in 0..CALIB_ALL_DONE_BLINK_COUNT {
+                        for blink_index in 0..CALIB_ALL_DONE_BLINK_COUNT {
                             let _ = fill_all_leds(&mut driver, CALIB_GREEN, state.brightness).await;
                             Timer::after_millis(CALIB_ALL_DONE_BLINK_HALF_MS).await;
-                            if i < CALIB_ALL_DONE_BLINK_COUNT.saturating_sub(1) {
+                            if blink_index < CALIB_ALL_DONE_BLINK_COUNT.saturating_sub(1) {
                                 let _ = fill_all_leds(&mut driver, INDICATOR_OFF, state.brightness).await;
                                 Timer::after_millis(CALIB_ALL_DONE_BLINK_HALF_MS).await;
                             }
@@ -430,9 +443,7 @@ pub async fn backlight_runner(
                         // the nudge, otherwise the host response may arrive before
                         // RMK is listening and be silently dropped.
                         Timer::after(CONNECTION_NUDGE_DELAY).await;
-                        rmk::channel::KEYBOARD_REPORT_CHANNEL
-                            .send(Report::KeyboardReport(rmk::descriptor::KeyboardReport::default()))
-                            .await;
+                        KEYBOARD_REPORT_CHANNEL.send(Report::KeyboardReport(KeyboardReport::default())).await;
                         let _ = render_all(&mut driver, state).await;
                     } else {
                         // Host disconnected: turn off all LEDs until the next
