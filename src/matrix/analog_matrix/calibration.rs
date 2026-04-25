@@ -278,7 +278,7 @@ where
 
         for ((entry_row, zero_row), full_row) in entries.iter_mut().zip(zero_raw.iter()).zip(full_raw.iter()) {
             for ((entry, &zero), &seen_min) in entry_row.iter_mut().zip(zero_row.iter()).zip(full_row.iter()) {
-                let full = if zero > seen_min && zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
+                let full = if zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
                     seen_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE))
                 } else {
                     zero.saturating_sub(DEFAULT_FULL_RANGE).max(VALID_RAW_MIN)
