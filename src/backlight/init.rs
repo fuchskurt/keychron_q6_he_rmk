@@ -285,7 +285,9 @@ async fn softstart(
     for step in 0..=steps {
         let percent = u8::try_from(target.saturating_mul(step).checked_div(steps).unwrap_or(0)).unwrap_or(0);
         let (red, green, blue) = correct(base_red, base_green, base_blue, percent);
-        driver.set_all_leds(red, green, blue).await?;
+        if let Err(err) = driver.set_all_leds(red, green, blue).await {
+            return Err(err);
+        }
         if step < steps {
             Timer::after_millis(delay_ms).await;
         }
