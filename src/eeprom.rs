@@ -66,6 +66,21 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         self.i2c.write_read(DEVICE_ADDR, &addr.to_be_bytes(), buf).await
     }
 
+    /// Write one aligned page to the device without managing the write-protect
+    /// pin.
+    ///
+    /// Callers must deassert WP before calling and re-assert it afterward.
+    /// `chunk` must not cross a page boundary.
+    async fn write_page_raw(&mut self, addr: u16, chunk: &[u8]) -> Result<(), Error> {
+        let addr_bytes = addr.to_be_bytes();
+        let result =
+            self.i2c.transaction(DEVICE_ADDR, &mut [Operation::Write(&addr_bytes), Operation::Write(chunk)]).await;
+        if result.is_err() {
+            return result;
+        }
+        self.poll_until_ready(255).await
+    }
+
     /// Write `data` starting at 16-bit word address `start_addr`.
     pub async fn write(&mut self, start_addr: u16, data: &[u8]) -> Result<(), Error> {
         // Switch to output-low: write-protect deasserted.
@@ -87,15 +102,9 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
             // Bytes to write on this page, the smaller of the remaining page
             // space and the remaining data.
             let chunk_len = page_remaining.min(data.len().saturating_sub(offset));
-            let addr_bytes = addr.to_be_bytes();
             let chunk = &data[offset..offset.saturating_add(chunk_len)];
-            result =
-                self.i2c.transaction(DEVICE_ADDR, &mut [Operation::Write(&addr_bytes), Operation::Write(chunk)]).await;
-            if result.is_err() {
-                break;
-            }
 
-            result = self.poll_until_ready(255).await;
+            result = self.write_page_raw(addr, chunk).await;
             if result.is_err() {
                 break;
             }
@@ -122,19 +131,30 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// Returns the first [`Error`] encountered. Any pages written before the
     /// failure are not rolled back.
     pub async fn erase(&mut self) -> Result<(), Error> {
+        // Deassert WP once for the entire erase rather than once per page.
+        self.wp.set_low();
+        self.wp.set_as_output(Speed::Low);
+
         let blank = [0xFF_u8; PAGE_SIZE];
         let mut offset = 0_usize;
+        let mut result = Ok(());
+
         while offset < EEPROM_SIZE {
             let addr = match u16::try_from(offset) {
                 Ok(a) => a,
-                Err(_) => return Err(Overrun),
+                Err(_) => {
+                    result = Err(Overrun);
+                    break;
+                },
             };
-            let result = self.write(addr, &blank).await;
-            if let Err(e) = result {
-                return Err(e);
+            result = self.write_page_raw(addr, &blank).await;
+            if result.is_err() {
+                break;
             }
             offset = offset.saturating_add(PAGE_SIZE);
         }
-        Ok(())
+
+        self.wp.set_as_input(Pull::Up);
+        result
     }
 }

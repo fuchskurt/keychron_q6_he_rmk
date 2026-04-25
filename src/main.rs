@@ -15,6 +15,7 @@
 extern crate cortex_m as _;
 /// Backlight driver integration.
 mod backlight;
+/// EEPROM I²C driver.
 mod eeprom;
 /// Flash storage wrapper types.
 mod flash_wrapper_async;

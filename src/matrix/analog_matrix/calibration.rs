@@ -290,13 +290,12 @@ where
         Self::apply_calib(calib, entries, &zero_raw);
 
         calib_store::serialize(entries, eeprom_buf, crc);
-        let erase_ok = eeprom.erase().await.is_ok();
-        let write_ok = eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
 
         // Verify by reading back into the same buffer and re-deserializing.
         // Reusing the buffer avoids a second large stack allocation.
-        let verified = erase_ok
-            && write_ok
+        // Short-circuit: skip write if erase fails, skip read-back if write fails.
+        let verified = eeprom.erase().await.is_ok()
+            && eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
             && eeprom.read(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
             && try_deserialize::<ROW, COL>(eeprom_buf, entries, crc);
 
