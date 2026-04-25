@@ -50,6 +50,7 @@ use rmk::event::{KeyboardEvent, publish_event_async};
 /// [`AUTO_CALIB_MIN_RANGE`]; partial presses or noisy readings are
 /// discarded. Updated calibration takes effect immediately on the next
 /// travel computation within the same scan pass.
+#[inline]
 fn auto_calib_update(ac: &mut AutoCalib, cal: &mut KeyCalib, raw: u16) {
     match ac.phase {
         AutoCalibPhase::Idle => {
@@ -76,36 +77,36 @@ fn auto_calib_update(ac: &mut AutoCalib, cal: &mut KeyCalib, raw: u16) {
             if raw > ac.zero_candidate {
                 // Key still rising; update the zero-travel peak.
                 ac.zero_candidate = raw;
-            } else if ac.zero_candidate.saturating_sub(raw) <= AUTO_CALIB_ZERO_JITTER {
-                // ADC has settled within jitter of the zero-travel peak;
-                // score the cycle if the range is plausible.
-                let range = ac.zero_candidate.saturating_sub(ac.full_candidate);
-                if range >= AUTO_CALIB_MIN_RANGE {
-                    ac.confidence = ac.confidence.saturating_add(1);
-                }
+            } else {
+                // ADC has stopped rising: either settled within jitter (score
+                // the cycle) or dropped sharply (key re-pressed mid-release).
+                // Both cases return to Idle; only the settled case also scores.
+                if ac.zero_candidate.saturating_sub(raw) <= AUTO_CALIB_ZERO_JITTER {
+                    // ADC has settled within jitter of the zero-travel peak;
+                    // score the cycle if the range is plausible.
+                    let range = ac.zero_candidate.saturating_sub(ac.full_candidate);
+                    if range >= AUTO_CALIB_MIN_RANGE {
+                        ac.confidence = ac.confidence.saturating_add(1);
+                    }
 
-                if ac.confidence >= AUTO_CALIB_CONFIDENCE_THRESHOLD {
-                    ac.confidence = 0;
+                    if ac.confidence >= AUTO_CALIB_CONFIDENCE_THRESHOLD {
+                        ac.confidence = 0;
 
-                    let new_zero = ac.zero_candidate.saturating_sub(ZERO_TRAVEL_DEAD_ZONE);
-                    let new_full = ac
-                        .full_candidate
-                        .saturating_add(BOTTOM_JITTER)
-                        .clamp(VALID_RAW_MIN, new_zero.saturating_sub(MIN_USEFUL_FULL_RANGE));
+                        let new_zero = ac.zero_candidate.saturating_sub(ZERO_TRAVEL_DEAD_ZONE);
+                        let new_full = ac
+                            .full_candidate
+                            .saturating_add(BOTTOM_JITTER)
+                            .clamp(VALID_RAW_MIN, new_zero.saturating_sub(MIN_USEFUL_FULL_RANGE));
 
-                    // Only commit the update if the new zero differs
-                    // meaningfully from the current one, avoiding
-                    // unnecessary churn in the precomputed polynomial
-                    // calibration data derived by `KeyCalib::new`.
-                    if cal.zero.abs_diff(new_zero) > 10 {
-                        *cal = KeyCalib::new(new_zero, new_full);
+                        // Only commit the update if the new zero differs
+                        // meaningfully from the current one, avoiding
+                        // unnecessary churn in the precomputed polynomial
+                        // calibration data derived by `KeyCalib::new`.
+                        if cal.zero.abs_diff(new_zero) > 10 {
+                            *cal = KeyCalib::new(new_zero, new_full);
+                        }
                     }
                 }
-
-                ac.phase = AutoCalibPhase::Idle;
-            } else {
-                // ADC dropped significantly below zero_candidate - key was
-                // re-pressed before fully releasing. Restart the machine.
                 ac.phase = AutoCalibPhase::Idle;
             }
         },
@@ -171,10 +172,13 @@ where
         // Clamp to 1 so a zero config value never disables the dead-band.
         let sensitivity_press = cfg.rt_sensitivity_press.max(1);
         let sensitivity_release = cfg.rt_sensitivity_release.max(1);
+        let trough_floor = act_threshold.saturating_sub(sensitivity_press);
+        let col_settle_us = cfg.col_settle_us;
+        let noise_gate = cfg.noise_gate;
         loop {
             for col in 0..COL {
                 cols.select(col);
-                Timer::after(cfg.col_settle_us).await;
+                Timer::after(col_settle_us).await;
                 seq.read(buf).await;
 
                 for (row, &raw) in buf.iter().enumerate() {
@@ -189,7 +193,7 @@ where
                     let last_raw = st.last_raw;
 
                     // Skip if the reading has not changed beyond the noise gate.
-                    if likely(last_raw.abs_diff(raw) < cfg.noise_gate) {
+                    if likely(last_raw.abs_diff(raw) < noise_gate) {
                         continue;
                     }
 
@@ -207,9 +211,10 @@ where
                     // borrow is released.
                     let cal = *cal_mut;
 
+                    let Some(new_travel) = travel_from(&cal, raw) else { continue };
+
                     let prev_travel = st.travel;
                     let was_pressed = st.pressed;
-                    let Some(new_travel) = travel_from(&cal, raw) else { continue };
 
                     // After noise gate, travel often resolves to the same
                     // quantized value, skip redundant RT logic.
@@ -219,13 +224,20 @@ where
 
                     st.travel = new_travel;
 
+                    let below_act = new_travel < act_threshold;
+
                     // Dynamic Rapid Trigger
                     let now_pressed = if was_pressed {
                         // Track the peak while held; release when travel drops at
                         // least `sensitivity_release` below it. The actuation floor
                         // is a hard lower bound that forces an immediate release.
                         st.extremum = st.extremum.max(new_travel);
-                        new_travel >= act_threshold && new_travel > st.extremum.saturating_sub(sensitivity_release)
+                        if below_act {
+                            false
+                        } else {
+                            // Only compute when relevant
+                            new_travel > st.extremum.saturating_sub(sensitivity_release)
+                        }
                     } else {
                         // Track the trough while released; re-press when travel
                         // climbs at least `sensitivity_press` above it AND exceeds
@@ -236,10 +248,13 @@ where
                         // clamped so the key re-presses cleanly at `act_threshold`
                         // without requiring an extra delta above it.
                         st.extremum = st.extremum.min(new_travel);
-                        if new_travel < act_threshold {
-                            st.extremum = st.extremum.min(act_threshold.saturating_sub(sensitivity_press));
+                        if below_act {
+                            st.extremum = st.extremum.min(trough_floor);
+                            false
+                        } else {
+                            // Only compute when above floor
+                            new_travel >= st.extremum.saturating_add(sensitivity_press)
                         }
-                        new_travel >= act_threshold && new_travel >= st.extremum.saturating_add(sensitivity_press)
                     };
 
                     if unlikely(now_pressed != st.pressed) {

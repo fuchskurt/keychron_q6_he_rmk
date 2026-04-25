@@ -22,7 +22,7 @@ use embassy_stm32::{
     interrupt::typelevel::Binding,
     pac::adc,
 };
-use rmk::input_device::Runnable;
+use rmk::core_traits::Runnable;
 pub use types::HallCfg;
 
 /// ADC-related peripherals grouped to allow split borrows when constructing

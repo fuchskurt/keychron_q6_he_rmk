@@ -15,6 +15,7 @@
 extern crate cortex_m as _;
 /// Backlight driver integration.
 mod backlight;
+/// EEPROM I²C driver.
 mod eeprom;
 /// Flash storage wrapper types.
 mod flash_wrapper_async;
@@ -79,9 +80,10 @@ use pac::{ADC1_COMMON, SYSCFG, adccommon::vals::Adcpre};
 use rmk::{
     KeymapData,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
+    core_traits::Runnable as _,
     futures::future::join4,
     initialize_keymap_and_storage,
-    input_device::{Runnable as _, rotary_encoder::RotaryEncoder},
+    input_device::rotary_encoder::RotaryEncoder,
     keyboard::Keyboard,
     run_all,
     run_rmk,

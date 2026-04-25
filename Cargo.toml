@@ -11,6 +11,8 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [features]
+default = ["ansi_layout"]
+
 ansi_layout = []
 iso_layout = []
 jis_layout = []
@@ -56,14 +58,14 @@ all = { level = "deny", priority = 1 }
 pedantic = { level = "deny", priority = 1 }
 restriction = { level = "deny", priority = 1 }
 nursery = { level = "deny", priority = 1 }
-blanket_clippy_restriction_lints = "allow"
-future_not_send = "allow"
-implicit_return = "allow"
-separated_literal_suffix = "allow"
-single_call_fn = "allow"
-self_named_module_files = "allow"
-pub_with_shorthand = "allow"
-pub_use = "allow"
+blanket_clippy_restriction_lints = { level = "allow", priority = 2 }
+future_not_send = { level = "allow", priority = 2 }
+implicit_return = { level = "allow", priority = 2 }
+separated_literal_suffix = { level = "allow", priority = 2 }
+single_call_fn = { level = "allow", priority = 2 }
+self_named_module_files = { level = "allow", priority = 2 }
+pub_with_shorthand = { level = "allow", priority = 2 }
+pub_use = { level = "allow", priority = 2 }
 
 [lints]
 workspace = true

@@ -1,0 +1,22 @@
+{
+  "languages": {
+    "Rust": {
+      "formatter": "language_server",
+    },
+  },
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "rustfmt": {
+          "extraArgs": ["+nightly"],
+        },
+        "check": {
+          "command": "clippy",
+        },
+        "cargo": {
+          "features": ["ansi_layout"],
+        },
+      },
+    },
+  },
+}

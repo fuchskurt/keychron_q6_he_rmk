@@ -44,11 +44,11 @@ fn crc32_of(crc: &mut Crc<'_>, data: &[u8]) -> u32 {
     let mut chunks = data.chunks_exact(4);
     for chunk in chunks.by_ref() {
         // chunks_exact guarantees 4 bytes; unwrap_or is unreachable.
-        crc.feed_word(u32::from_le_bytes(chunk.try_into().unwrap_or([0u8; 4])));
+        crc.feed_word(u32::from_le_bytes(chunk.try_into().unwrap_or([0_u8; 4])));
     }
     let remainder = chunks.remainder();
     if !remainder.is_empty() {
-        let mut last = [0u8; 4];
+        let mut last = [0_u8; 4];
         last[..remainder.len()].copy_from_slice(remainder);
         crc.feed_word(u32::from_le_bytes(last));
     }
@@ -124,8 +124,8 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(
     }
 
     // Validate CRC over header + entries.
-    let data_end = HEADER_LEN.saturating_add(ROW.saturating_mul(COL).saturating_mul(ENTRY_LEN));
-    let crc_end = data_end.saturating_add(CRC_LEN);
+    let crc_end = total_len(ROW, COL);
+    let data_end = crc_end.saturating_sub(CRC_LEN);
     // None must not be silently replaced with 0 (0 is a valid CRC value).
     let Some(stored_crc_bytes) = read_array::<4>(buf, data_end, crc_end) else { return false };
     let stored_crc = u32::from_le_bytes(stored_crc_bytes);

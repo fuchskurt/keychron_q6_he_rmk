@@ -19,9 +19,8 @@ use embassy_time::{Duration, Ticker, Timer};
 use embedded_hal_async::spi::ErrorType;
 use rmk::{
     channel::KEYBOARD_REPORT_CHANNEL,
-    descriptor::KeyboardReport,
     embassy_futures::select::{Either3, select3},
-    hid::Report,
+    hid::{KeyboardReport, Report},
     state::{ConnectionState, get_connection_state},
 };
 use snled27351_driver::{
@@ -285,9 +284,8 @@ async fn softstart(
     for step in 0..=steps {
         let percent = u8::try_from(target.saturating_mul(step).checked_div(steps).unwrap_or(0)).unwrap_or(0);
         let (red, green, blue) = correct(base_red, base_green, base_blue, percent);
-        match driver.set_all_leds(red, green, blue).await {
-            Ok(()) => {},
-            Err(err) => return Err(err),
+        if let Err(err) = driver.set_all_leds(red, green, blue).await {
+            return Err(err);
         }
         if step < steps {
             Timer::after_millis(delay_ms).await;
@@ -397,10 +395,10 @@ pub async fn backlight_runner(
                 BacklightCmd::CalibKeyDone(led_idx) => {
                     // Mark this LED calibrated and repaint immediately so the
                     // key turns green the moment it crosses the threshold.
-                    // The `< 128` guard matches the bit-width of calib_leds_done
-                    // (u128); checked_shl is an additional defensive layer.
-                    if usize::from(led_idx) < 128 {
-                        state.calib_leds_done |= 1_u128.checked_shl(u32::from(led_idx)).unwrap_or(0);
+                    // checked_shl returns None for any shift >= 128 (the bit-
+                    // width of calib_leds_done).
+                    if let Some(bit) = 1_u128.checked_shl(u32::from(led_idx)) {
+                        state.calib_leds_done |= bit;
                     }
                     let _ = render_calib(&mut driver, state).await;
                 },

@@ -3,10 +3,10 @@
 //! Generates Vial keyboard configuration constants from `vial.json` and
 //! sets the required linker arguments for the Cortex-M4 target.
 #![expect(
-    clippy::single_call_fn,
-    clippy::question_mark_used,
+    clippy::implicit_return,
     clippy::blanket_clippy_restriction_lints,
-    reason = "Used for building the package."
+    clippy::single_call_fn,
+    reason = "Implementation specific ignored lints"
 )]
 
 use core::error::Error;
@@ -40,7 +40,10 @@ enum Layout {
 /// Registers change detection for `vial.json` and `memory.x`, sets the
 /// required linker arguments, and triggers Vial config generation.
 fn main() -> Result<(), Box<dyn Error>> {
-    let layout = detect_layout()?;
+    let layout = match detect_layout() {
+        Ok(value) => value,
+        Err(error) => return Err(error),
+    };
 
     let vial_path = match layout {
         Layout::Ansi => "src/layout/ansi/vial.json",
@@ -97,10 +100,20 @@ fn detect_layout() -> Result<Layout, Box<dyn Error>> {
 /// - `VIAL_SERIAL`: Vial serial string derived from the first 4 bytes of the
 ///   keyboard ID.
 fn generate_vial_config(vial_path: &str, layout: Layout) -> Result<(), Box<dyn Error>> {
-    let out_file = Path::new(&env::var_os("OUT_DIR").ok_or("OUT_DIR not set")?).join("config_generated.rs");
+    let out_dir = match env::var_os("OUT_DIR") {
+        Some(value) => value,
+        None => return Err("OUT_DIR not set".into()),
+    };
+    let out_file = Path::new(&out_dir).join("config_generated.rs");
 
-    let vial_cfg = read_vial_json(vial_path)?;
-    let compressed = compress_vial_cfg(&vial_cfg)?;
+    let vial_cfg = match read_vial_json(vial_path) {
+        Ok(value) => value,
+        Err(error) => return Err(error),
+    };
+    let compressed = match compress_vial_cfg(&vial_cfg) {
+        Ok(value) => value,
+        Err(error) => return Err(error),
+    };
 
     let keyboard_id: [u8; 8] = match layout {
         Layout::Iso => [0xDE, 0x22, 0x4B, 0xDF, 0x09, 0x8D, 0x30, 0x00],
@@ -108,7 +121,10 @@ fn generate_vial_config(vial_path: &str, layout: Layout) -> Result<(), Box<dyn E
         Layout::Jis => [0x90, 0x52, 0x87, 0x62, 0x50, 0x77, 0x2C, 0x47],
     };
 
-    fs::write(out_file, format_constants(&compressed, keyboard_id, &vial_cfg))?;
+    match fs::write(out_file, format_constants(&compressed, keyboard_id, &vial_cfg)) {
+        Ok(()) => {},
+        Err(error) => return Err(error.into()),
+    }
     Ok(())
 }
 
@@ -118,9 +134,24 @@ fn generate_vial_config(vial_path: &str, layout: Layout) -> Result<(), Box<dyn E
 /// compression. Prints a diagnostic message to stderr if the file cannot
 /// be opened, and returns an empty string so compression can still proceed.
 fn read_vial_json(path: &str) -> Result<String, Box<dyn Error>> {
-    let content = read_to_string(path)?;
-    let value: Value = from_str(&content)?;
-    Ok(to_string(&value)?)
+    let content = match read_to_string(path) {
+        Ok(value) => value,
+        Err(error) => {
+            return Err(error.into());
+        },
+    };
+
+    let value: Value = match from_str(&content) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return Err(error.into());
+        },
+    };
+
+    match to_string(&value) {
+        Ok(serialized) => Ok(serialized),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Compresses a Vial config string using XZ at compression level 9.
@@ -129,8 +160,26 @@ fn read_vial_json(path: &str) -> Result<String, Box<dyn Error>> {
 /// constant in the generated source file.
 fn compress_vial_cfg(vial_cfg: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut compressed = Vec::new();
-    XzWriter::new(&mut compressed, XzOptions::with_preset(9))?.auto_finish().write_all(vial_cfg.as_bytes())?;
-    Ok(compressed)
+
+    let result: Result<(), Box<dyn Error>> = {
+        let mut writer = match XzWriter::new(&mut compressed, XzOptions::with_preset(9)) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(error.into());
+            },
+        }
+        .auto_finish();
+
+        match writer.write_all(vial_cfg.as_bytes()) {
+            Ok(()) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    };
+
+    match result {
+        Ok(()) => Ok(compressed),
+        Err(error) => Err(error),
+    }
 }
 
 /// Formats all Vial configuration constants into a Rust source string.

@@ -278,7 +278,7 @@ where
 
         for ((entry_row, zero_row), full_row) in entries.iter_mut().zip(zero_raw.iter()).zip(full_raw.iter()) {
             for ((entry, &zero), &seen_min) in entry_row.iter_mut().zip(zero_row.iter()).zip(full_row.iter()) {
-                let full = if zero > seen_min && zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
+                let full = if zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
                     seen_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE))
                 } else {
                     zero.saturating_sub(DEFAULT_FULL_RANGE).max(VALID_RAW_MIN)
@@ -290,13 +290,11 @@ where
         Self::apply_calib(calib, entries, &zero_raw);
 
         calib_store::serialize(entries, eeprom_buf, crc);
-        let erase_ok = eeprom.erase().await.is_ok();
-        let write_ok = eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok();
 
         // Verify by reading back into the same buffer and re-deserializing.
         // Reusing the buffer avoids a second large stack allocation.
-        let verified = erase_ok
-            && write_ok
+        let verified = eeprom.erase().await.is_ok()
+            && eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
             && eeprom.read(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
             && try_deserialize::<ROW, COL>(eeprom_buf, entries, crc);
 
