@@ -2,13 +2,6 @@
 //!
 //! Generates Vial keyboard configuration constants from `vial.json` and
 //! sets the required linker arguments for the Cortex-M4 target.
-#![expect(
-    clippy::implicit_return,
-    clippy::blanket_clippy_restriction_lints,
-    clippy::single_call_fn,
-    reason = "Implementation specific ignored lints"
-)]
-
 use core::error::Error;
 use fs::read_to_string;
 use lzma_rust2::{XzOptions, XzWriter};
