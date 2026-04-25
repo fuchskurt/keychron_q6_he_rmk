@@ -124,8 +124,8 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(
     }
 
     // Validate CRC over header + entries.
-    let data_end = HEADER_LEN.saturating_add(ROW.saturating_mul(COL).saturating_mul(ENTRY_LEN));
-    let crc_end = data_end.saturating_add(CRC_LEN);
+    let crc_end = total_len(ROW, COL);
+    let data_end = crc_end.saturating_sub(CRC_LEN);
     // None must not be silently replaced with 0 (0 is a valid CRC value).
     let Some(stored_crc_bytes) = read_array::<4>(buf, data_end, crc_end) else { return false };
     let stored_crc = u32::from_le_bytes(stored_crc_bytes);

@@ -396,10 +396,10 @@ pub async fn backlight_runner(
                 BacklightCmd::CalibKeyDone(led_idx) => {
                     // Mark this LED calibrated and repaint immediately so the
                     // key turns green the moment it crosses the threshold.
-                    // The `< 128` guard matches the bit-width of calib_leds_done
-                    // (u128); checked_shl is an additional defensive layer.
-                    if usize::from(led_idx) < 128 {
-                        state.calib_leds_done |= 1_u128.checked_shl(u32::from(led_idx)).unwrap_or(0);
+                    // checked_shl returns None for any shift >= 128 (the bit-
+                    // width of calib_leds_done), so the guard is built-in.
+                    if let Some(bit) = 1_u128.checked_shl(u32::from(led_idx)) {
+                        state.calib_leds_done |= bit;
                     }
                     let _ = render_calib(&mut driver, state).await;
                 },
