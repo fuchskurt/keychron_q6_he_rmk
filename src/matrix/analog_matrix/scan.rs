@@ -35,7 +35,6 @@ use embassy_stm32::{
     pac::adc,
 };
 use embassy_time::Timer;
-use num_traits::ToPrimitive as _;
 use rmk::event::{KeyboardEvent, publish_event_async};
 
 /// Update the auto-calibration state machine for a single key.
@@ -118,13 +117,11 @@ fn auto_calib_update(ac: &mut AutoCalib, cal: &mut KeyCalib, raw: u16) {
 
 /// Convert a raw ADC reading into a travel value.
 ///
-/// Returns `None` if the position is uncalibrated, if `raw` is outside
-/// [`VALID_RAW_MIN`]..=[`VALID_RAW_MAX`], or if [`KeyCalib::inv_scale`] is
-/// not positive (degenerate or uninitialised calibration).
+/// Returns `None` if the position is uncalibrated, `raw` is outside
+/// [`VALID_RAW_MIN`]..=[`VALID_RAW_MAX`], or `divisor == 0`.
 #[inline]
 #[optimize(speed)]
 fn travel_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
-    // Unpopulated positions are skipped before travel_from is called.
     if unlikely(!cal.used) {
         cold_path();
         return None;
@@ -133,17 +130,19 @@ fn travel_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
         cold_path();
         return None;
     }
-    // inv_scale <= 0 only on uninitialised or corrupt calibration.
-    if unlikely(cal.inv_scale <= 0.0) {
+    if unlikely(cal.divisor == 0) {
         cold_path();
         return None;
     }
 
-    let scaled = KeyCalib::poly(f32::from(raw))
-        .algebraic_sub(cal.poly_zero)
-        .algebraic_mul(cal.inv_scale)
-        .clamp(0.0, f32::from(FULL_TRAVEL_UNIT));
-    Some(scaled.to_u8().unwrap_or(FULL_TRAVEL_UNIT))
+    let raw_lut_val = KeyCalib::get_lut_val(raw);
+    let delta = raw_lut_val.saturating_sub(cal.lut_zero);
+    let travel = match delta.checked_div(cal.divisor) {
+        Some(value) => value,
+        None => return None,
+    };
+    let clamped = travel.min(u16::from(FULL_TRAVEL_UNIT));
+    Some(u8::try_from(clamped).unwrap_or(FULL_TRAVEL_UNIT))
 }
 
 impl<'peripherals, ADC, D, IRQ, IM, const ROW: usize, const COL: usize>

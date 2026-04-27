@@ -1,4 +1,4 @@
-use core::intrinsics::fmaf32;
+use crate::matrix::analog_matrix::lut::POLY_LUT;
 use embassy_stm32::adc::{BasicAdcRegs, BasicInstance};
 use embassy_time::{Duration, Instant};
 
@@ -105,20 +105,6 @@ pub(crate) const FULL_TRAVEL_UNIT: u8 = 40;
 /// when validating stored EEPROM entries. Guards only against completely flat
 /// or absent readings, intentionally small.
 pub(crate) const MIN_USEFUL_FULL_RANGE: u16 = 100;
-
-/// Cubic coefficient of the Hall sensor transfer polynomial `f(x) = A3·x³ +
-/// A2·x² + A1·x + A0`.
-///
-/// Maps a raw ADC value to a distance-from-zero in mm, derived by least-squares
-/// fit to empirical sensor data. Evaluated via Horner's method in
-/// [`KeyCalib::poly`].
-pub(crate) const POLY_A0: f32 = 426.88962;
-/// Linear coefficient of the Hall sensor transfer polynomial.
-pub(crate) const POLY_A1: f32 = -0.48358;
-/// Quadratic coefficient of the Hall sensor transfer polynomial.
-pub(crate) const POLY_A2: f32 = 2.04637e-4;
-/// Cubic coefficient of the Hall sensor transfer polynomial.
-pub(crate) const POLY_A3: f32 = -2.99368e-8;
 
 /// Reference zero-travel ADC value used for calibration and used-sensor
 /// validation.
@@ -257,25 +243,35 @@ impl KeyCalib {
     /// Precomputes [`Self::poly_zero`] and [`Self::inv_scale`] so the hot
     /// scan path only needs a polynomial evaluation and a multiply.
     pub(crate) fn new(zero: u16, full: u16) -> Self {
-        let zero_travel = lookup_poly_lut(zero);
-        let full_travel = lookup_poly_lut(full);
+        let zero_travel = Self::get_lut_val(zero);
+        let full_travel = Self::get_lut_val(full);
         let delta_full = full_travel.saturating_sub(zero_travel);
         // Truncating division (floor): guarantees full-press lands at or
         // above FULL_TRAVEL_UNIT before clamping. Round-to-nearest would
         // sometimes leave the bottom-out value 1 unit short.
-        let divisor = delta_full / u16::from(FULL_TRAVEL_UNIT);
+        let divisor = match delta_full.checked_div(u16::from(FULL_TRAVEL_UNIT)) {
+            Some(value) => value,
+            None => u16::MAX,
+        };
         Self { divisor, lut_zero: zero_travel, used: zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE, zero }
     }
 
-    /// Evaluate the Hall sensor transfer polynomial at `x` using Horner's
-    /// method.
+    /// Look up the precomputed polynomial value for ADC reading `raw`.
     ///
-    /// Implements `f(x) = A3·x³ + A2·x² + A1·x + A0` in Horner form to
-    /// minimize floating-point rounding and use the VFMA instruction on
-    /// Cortex-M4.
-    fn lookup_poly_lut(raw: u16) -> u16 {
-        let raw = raw.clamp(VALID_RAW_MIN, VALID_RAW_MAX);
-        POLY_LUT[(raw - VALID_RAW_MIN) as usize]
+    /// Inputs outside `[VALID_RAW_MIN, VALID_RAW_MAX]` cannot occur on the
+    /// hot path (`travel_from` validates the range first) and are nominally
+    /// excluded by the `used` gate during calibration. If one slips through
+    /// anyway, the saturating subtract clamps to index 0 and `.get` clamps
+    /// the upper end, returning a value at the LUT edge instead of panicking.
+    #[inline]
+    pub(crate) fn get_lut_val(raw: u16) -> u16 {
+        let idx = usize::from(raw.saturating_sub(VALID_RAW_MIN));
+        POLY_LUT.get(idx).copied().unwrap_or_else(|| {
+            // Unreachable in practice; falling through to the highest valid
+            // entry keeps the function total without an unwrap or default of 0
+            // (which would mis-encode `poly = -BIAS` instead of clamping).
+            POLY_LUT.last().copied().unwrap_or(0)
+        })
     }
 
     /// Build an uncalibrated placeholder.
