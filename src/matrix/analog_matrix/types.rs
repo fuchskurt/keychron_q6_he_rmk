@@ -1,6 +1,6 @@
+use core::intrinsics::fmaf32;
 use embassy_stm32::adc::{BasicAdcRegs, BasicInstance};
 use embassy_time::{Duration, Instant};
-use num_traits::float::Float as _;
 
 /// Number of confident press/release cycles required before the
 /// auto-calibrator updates the live [`KeyCalib`] data for a key.
@@ -273,7 +273,11 @@ impl KeyCalib {
     /// Implements `f(x) = A3·x³ + A2·x² + A1·x + A0` in Horner form to
     /// minimize floating-point rounding and use the VFMA instruction on
     /// Cortex-M4.
-    pub(crate) fn poly(x: f32) -> f32 { POLY_A3.mul_add(x, POLY_A2).mul_add(x, POLY_A1).mul_add(x, POLY_A0) }
+    pub(crate) fn poly(x: f32) -> f32 {
+        let t = fmaf32(POLY_A3, x, POLY_A2);
+        let t = fmaf32(t, x, POLY_A1);
+        fmaf32(t, x, POLY_A0)
+    }
 
     /// Build an uncalibrated placeholder.
     ///

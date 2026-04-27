@@ -1,6 +1,8 @@
 #![no_main]
 #![no_std]
+#![allow(internal_features, reason = "Hot-Path polynomial arithmetic")]
 #![feature(
+    core_intrinsics,
     const_convert,
     const_trait_impl,
     const_cmp,
