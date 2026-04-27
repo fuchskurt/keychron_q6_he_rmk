@@ -2,6 +2,7 @@
 //! and continuous auto-calibration.
 
 mod calibration;
+mod lut;
 mod scan;
 mod types;
 

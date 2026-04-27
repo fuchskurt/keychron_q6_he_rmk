@@ -238,17 +238,17 @@ impl Default for HallCfg {
 /// Calibration values for a single key.
 #[derive(Clone, Copy)]
 pub(crate) struct KeyCalib {
-    /// Reciprocal scale factor precomputed on construction:
-    pub inv_scale: f32,
-    /// Polynomial value at zero travel (key fully released)
-    pub poly_zero: f32,
+    /// LUT-units of distance per travel-unit, for this key.
+    pub divisor:  u16,
+    /// Value at zero travel (key fully released)
+    pub lut_zero: u16,
     /// Whether this matrix position has a valid hall-effect sensor.
     ///
     /// `false` for unpopulated positions or those whose zero-travel reading
     /// is too far from [`REF_ZERO_TRAVEL`] to be a real key.
-    pub used:      bool,
+    pub used:     bool,
     /// Raw ADC value corresponding to zero travel (key fully released).
-    pub zero:      u16,
+    pub zero:     u16,
 }
 
 impl KeyCalib {
@@ -257,14 +257,14 @@ impl KeyCalib {
     /// Precomputes [`Self::poly_zero`] and [`Self::inv_scale`] so the hot
     /// scan path only needs a polynomial evaluation and a multiply.
     pub(crate) fn new(zero: u16, full: u16) -> Self {
-        let poly_zero = Self::poly(f32::from(zero));
-        let delta = Self::poly(f32::from(full)).algebraic_sub(poly_zero);
-        Self {
-            inv_scale: (delta > 0.0).then(|| f32::from(FULL_TRAVEL_UNIT).algebraic_div(delta)).unwrap_or(0.0),
-            poly_zero,
-            used: zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE,
-            zero,
-        }
+        let zero_travel = lookup_poly_lut(zero);
+        let full_travel = lookup_poly_lut(full);
+        let delta_full = full_travel.saturating_sub(zero_travel);
+        // Truncating division (floor): guarantees full-press lands at or
+        // above FULL_TRAVEL_UNIT before clamping. Round-to-nearest would
+        // sometimes leave the bottom-out value 1 unit short.
+        let divisor = delta_full / u16::from(FULL_TRAVEL_UNIT);
+        Self { divisor, lut_zero: zero_travel, used: zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE, zero }
     }
 
     /// Evaluate the Hall sensor transfer polynomial at `x` using Horner's
@@ -273,10 +273,9 @@ impl KeyCalib {
     /// Implements `f(x) = A3·x³ + A2·x² + A1·x + A0` in Horner form to
     /// minimize floating-point rounding and use the VFMA instruction on
     /// Cortex-M4.
-    pub(crate) fn poly(x: f32) -> f32 {
-        let t = fmaf32(POLY_A3, x, POLY_A2);
-        let t = fmaf32(t, x, POLY_A1);
-        fmaf32(t, x, POLY_A0)
+    fn lookup_poly_lut(raw: u16) -> u16 {
+        let raw = raw.clamp(VALID_RAW_MIN, VALID_RAW_MAX);
+        POLY_LUT[(raw - VALID_RAW_MIN) as usize]
     }
 
     /// Build an uncalibrated placeholder.
@@ -284,7 +283,7 @@ impl KeyCalib {
     /// `used` is `false` so the scanner ignores this position entirely until
     /// real calibration data is applied.
     pub(crate) const fn uncalibrated() -> Self {
-        Self { inv_scale: 0.0, poly_zero: 0.0, used: false, zero: UNCALIBRATED_ZERO }
+        Self { divisor: 0, lut_zero: 0, used: false, zero: UNCALIBRATED_ZERO }
     }
 }
 
