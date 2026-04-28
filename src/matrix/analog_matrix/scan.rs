@@ -119,7 +119,7 @@ fn auto_calib_update(ac: &mut AutoCalib, cal: &mut KeyCalib, raw: u16) {
 /// Convert a raw ADC reading into a travel value.
 ///
 /// Returns `None` if the position is uncalibrated, `raw` is outside
-/// [`VALID_RAW_MIN`]..=[`VALID_RAW_MAX`], or `divisor == 0`.
+/// [`VALID_RAW_MIN`]..=[`VALID_RAW_MAX`], or `cal.inv_scale == 0`.
 #[inline]
 #[optimize(speed)]
 fn travel_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
