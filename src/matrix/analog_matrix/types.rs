@@ -334,11 +334,11 @@ impl Default for KeyState {
 /// pass.
 ///
 /// The state machine transitions:
-/// [`KeyCalibState::Waiting`]-> [`KeyCalibState::Holding`]`(t)` when the key
-/// crosses [`CALIB_PRESS_THRESHOLD`]; [`KeyCalibState::Holding`]`(t) ->
-/// `[`KeyCalibState::Waiting`] if the key is released before
-/// [`CALIB_HOLD_DURATION_MS`]; [`KeyCalibState::Holding`]`(t) ->
-/// `[`KeyCalibState::Accepted`] when the hold duration is satisfied.
+/// [`KeyCalibState::Waiting`] -> [`KeyCalibState::Holding`](t) when the key
+/// crosses [`CALIB_PRESS_THRESHOLD`]; [`KeyCalibState::Holding`](t) ->
+/// [`KeyCalibState::Waiting`] if the key is released before
+/// [`CALIB_HOLD_DURATION_MS`]; [`KeyCalibState::Holding`](t) ->
+/// [`KeyCalibState::Accepted`] when the hold duration is satisfied.
 #[derive(Clone, Copy)]
 pub(crate) enum KeyCalibState {
     /// Hold duration satisfied; this key is fully calibrated.
