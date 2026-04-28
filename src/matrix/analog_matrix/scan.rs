@@ -19,6 +19,7 @@ use crate::{
             AutoCalibPhase,
             BOTTOM_JITTER,
             FULL_TRAVEL_UNIT,
+            INV_SCALE_ONE,
             MIN_USEFUL_FULL_RANGE,
             VALID_RAW_MAX,
             VALID_RAW_MIN,
@@ -102,8 +103,8 @@ fn auto_calib_update(ac: &mut AutoCalib, cal: &mut KeyCalib, raw: u16) {
 
                         // Only commit the update if the new zero differs
                         // meaningfully from the current one, avoiding
-                        // unnecessary churn in the precomputed polynomial
-                        // calibration data derived by `KeyCalib::new`.
+                        // unnecessary churn in the LUT-based calibration
+                        // data derived by `KeyCalib::new`.
                         if cal.zero.abs_diff(new_zero) > AUTO_CALIB_ZERO_UPDATE_THRESHOLD {
                             *cal = KeyCalib::new(new_zero, new_full);
                         }
@@ -130,19 +131,16 @@ fn travel_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
         cold_path();
         return None;
     }
-    if unlikely(cal.divisor == 0) {
+    if unlikely(cal.inv_scale == 0) {
         cold_path();
         return None;
     }
 
     let raw_lut_val = KeyCalib::get_lut_val(raw);
     let delta = raw_lut_val.saturating_sub(cal.lut_zero);
-    let travel = match delta.checked_div(cal.divisor) {
-        Some(value) => value,
-        None => return None,
-    };
-    let clamped = travel.min(u16::from(FULL_TRAVEL_UNIT));
-    Some(u8::try_from(clamped).unwrap_or(FULL_TRAVEL_UNIT))
+    let scaled: u32 = u32::from(delta).saturating_mul(cal.inv_scale);
+    let travel: u32 = scaled.checked_div(INV_SCALE_ONE).unwrap_or(0).min(u32::from(FULL_TRAVEL_UNIT));
+    Some(u8::try_from(travel).unwrap_or(FULL_TRAVEL_UNIT))
 }
 
 impl<'peripherals, ADC, D, IRQ, IM, const ROW: usize, const COL: usize>

@@ -1,4 +1,4 @@
-use crate::matrix::analog_matrix::lut::POLY_LUT;
+use crate::matrix::analog_matrix::lut::TRAVEL_LUT;
 use embassy_stm32::adc::{BasicAdcRegs, BasicInstance};
 use embassy_time::{Duration, Instant};
 
@@ -50,8 +50,8 @@ pub(crate) const AUTO_CALIB_ZERO_JITTER: u16 = 50;
 ///
 /// Prevents small fluctuations from repeatedly rewriting [`KeyCalib`] when the
 /// resting position shifts only within normal noise or drift bounds. Acts as a
-/// hysteresis band on zero updates, reducing churn in the derived polynomial
-/// calibration and avoiding unnecessary recomputation.
+/// hysteresis band on zero updates, reducing churn in the derived [`KeyCalib`]
+/// data and avoiding unnecessary recomputation.
 ///
 /// Set well above typical ADC noise but small relative to real zero-travel
 /// drift so genuine changes are still captured.
@@ -118,7 +118,10 @@ pub(crate) const VALID_RAW_MAX: u16 = 3500;
 
 /// Minimum acceptable raw ADC value.
 pub(crate) const VALID_RAW_MIN: u16 = 1200;
-
+/// Number of bits in the Q16.16 representation of [`KeyCalib::inv_scale`].
+const INV_SCALE_FRAC_BITS: u32 = 16;
+/// The value of `1.0` in the Q16.16 format used by [`KeyCalib::inv_scale`].
+pub(crate) const INV_SCALE_ONE: u32 = 1_u32.checked_shl(INV_SCALE_FRAC_BITS).expect("INV_SCALE_FRAC_BITS < u32::BITS");
 /// ADC counts subtracted from the averaged zero-travel reading before storing
 /// it as the calibration zero point.
 ///
@@ -224,39 +227,37 @@ impl Default for HallCfg {
 /// Calibration values for a single key.
 #[derive(Clone, Copy)]
 pub(crate) struct KeyCalib {
-    /// LUT-units of distance per travel-unit, for this key.
-    pub divisor:  u16,
-    /// Value at zero travel (key fully released)
-    pub lut_zero: u16,
+    /// Precomputed reciprocal of the calibrated travel range.
+    pub inv_scale: u32,
+    /// LUT value corresponding to zero travel (key fully released).
+    pub lut_zero:  u16,
     /// Whether this matrix position has a valid hall-effect sensor.
-    ///
-    /// `false` for unpopulated positions or those whose zero-travel reading
-    /// is too far from [`REF_ZERO_TRAVEL`] to be a real key.
-    pub used:     bool,
+    pub used:      bool,
     /// Raw ADC value corresponding to zero travel (key fully released).
-    pub zero:     u16,
+    pub zero:      u16,
 }
 
 impl KeyCalib {
     /// Build calibration data from zero and full-travel ADC readings.
     ///
-    /// Precomputes [`Self::poly_zero`] and [`Self::inv_scale`] so the hot
-    /// scan path only needs a polynomial evaluation and a multiply.
+    /// Precomputes `lut_zero` and `divisor` so the hot scan path needs only
+    /// a LUT lookup and a divide.
     pub(crate) fn new(zero: u16, full: u16) -> Self {
         let zero_travel = Self::get_lut_val(zero);
         let full_travel = Self::get_lut_val(full);
-        let delta_full = full_travel.saturating_sub(zero_travel);
+        let delta_full = u32::from(full_travel.saturating_sub(zero_travel));
         // Truncating division (floor): guarantees full-press lands at or
         // above FULL_TRAVEL_UNIT before clamping. Round-to-nearest would
         // sometimes leave the bottom-out value 1 unit short.
-        let divisor = match delta_full.checked_div(u16::from(FULL_TRAVEL_UNIT)) {
-            Some(value) => value,
-            None => u16::MAX,
-        };
-        Self { divisor, lut_zero: zero_travel, used: zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE, zero }
+        let inv_scale = u32::from(FULL_TRAVEL_UNIT)
+            .saturating_mul(INV_SCALE_ONE) // FULL_TRAVEL_UNIT × 2¹⁶
+            .saturating_add(delta_full.saturating_sub(1)) // ceiling adjustment
+            .checked_div(delta_full) // None iff delta_full == 0
+            .unwrap_or(0);
+        Self { inv_scale, lut_zero: zero_travel, used: zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE, zero }
     }
 
-    /// Look up the precomputed polynomial value for ADC reading `raw`.
+    /// Look up the precomputed LUT value for ADC reading `raw`.
     ///
     /// Inputs outside `[VALID_RAW_MIN, VALID_RAW_MAX]` cannot occur on the
     /// hot path (`travel_from` validates the range first) and are nominally
@@ -266,11 +267,9 @@ impl KeyCalib {
     #[inline]
     pub(crate) fn get_lut_val(raw: u16) -> u16 {
         let idx = usize::from(raw.saturating_sub(VALID_RAW_MIN));
-        POLY_LUT.get(idx).copied().unwrap_or_else(|| {
-            // Unreachable in practice; falling through to the highest valid
-            // entry keeps the function total without an unwrap or default of 0
-            // (which would mis-encode `poly = -BIAS` instead of clamping).
-            POLY_LUT.last().copied().unwrap_or(0)
+        TRAVEL_LUT.get(idx).copied().unwrap_or_else(|| {
+            // Only reached for raw > VALID_RAW_MAX; clamp to the edge entry.
+            TRAVEL_LUT.last().copied().unwrap_or(0)
         })
     }
 
@@ -279,7 +278,7 @@ impl KeyCalib {
     /// `used` is `false` so the scanner ignores this position entirely until
     /// real calibration data is applied.
     pub(crate) const fn uncalibrated() -> Self {
-        Self { divisor: 0, lut_zero: 0, used: false, zero: UNCALIBRATED_ZERO }
+        Self { inv_scale: 0, lut_zero: 0, used: false, zero: UNCALIBRATED_ZERO }
     }
 }
 

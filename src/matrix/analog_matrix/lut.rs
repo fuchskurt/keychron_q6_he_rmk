@@ -1,4 +1,4 @@
-//! Precomputed lookup table for the Hall sensor transfer polynomial.
+//! Precomputed lookup table for the Hall sensor transfer function.
 //!
 //! `KeyCalib::new` looks up `lut_zero` from the LUT and stores it
 //! alongside `divisor`. The hot path computes travel as a single u16
@@ -7,9 +7,9 @@
 
 use crate::matrix::analog_matrix::types::{VALID_RAW_MAX, VALID_RAW_MIN};
 
-pub(crate) const POLY_LUT_LEN: usize = usize::from(VALID_RAW_MAX.saturating_sub(VALID_RAW_MIN).saturating_add(1));
+pub(crate) const TRAVEL_LUT_LEN: usize = usize::from(VALID_RAW_MAX.saturating_sub(VALID_RAW_MIN).saturating_add(1));
 
-pub(crate) static POLY_LUT: [u16; POLY_LUT_LEN] = [
+pub(crate) static TRAVEL_LUT: [u16; TRAVEL_LUT_LEN] = [
     0x848A, 0x846B, 0x844C, 0x842D, 0x840E, 0x83EF, 0x83D0, 0x83B1, 0x8392, 0x8374, 0x8355, 0x8336, 0x8318, 0x82F9,
     0x82DB, 0x82BC, 0x829E, 0x827F, 0x8261, 0x8243, 0x8225, 0x8206, 0x81E8, 0x81CA, 0x81AC, 0x818E, 0x8170, 0x8152,
     0x8135, 0x8117, 0x80F9, 0x80DB, 0x80BE, 0x80A0, 0x8083, 0x8065, 0x8048, 0x802A, 0x800D, 0x7FF0, 0x7FD2, 0x7FB5,
