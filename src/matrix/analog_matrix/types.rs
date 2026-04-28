@@ -265,12 +265,11 @@ impl KeyCalib {
 
     /// Look up the precomputed LUT value for ADC reading `raw`.
     ///
-    /// Inputs outside [[`VALID_RAW_MIN`], [`VALID_RAW_MAX`]] cannot occur on
-    /// the hot path (`travel_from` validates the range first) and are nominally
-    /// excluded by the [`KeyCalib::used`] gate during calibration. If one slips
-    /// through anyway, the saturating subtract clamps to index 0 and `.get`
-    /// clamps the upper end, returning a value at the LUT edge instead of
-    /// panicking.
+    /// Inputs outside [`VALID_RAW_MIN`]..=[`VALID_RAW_MAX`] cannot occur on
+    /// the hot path because `travel_from` validates the range first. If an
+    /// out-of-range value is passed anyway, the saturating subtract clamps to
+    /// index 0 and `.get` clamps the upper end, returning a value at the LUT
+    /// edge instead of panicking.
     #[inline]
     pub(crate) fn get_lut_val(raw: u16) -> u16 {
         let idx = usize::from(raw.saturating_sub(VALID_RAW_MIN));
