@@ -10,12 +10,13 @@ use embassy_time::{Duration, Instant};
 /// cycles gives a good balance between responsiveness and stability.
 pub(crate) const AUTO_CALIB_CONFIDENCE_THRESHOLD: u8 = 3;
 
-/// Maximum ADC rise from the current full-travel minimum that is still treated
-/// as bottom-of-travel jitter during the pressing phase of auto-calibration.
+/// Bottom-of-travel ADC jitter tolerance subtracted from [`DEFAULT_FULL_RANGE`]
+/// when computing [`AUTO_CALIB_RELEASE_THRESHOLD`].
 ///
-/// Readings that rise by more than this amount from the minimum but less than
-/// [`AUTO_CALIB_RELEASE_THRESHOLD`] are treated as noise and do not advance
-/// the phase.
+/// A key in the pressing phase must rise at least
+/// [`DEFAULT_FULL_RANGE`] − [`AUTO_CALIB_FULL_JITTER`] counts from its minimum
+/// before release tracking begins. This margin allows for typical jitter at
+/// the physical bottom without prematurely advancing to the releasing phase.
 pub(crate) const AUTO_CALIB_FULL_JITTER: u16 = 100;
 
 /// ADC value below which a reading is considered a genuine full-travel press
@@ -33,8 +34,8 @@ pub(crate) const AUTO_CALIB_MIN_RANGE: u16 = 900;
 /// Minimum ADC rise from the full-travel minimum required to transition from
 /// the pressing phase to the releasing phase during auto-calibration.
 ///
-/// Set to `DEFAULT_FULL_RANGE − AUTO_CALIB_FULL_JITTER` so the key must have
-/// risen most of the way back toward zero before release tracking begins,
+/// Set to [`DEFAULT_FULL_RANGE`] − [`AUTO_CALIB_FULL_JITTER`] so the key must
+/// have risen most of the way back toward zero before release tracking begins,
 /// preventing partial lifts from being counted.
 pub(crate) const AUTO_CALIB_RELEASE_THRESHOLD: u16 = DEFAULT_FULL_RANGE.saturating_sub(AUTO_CALIB_FULL_JITTER);
 
@@ -60,17 +61,18 @@ pub(crate) const AUTO_CALIB_ZERO_UPDATE_THRESHOLD: u16 = 10;
 /// ADC counts added to the measured full-travel minimum before storing it as
 /// the calibration floor.
 ///
-/// The physical bottom-out reading is the true minimum ADC value a key can
-/// produce, so without this offset `travel_from` can return exactly
-/// [`FULL_TRAVEL_UNIT`] while the key is held down. Any upward jitter then
-/// advances `extremum`, and a subsequent reading that dips back to the true
-/// floor satisfies the rapid-trigger release condition, firing a spurious
-/// release even though the key never moved.
+/// Without this offset the calibration floor sits at the true physical bottom.
+/// ADC jitter that lifts the key slightly off the bottom raises the raw ADC
+/// reading by a few counts, which causes `travel_from` to return a value just
+/// below [`FULL_TRAVEL_UNIT`]. With `rt_sensitivity_release` at 1 that dip
+/// satisfies the rapid-trigger release condition, firing a spurious release
+/// while the key is still physically held down.
 ///
-/// By raising the stored floor [`BOTTOM_JITTER`] counts above the physical
-/// minimum the scale factor is anchored to a point the key cannot reach in
-/// normal use. Using this, Bottom-of-travel travel values stay below
-/// [`FULL_TRAVEL_UNIT`] and RT jitter cannot accumulate a phantom peak.
+/// Raising the stored floor [`BOTTOM_JITTER`] ADC counts above the physical
+/// minimum ensures any reading in that band produces travel
+/// ≥ [`FULL_TRAVEL_UNIT`], which clamps to [`FULL_TRAVEL_UNIT`]. Bottom
+/// jitter therefore leaves travel pinned at the maximum while the key is
+/// bottomed out, preventing phantom RT releases.
 pub(crate) const BOTTOM_JITTER: u16 = 80;
 
 /// Duration a key must remain continuously pressed past
@@ -101,9 +103,9 @@ pub(crate) const DEFAULT_FULL_RANGE: u16 = 900;
 /// Expected travel distance in physical units, represents 4.0 mm.
 pub(crate) const FULL_TRAVEL_UNIT: u8 = 40;
 
-/// Minimum ADC delta (zero − full) required to accept a full-travel sample
-/// when validating stored EEPROM entries. Guards only against completely flat
-/// or absent readings, intentionally small.
+/// Minimum ADC delta (zero − full) required to treat a full-travel reading as
+/// usable. Guards only against completely flat or absent sensor readings;
+/// intentionally small so any genuine press is accepted.
 pub(crate) const MIN_USEFUL_FULL_RANGE: u16 = 100;
 
 /// Reference zero-travel ADC value used for calibration and used-sensor
@@ -119,7 +121,7 @@ pub(crate) const VALID_RAW_MAX: u16 = 3500;
 /// Minimum acceptable raw ADC value.
 pub(crate) const VALID_RAW_MIN: u16 = 1200;
 /// Number of bits in the Q16.16 representation of [`KeyCalib::inv_scale`].
-const INV_SCALE_FRAC_BITS: u32 = 16;
+pub(crate) const INV_SCALE_FRAC_BITS: u32 = 16;
 /// The value of `1.0` in the Q16.16 format used by [`KeyCalib::inv_scale`].
 pub(crate) const INV_SCALE_ONE: u32 = 1_u32.checked_shl(INV_SCALE_FRAC_BITS).expect("INV_SCALE_FRAC_BITS < u32::BITS");
 /// ADC counts subtracted from the averaged zero-travel reading before storing
@@ -139,7 +141,9 @@ pub(crate) type AdcSampleTime<ADC> = <<ADC as BasicInstance>::Regs as BasicAdcRe
 ///
 /// The state machine follows `Idle → Pressing → Releasing → Idle`. A cycle
 /// is scored only when the key completes a genuine full-press and a clean
-/// release; partial presses or re-presses mid-release reset to `Idle`.
+/// release. A re-press that occurs during the releasing phase resets to `Idle`
+/// without scoring; an insufficient lift from full travel stays in `Pressing`
+/// until the key rises far enough to enter `Releasing`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutoCalibPhase {
     /// Waiting for the key to be pressed past
@@ -240,15 +244,17 @@ pub(crate) struct KeyCalib {
 impl KeyCalib {
     /// Build calibration data from zero and full-travel ADC readings.
     ///
-    /// Precomputes `lut_zero` and `divisor` so the hot scan path needs only
-    /// a LUT lookup and a divide.
+    /// Precomputes [`KeyCalib::lut_zero`]
+    /// and [`KeyCalib::inv_scale`] so the
+    /// hot scan path needs only a LUT lookup and a multiply-shift.
     pub(crate) fn new(zero: u16, full: u16) -> Self {
         let zero_travel = Self::get_lut_val(zero);
         let full_travel = Self::get_lut_val(full);
         let delta_full = u32::from(full_travel.saturating_sub(zero_travel));
-        // Truncating division (floor): guarantees full-press lands at or
-        // above FULL_TRAVEL_UNIT before clamping. Round-to-nearest would
-        // sometimes leave the bottom-out value 1 unit short.
+        // Ceiling division: travel_from right-shifts by [`INV_SCALE_FRAC_BITS`]
+        // (truncating), so rounding inv_scale up guarantees the result at
+        // exactly the full-travel LUT delta reaches FULL_TRAVEL_UNIT after
+        // the shift. A floor inv_scale would sometimes give FULL_TRAVEL_UNIT - 1.
         let inv_scale = u32::from(FULL_TRAVEL_UNIT)
             .saturating_mul(INV_SCALE_ONE) // FULL_TRAVEL_UNIT × 2¹⁶
             .saturating_add(delta_full.saturating_sub(1)) // ceiling adjustment
@@ -259,11 +265,12 @@ impl KeyCalib {
 
     /// Look up the precomputed LUT value for ADC reading `raw`.
     ///
-    /// Inputs outside `[VALID_RAW_MIN, VALID_RAW_MAX]` cannot occur on the
-    /// hot path (`travel_from` validates the range first) and are nominally
-    /// excluded by the `used` gate during calibration. If one slips through
-    /// anyway, the saturating subtract clamps to index 0 and `.get` clamps
-    /// the upper end, returning a value at the LUT edge instead of panicking.
+    /// Inputs outside [[`VALID_RAW_MIN`], [`VALID_RAW_MAX`]] cannot occur on
+    /// the hot path (`travel_from` validates the range first) and are nominally
+    /// excluded by the [`KeyCalib::used`] gate during calibration. If one slips
+    /// through anyway, the saturating subtract clamps to index 0 and `.get`
+    /// clamps the upper end, returning a value at the LUT edge instead of
+    /// panicking.
     #[inline]
     pub(crate) fn get_lut_val(raw: u16) -> u16 {
         let idx = usize::from(raw.saturating_sub(VALID_RAW_MIN));
@@ -275,8 +282,8 @@ impl KeyCalib {
 
     /// Build an uncalibrated placeholder.
     ///
-    /// `used` is `false` so the scanner ignores this position entirely until
-    /// real calibration data is applied.
+    /// [`KeyCalib::used`] is `false` so the scanner ignores this position
+    /// entirely until real calibration data is applied.
     pub(crate) const fn uncalibrated() -> Self {
         Self { inv_scale: 0, lut_zero: 0, used: false, zero: UNCALIBRATED_ZERO }
     }
@@ -298,7 +305,7 @@ pub(crate) struct KeyState {
     /// Raw ADC reading from the previous scan cycle.
     ///
     /// Used by the noise gate to skip processing when the reading has not
-    /// changed meaningfully. Initialised to `u16::MAX` so the first real
+    /// changed meaningfully. Initialised to [`u16::MAX`] so the first real
     /// reading always passes the gate.
     pub last_raw: u16,
     /// Whether the key is currently considered pressed.
@@ -313,9 +320,9 @@ pub(crate) struct KeyState {
 impl KeyState {
     /// Create a new default key state.
     ///
-    /// `last_raw` starts at [`u16::MAX`] so that the first real ADC reading
-    /// always produces a diff larger than any noise gate, ensuring every key
-    /// is evaluated on the very first scan pass.
+    /// [`KeyState::last_raw`] starts at [`u16::MAX`] so that the first real ADC
+    /// reading always produces a diff larger than any noise gate, ensuring
+    /// every key is evaluated on the very first scan pass.
     pub(crate) const fn new() -> Self { Self { extremum: u8::MAX, last_raw: u16::MAX, travel: 0, pressed: false } }
 }
 
@@ -327,15 +334,17 @@ impl Default for KeyState {
 /// pass.
 ///
 /// The state machine transitions:
-/// `Waiting → Holding(t)` when the key crosses [`CALIB_PRESS_THRESHOLD`];
-/// `Holding(t) → Waiting` if the key is released before
-/// [`CALIB_HOLD_DURATION_MS`]; `Holding(t) → Accepted` when the hold duration
-/// is satisfied.
+/// [`KeyCalibState::Waiting`]-> [`KeyCalibState::Holding`]`(t)` when the key
+/// crosses [`CALIB_PRESS_THRESHOLD`]; [`KeyCalibState::Holding`]`(t) ->
+/// `[`KeyCalibState::Waiting`] if the key is released before
+/// [`CALIB_HOLD_DURATION_MS`]; [`KeyCalibState::Holding`]`(t) ->
+/// `[`KeyCalibState::Accepted`] when the hold duration is satisfied.
 #[derive(Clone, Copy)]
 pub(crate) enum KeyCalibState {
     /// Hold duration satisfied; this key is fully calibrated.
     Accepted,
-    /// Key crossed the threshold at the stored instant; hold timer is running.
+    /// Key crossed the threshold at the stored [`Instant`]; hold timer is
+    /// running.
     Holding(Instant),
     /// Key has not yet crossed the press threshold, or was released and reset.
     Waiting,

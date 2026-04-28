@@ -19,7 +19,7 @@ use crate::{
             AutoCalibPhase,
             BOTTOM_JITTER,
             FULL_TRAVEL_UNIT,
-            INV_SCALE_ONE,
+            INV_SCALE_FRAC_BITS,
             MIN_USEFUL_FULL_RANGE,
             VALID_RAW_MAX,
             VALID_RAW_MIN,
@@ -139,7 +139,7 @@ fn travel_from(cal: &KeyCalib, raw: u16) -> Option<u8> {
     let raw_lut_val = KeyCalib::get_lut_val(raw);
     let delta = raw_lut_val.saturating_sub(cal.lut_zero);
     let scaled: u32 = u32::from(delta).saturating_mul(cal.inv_scale);
-    let travel: u32 = scaled.checked_div(INV_SCALE_ONE).unwrap_or(0).min(u32::from(FULL_TRAVEL_UNIT));
+    let travel: u32 = scaled.checked_shr(INV_SCALE_FRAC_BITS).unwrap_or(0).min(u32::from(FULL_TRAVEL_UNIT));
     Some(u8::try_from(travel).unwrap_or(FULL_TRAVEL_UNIT))
 }
 
