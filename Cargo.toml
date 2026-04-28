@@ -28,7 +28,6 @@ rmk = { default-features = false, features = ["async_matrix", "host", "host_secu
 static_cell = "2"
 snled27351_driver = { git = "https://github.com/fuchskurt/snled27351_driver.git", features = ["spi"] }
 embedded-hal-async = "1"
-num-traits = { version = "0", default-features = false, features = ["libm"] }
 cfg-if = "1"
 
 [patch.crates-io]
