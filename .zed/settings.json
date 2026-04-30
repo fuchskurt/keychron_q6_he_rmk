@@ -1,0 +1,46 @@
+{
+  "languages": {
+    "Rust": {
+      "formatter": "language_server",
+      "format_on_save": "on",
+    },
+    "TOML": {
+      "format_on_save": "on",
+    },
+  },
+  "lsp": {
+    "rust-analyzer": {
+      "enable_lsp_tasks": true,
+      "initialization_options": {
+        "check": {
+          "command": "clippy",
+          "workspace": true,
+        },
+        "rustfmt": {
+          "extraArgs": ["+nightly"],
+        },
+        "cargo": {
+          "features": ["ansi_layout"],
+        },
+        "inlayHints": {
+          "maxLength": null,
+          "lifetimeElisionHints": {
+            "enable": "always",
+            "useParameterNames": true,
+          },
+          "closureReturnTypeHints": {
+            "enable": "always",
+          },
+        },
+        "diagnostics": {
+          "experimental": {
+            "enable": true,
+          },
+        },
+        "rust": {
+          "analyzerTargetDir": true,
+        },
+      },
+    },
+  },
+}
