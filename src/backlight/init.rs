@@ -473,12 +473,14 @@ impl Runnable for BacklightRunner {
                     if connected != state.host_connected {
                         state.host_connected = connected;
                         if connected {
+                            let _ = self.driver.wake().await;
                             let _ = brightness_ramp(&mut self.driver, 255, 255, 255, 100, true, state).await;
                         } else {
                             // Host disconnected: turn off all LEDs until the next
                             // connect event restores the backlight.
                             let _ =
                                 brightness_ramp(&mut self.driver, 255, 255, 255, state.brightness, false, state).await;
+                            let _ = self.driver.shutdown().await;
                         }
                     }
                 },
