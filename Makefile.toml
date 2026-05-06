@@ -1,0 +1,49 @@
+[config]
+default_to_workspace = false
+
+[env]
+CARGO_MAKE_CARGO_BUILD_TEST_FLAGS = "--release"
+
+[tasks.install]
+description = "Install all required host tools"
+dependencies = [
+    "install-target",
+    "install-llvm-tools",
+    "install-flip-link",
+    "install-cargo-binutils",
+    "install-cargo-dfu",
+    "install-cargo-make",
+]
+
+[tasks.install-target]
+command = "rustup"
+args = ["target", "add", "thumbv7em-none-eabihf"]
+
+[tasks.install-llvm-tools]
+command = "rustup"
+args = ["component", "add", "llvm-tools"]
+
+[tasks.install-flip-link]
+command = "cargo"
+args = ["install", "flip-link"]
+
+[tasks.install-cargo-binutils]
+command = "cargo"
+args = ["install", "cargo-binutils"]
+
+[tasks.install-cargo-dfu]
+command = "cargo"
+args = ["install", "cargo-dfu"]
+
+[tasks.install-cargo-make]
+command = "cargo"
+args = ["install", "cargo-make"]
+
+[tasks.objcopy]
+command = "cargo"
+args = ["objcopy", "--release", "--features", "ansi_layout", "--", "-O", "binary", "rmk.bin"]
+
+[tasks.flash]
+description = "Build and flash firmware via DFU (STM32 bootloader)"
+command = "cargo"
+args = ["dfu", "--vid", "0x483", "--pid", "0xdf11", "--release", "--features", "ansi_layout"]
