@@ -26,7 +26,7 @@ mod matrix;
 mod vial;
 
 use crate::{
-    backlight::{init::backlight_runner, led_processor::LedIndicatorProcessor},
+    backlight::{init::BacklightRunner, led_processor::LedIndicatorProcessor},
     eeprom::Ft24c64,
     flash_wrapper_async::Flash16K,
     layout::{COL, ROW},
@@ -83,7 +83,6 @@ use rmk::{
     initialize_keymap_and_storage,
     input_device::rotary_encoder::RotaryEncoder,
     keyboard::Keyboard,
-    processor::builtin::wpm::WpmProcessor,
     run_all,
     usb::UsbTransport,
 };
@@ -254,7 +253,6 @@ async fn main(spawner: Spawner) {
     let mut keyboard = Keyboard::new(&keymap);
     let mut host_service = HostService::new(&keymap, &rmk_config);
     let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config);
-    let mut wpm_processor = WpmProcessor::new();
 
     // LED backlight
     let spi_config = {
@@ -277,10 +275,12 @@ async fn main(spawner: Spawner) {
     let cs1 = Output::new(peripheral.PB9, Level::High, Speed::VeryHigh);
     let sdb = Output::new(peripheral.PB7, Level::Low, Speed::VeryHigh);
     let mut led_indicator = LedIndicatorProcessor::new();
+    let mut backlight = BacklightRunner::new(spi_backlight, cs0, cs1, sdb);
 
     // Start
     run_all!(
         keyboard,
+        usb_transport,
         host_service,
         matrix,
         encoder,
@@ -288,7 +288,7 @@ async fn main(spawner: Spawner) {
         layer_toggle,
         storage,
         led_indicator,
-        backlight_runner(spi_backlight, cs0, cs1, sdb)
+        backlight
     )
     .await;
 }

@@ -12,20 +12,19 @@ use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_stm32::{
     gpio::Output,
     mode::Async,
-    spi::{self, Spi},
+    spi::{Spi, mode::Master},
 };
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Ticker, Timer};
 use embedded_hal_async::spi::ErrorType;
 use rmk::{
+    core_traits::Runnable,
     embassy_futures::select::{Either3, select3},
-    hid::{KeyboardReport, Report},
 };
 use snled27351_driver::{
     driver::Driver,
     transport::spi::{Controller, TransportError},
 };
-use spi::mode::Master;
 use static_cell::StaticCell;
 
 /// Shared SPI bus protected by an async-aware mutex.
@@ -73,7 +72,7 @@ const THERMAL_POLL: Duration = Duration::from_secs(5);
 /// Interval between host connection state polls.
 ///
 /// Short enough to detect an unplug within half a second without spinning
-/// at full speed. The connection check is a single atomic load so the cost
+/// at full speed. The connection check is a single register read so the cost
 /// per tick is negligible.
 const CONNECTION_POLL: Duration = Duration::from_millis(500);
 /// Duration in milliseconds to hold the solid-green display after calibration
@@ -83,13 +82,23 @@ const CALIB_DONE_HOLD_MS: u64 = 2000;
 const CALIB_ALL_DONE_BLINK_COUNT: u8 = 3;
 /// Duration of each on and each off half-period of the blink (milliseconds).
 const CALIB_ALL_DONE_BLINK_HALF_MS: u64 = 150;
-/// Delay between USB enumeration and the initial LED-state nudge report.
+
+/// Returns `true` when the OTG FS hardware reports the USB bus is suspended.
 ///
-/// Gives the RMK HID reader task time to start listening on the output
-/// endpoint before the empty report is sent. Without this delay the host
-/// response may arrive before RMK is ready and be silently dropped,
-/// leaving Num Lock in the wrong state.
-const CONNECTION_NUDGE_DELAY: Duration = Duration::from_millis(50);
+/// Reads `OTG_FS.DSTS.SUSPSTS` directly so suspend is detected regardless of
+/// whether the embassy-usb handler fires.
+#[inline]
+fn usb_is_suspended() -> bool { embassy_stm32::pac::USB_OTG_FS.dsts().read().suspsts() }
+
+/// Returns `true` when VBUS is present (cable plugged in, host powered).
+///
+/// Reads `OTG_FS.GOTGCTL.BSVLD` directly.
+#[inline]
+fn usb_vbus_present() -> bool { embassy_stm32::pac::USB_OTG_FS.gotgctl().read().bsvld() }
+
+/// Returns `true` when the USB host is present and the bus is not suspended.
+#[inline]
+fn usb_is_active() -> bool { usb_vbus_present() && !usb_is_suspended() }
 
 /// Scale `value` by `brightness_percent` (0–100), rounding to nearest.
 ///
@@ -268,19 +277,21 @@ async fn render_indicators(driver: &mut BacklightDriver, state: BacklightState) 
 /// # Errors
 ///
 /// Returns `Err` if any bus transaction fails during the ramp.
-async fn softstart(
+async fn brightness_ramp(
     driver: &mut BacklightDriver,
     base_red: u8,
     base_green: u8,
     base_blue: u8,
     target_brightness: u8,
+    ramp_up: bool,
 ) -> Result<(), BusError> {
     let target = u32::from(target_brightness.min(100));
     let steps = u32::from(SOFTSTART_STEPS.max(1));
     let delay_ms = u64::from(SOFTSTART_RAMP_MS.checked_div(steps).unwrap_or(0));
 
     for step in 0..=steps {
-        let percent = u8::try_from(target.saturating_mul(step).checked_div(steps).unwrap_or(0)).unwrap_or(0);
+        let pct_step = if ramp_up { step } else { steps.saturating_sub(step) };
+        let percent = u8::try_from(target.saturating_mul(pct_step).checked_div(steps).unwrap_or(0)).unwrap_or(0);
         let (red, green, blue) = correct(base_red, base_green, base_blue, percent);
         if let Err(err) = driver.set_all_leds(red, green, blue).await {
             return Err(err);
@@ -292,162 +303,175 @@ async fn softstart(
     Ok(())
 }
 
-/// Runs the backlight controller loop.
+/// Backlight controller owning its SPI bus and LED driver chips.
 ///
-/// Initializes both SNLED27351 driver chips, performs a soft-start brightness
-/// ramp, waits for USB enumeration, then enters an event loop that
-/// concurrently handles three concerns:
-///
-/// - **Indicator and calibration commands** arriving on [`BACKLIGHT_CH`].
-/// - **Thermal polling** on a [`THERMAL_POLL`] ticker: reads the TDF register
-///   from both chips and reduces overall brightness to
-///   [`THERMAL_THROTTLE_BRIGHTNESS`] if either exceeds 70 °C, restoring it
-///   automatically when both cool down. During calibration [`render_calib`] is
-///   used instead of [`render_all`] so the calibration display is never
-///   clobbered by a thermal event.
-/// - **Connection polling** on a [`CONNECTION_POLL`] ticker: monitors the USB
-///   host connection state. On disconnect all LEDs are turned off. On reconnect
-///   the backlight is restored and an empty keyboard report is sent to nudge
-///   the host into reporting its current indicator state, ensuring Num Lock and
-///   Caps Lock are correct without requiring a key press.
-pub async fn backlight_runner(
-    spi: Spi<'static, Async, Master>,
-    cs0: Output<'static>,
-    cs1: Output<'static>,
-    sdb: Output<'static>,
-) -> ! {
-    // Initialize the shared async bus and wrap each CS pin in its own SpiDevice.
-    let spi_bus = SPI_BUS.init(Mutex::new(spi));
-    let device0 = SpiDevice::new(spi_bus, cs0);
-    let device1 = SpiDevice::new(spi_bus, cs1);
+/// Construct with [`BacklightRunner::new`] and hand to [`run_all!`] alongside
+/// the other keyboard runnables. All LED control goes through
+/// [`Runnable::run`].
+pub struct BacklightRunner {
+    driver: BacklightDriver,
+}
 
-    let transport = Controller::new([device0, device1], sdb);
-    let mut driver = BacklightDriver::new(transport, LED_LAYOUT);
-
-    // Backlight failures are non-critical: the keyboard remains fully functional
-    // without LEDs. All driver errors are intentionally ignored throughout
-    // this task via `let _ = ...`.
-    if driver.init(0xFF).await.is_ok() {
-        let _ = softstart(&mut driver, 255, 255, 255, 100).await;
+impl BacklightRunner {
+    /// Construct and take ownership of the SPI bus and all chip-select pins.
+    ///
+    /// Initialises the shared bus, wraps each CS in its own `SpiDevice`, and
+    /// builds the `BacklightDriver`. All further interaction is through
+    /// [`Runnable::run`].
+    pub fn new(
+        spi: Spi<'static, Async, Master>,
+        cs0: Output<'static>,
+        cs1: Output<'static>,
+        sdb: Output<'static>,
+    ) -> Self {
+        let spi_bus = SPI_BUS.init(Mutex::new(spi));
+        let device0 = SpiDevice::new(spi_bus, cs0);
+        let device1 = SpiDevice::new(spi_bus, cs1);
+        let transport = Controller::new([device0, device1], sdb);
+        let driver = BacklightDriver::new(transport, LED_LAYOUT);
+        Self { driver }
     }
+}
 
-    // Wait for USB enumeration before entering the event loop. The connection
-    // ticker will handle the initial nudge and all subsequent transitions, so
-    // host_connected starts false and the first CONNECTION_POLL tick after
-    // enumeration triggers the connect path naturally.
-    while get_connection_state() == ConnectionState::Disconnected {
-        Timer::after_millis(10).await;
-    }
+impl Runnable for BacklightRunner {
+    /// Initializes both SNLED27351 driver chips, performs a soft-start
+    /// brightness ramp, waits for USB enumeration, then enters an event
+    /// loop that concurrently handles three concerns:
+    ///
+    /// - **Indicator and calibration commands** arriving on [`BACKLIGHT_CH`].
+    /// - **Thermal polling** on a [`THERMAL_POLL`] ticker: reads the TDF
+    ///   register from both chips and reduces overall brightness to
+    ///   [`THERMAL_THROTTLE_BRIGHTNESS`] if either exceeds 70 °C, restoring it
+    ///   automatically when both cool down. During calibration [`render_calib`]
+    ///   is used instead of [`render_all`] so the calibration display is never
+    ///   clobbered by a thermal event.
+    /// - **Connection polling** on a [`CONNECTION_POLL`] ticker: monitors the
+    ///   USB host connection state via OTG FS hardware registers. On disconnect
+    ///   all LEDs are turned off. On reconnect the backlight is restored and
+    ///   Num Lock and Caps Lock are re-synced without requiring a key press.
+    async fn run(&mut self) -> ! {
+        // Backlight failures are non-critical: the keyboard remains fully functional
+        // without LEDs. All driver errors are intentionally ignored throughout
+        // this task via `let _ = ...`.
+        let _ = self.driver.init(0xFF).await;
 
-    let rx = BACKLIGHT_CH.receiver();
-    let mut thermal_ticker = Ticker::every(THERMAL_POLL);
-    let mut connection_ticker = Ticker::every(CONNECTION_POLL);
-    let mut state = BacklightState::new();
+        // Wait for USB enumeration before entering the event loop. The connection
+        // ticker will handle all subsequent transitions, so
+        // host_connected starts false and the first CONNECTION_POLL tick after
+        // enumeration triggers the connect path naturally.
+        while !usb_is_active() {
+            Timer::after_millis(10).await;
+        }
 
-    loop {
-        match select3(rx.receive(), thermal_ticker.next(), connection_ticker.next()).await {
-            Either3::First(cmd) => match cmd {
-                BacklightCmd::CalibPhase(phase) => match phase {
-                    Zero => {
-                        // Amber: zero-travel pass, all keys should be fully released.
-                        state.in_calib = true;
-                        let _ = fill_all_leds(&mut driver, CALIB_AMBER, state.brightness).await;
-                    },
-                    Full => {
-                        // Reset calib tracking and render the initial red frame via
-                        // render_calib so the full-travel phase starts consistently.
-                        state.calib_leds_done = 0;
-                        state.calib_pct = 0;
-                        let _ = render_calib(&mut driver, state).await;
-                    },
-                    AllAccepted => {
-                        // Blink solid green × CALIB_ALL_DONE_BLINK_COUNT to signal
-                        // that every key has been recorded and keys may be released.
-                        // Calibration is still in progress (in_calib stays true).
-                        for blink_index in 0..CALIB_ALL_DONE_BLINK_COUNT {
-                            let _ = fill_all_leds(&mut driver, CALIB_GREEN, state.brightness).await;
-                            Timer::after_millis(CALIB_ALL_DONE_BLINK_HALF_MS).await;
-                            if blink_index < CALIB_ALL_DONE_BLINK_COUNT.saturating_sub(1) {
-                                let _ = fill_all_leds(&mut driver, INDICATOR_OFF, state.brightness).await;
+        let rx = BACKLIGHT_CH.receiver();
+        let mut thermal_ticker = Ticker::every(THERMAL_POLL);
+        let mut connection_ticker = Ticker::every(CONNECTION_POLL);
+        let mut state = BacklightState::new();
+
+        loop {
+            match select3(rx.receive(), thermal_ticker.next(), connection_ticker.next()).await {
+                Either3::First(cmd) => match cmd {
+                    BacklightCmd::CalibPhase(phase) => match phase {
+                        Zero => {
+                            // Amber: zero-travel pass, all keys should be fully released.
+                            state.in_calib = true;
+                            let _ = fill_all_leds(&mut self.driver, CALIB_AMBER, state.brightness).await;
+                        },
+                        Full => {
+                            // Reset calib tracking and render the initial red frame via
+                            // render_calib so the full-travel phase starts consistently.
+                            state.calib_leds_done = 0;
+                            state.calib_pct = 0;
+                            let _ = render_calib(&mut self.driver, state).await;
+                        },
+                        AllAccepted => {
+                            // Blink solid green × CALIB_ALL_DONE_BLINK_COUNT to signal
+                            // that every key has been recorded and keys may be released.
+                            // Calibration is still in progress (in_calib stays true).
+                            for blink_index in 0..CALIB_ALL_DONE_BLINK_COUNT {
+                                let _ = fill_all_leds(&mut self.driver, CALIB_GREEN, state.brightness).await;
                                 Timer::after_millis(CALIB_ALL_DONE_BLINK_HALF_MS).await;
+                                if blink_index < CALIB_ALL_DONE_BLINK_COUNT.saturating_sub(1) {
+                                    let _ = fill_all_leds(&mut self.driver, INDICATOR_OFF, state.brightness).await;
+                                    Timer::after_millis(CALIB_ALL_DONE_BLINK_HALF_MS).await;
+                                }
                             }
+                            // Leave the keyboard solid green heading into Done.
+                        },
+                        Done => {
+                            // Solid green hold for 2 s to confirm calibration is stored.
+                            let _ = fill_all_leds(&mut self.driver, CALIB_GREEN, state.brightness).await;
+                            Timer::after_millis(CALIB_DONE_HOLD_MS).await;
+                            // Clear all calibration state before returning to normal
+                            // white so stale bits cannot bleed into the next render.
+                            state.in_calib = false;
+                            state.calib_leds_done = 0;
+                            state.calib_pct = 0;
+                            let _ = render_all(&mut self.driver, state).await;
+                        },
+                    },
+                    BacklightCmd::CalibProgress(pct) => {
+                        state.calib_pct = pct;
+                        let _ = render_calib(&mut self.driver, state).await;
+                    },
+                    BacklightCmd::CalibKeyDone(led_idx) => {
+                        // Mark this LED calibrated and repaint immediately so the
+                        // key turns green the moment it crosses the threshold.
+                        // checked_shl returns None for any shift >= 128 (the bit-
+                        // width of calib_leds_done).
+                        if let Some(bit) = 1_u128.checked_shl(u32::from(led_idx)) {
+                            state.calib_leds_done |= bit;
                         }
-                        // Leave the keyboard solid green heading into Done.
+                        let _ = render_calib(&mut self.driver, state).await;
                     },
-                    Done => {
-                        // Solid green hold for 2 s to confirm calibration is stored.
-                        let _ = fill_all_leds(&mut driver, CALIB_GREEN, state.brightness).await;
-                        Timer::after_millis(CALIB_DONE_HOLD_MS).await;
-                        // Clear all calibration state before returning to normal
-                        // white so stale bits cannot bleed into the next render.
-                        state.in_calib = false;
-                        state.calib_leds_done = 0;
-                        state.calib_pct = 0;
-                        let _ = render_all(&mut driver, state).await;
+                    BacklightCmd::Indicators { caps, num } => {
+                        state.caps_lock = caps;
+                        state.num_lock = num;
+                        // Background is already correct; only repaint indicator LEDs.
+                        let _ = render_indicators(&mut self.driver, state).await;
                     },
                 },
-                BacklightCmd::CalibProgress(pct) => {
-                    state.calib_pct = pct;
-                    let _ = render_calib(&mut driver, state).await;
-                },
-                BacklightCmd::CalibKeyDone(led_idx) => {
-                    // Mark this LED calibrated and repaint immediately so the
-                    // key turns green the moment it crosses the threshold.
-                    // checked_shl returns None for any shift >= 128 (the bit-
-                    // width of calib_leds_done).
-                    if let Some(bit) = 1_u128.checked_shl(u32::from(led_idx)) {
-                        state.calib_leds_done |= bit;
+                Either3::Second(_) => {
+                    // Read the thermal flag from both driver chips. If either reports
+                    // a temperature at or above 70 °C, reduce brightness to
+                    // THERMAL_THROTTLE_BRIGHTNESS to protect the hardware. Brightness
+                    // is restored to 100 % automatically once both chips cool down.
+                    let hot =
+                        self.driver.check_thermal_flag_set(0).await || self.driver.check_thermal_flag_set(1).await;
+                    let new_brightness = if hot { THERMAL_THROTTLE_BRIGHTNESS } else { 100 };
+                    if new_brightness != state.brightness {
+                        state.brightness = new_brightness;
+                        // During calibration use render_calib so the gradient and
+                        // per-key green state are preserved after the brightness change.
+                        // Outside calibration restore the normal white background.
+                        if state.in_calib {
+                            let _ = render_calib(&mut self.driver, state).await;
+                        } else {
+                            let _ = render_all(&mut self.driver, state).await;
+                        }
                     }
-                    let _ = render_calib(&mut driver, state).await;
                 },
-                BacklightCmd::Indicators { caps, num } => {
-                    state.caps_lock = caps;
-                    state.num_lock = num;
-                    // Background is already correct; only repaint indicator LEDs.
-                    let _ = render_indicators(&mut driver, state).await;
+                Either3::Third(_) => {
+                    // Poll the USB connection state via OTG FS hardware registers.
+                    // On disconnect all LEDs are turned off to avoid driving the
+                    // backlight unnecessarily. On reconnect the backlight is restored
+                    // and a short delay ensures the HID reader task is ready before
+                    // the first render, so Num Lock and Caps Lock come back correctly.
+                    let connected = usb_is_active();
+                    if connected != state.host_connected {
+                        state.host_connected = connected;
+                        if connected {
+                            let _ = brightness_ramp(&mut self.driver, 255, 255, 255, 100, true).await;
+                            let _ = render_all(&mut self.driver, state).await;
+                        } else {
+                            // Host disconnected: turn off all LEDs until the next
+                            // connect event restores the backlight.
+                            let _ = brightness_ramp(&mut self.driver, 255, 255, 255, state.brightness, false).await;
+                            let _ = fill_all_leds(&mut self.driver, INDICATOR_OFF, state.brightness).await;
+                        }
+                    }
                 },
-            },
-            Either3::Second(_) => {
-                // Read the thermal flag from both driver chips. If either reports
-                // a temperature at or above 70 °C, reduce brightness to
-                // THERMAL_THROTTLE_BRIGHTNESS to protect the hardware. Brightness
-                // is restored to 100 % automatically once both chips cool down.
-                let hot = driver.check_thermal_flag_set(0).await || driver.check_thermal_flag_set(1).await;
-                let new_brightness = if hot { THERMAL_THROTTLE_BRIGHTNESS } else { 100 };
-                if new_brightness != state.brightness {
-                    state.brightness = new_brightness;
-                    // During calibration use render_calib so the gradient and
-                    // per-key green state are preserved after the brightness change.
-                    // Outside calibration restore the normal white background.
-                    if state.in_calib {
-                        let _ = render_calib(&mut driver, state).await;
-                    } else {
-                        let _ = render_all(&mut driver, state).await;
-                    }
-                }
-            },
-            Either3::Third(_) => {
-                // Poll the USB connection state. On disconnect all LEDs are turned
-                // off to avoid driving the backlight unnecessarily. On reconnect
-                // the backlight is restored and an empty keyboard report is sent to
-                // nudge the host into resending its current LED indicator state.
-                let connected = get_connection_state() == ConnectionState::Connected;
-                if connected != state.host_connected {
-                    state.host_connected = connected;
-                    if connected {
-                        // Wait for the HID reader task to be ready before sending
-                        // the nudge, otherwise the host response may arrive before
-                        // RMK is listening and be silently dropped.
-                        Timer::after(CONNECTION_NUDGE_DELAY).await;
-                        KEYBOARD_REPORT_CHANNEL.send(Report::KeyboardReport(KeyboardReport::default())).await;
-                        let _ = render_all(&mut driver, state).await;
-                    } else {
-                        // Host disconnected: turn off all LEDs until the next
-                        // connect event restores the backlight.
-                        let _ = fill_all_leds(&mut driver, INDICATOR_OFF, state.brightness).await;
-                    }
-                }
-            },
+            }
         }
     }
 }
