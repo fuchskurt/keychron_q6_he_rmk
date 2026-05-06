@@ -269,7 +269,7 @@ async fn render_indicators(driver: &mut BacklightDriver, state: BacklightState) 
     driver.flush().await
 }
 
-/// Performs a soft-start brightness ramp on all LEDs at initialization.
+/// Performs a brightness ramp on all LEDs.
 ///
 /// Linearly steps brightness from 0 up to `target_brightness` over
 /// [`SOFTSTART_STEPS`] increments across [`SOFTSTART_RAMP_MS`] milliseconds.
@@ -284,6 +284,7 @@ async fn brightness_ramp(
     base_blue: u8,
     target_brightness: u8,
     ramp_up: bool,
+    state: BacklightState,
 ) -> Result<(), BusError> {
     let target = u32::from(target_brightness.min(100));
     let steps = u32::from(SOFTSTART_STEPS.max(1));
@@ -292,8 +293,19 @@ async fn brightness_ramp(
     for step in 0..=steps {
         let pct_step = if ramp_up { step } else { steps.saturating_sub(step) };
         let percent = u8::try_from(target.saturating_mul(pct_step).checked_div(steps).unwrap_or(0)).unwrap_or(0);
+
         let (red, green, blue) = correct(base_red, base_green, base_blue, percent);
-        if let Err(err) = driver.set_all_leds(red, green, blue).await {
+        driver.stage_all_leds(red, green, blue);
+
+        let caps_color = if state.caps_lock { INDICATOR_RED } else { INDICATOR_WHITE };
+        let (r, g, b) = correct_color(caps_color, percent.min(INDICATOR_BRIGHTNESS));
+        driver.stage_led(CAPS_LOCK_LED_INDEX, r, g, b);
+
+        let num_color = if state.num_lock { INDICATOR_WHITE } else { INDICATOR_OFF };
+        let (r, g, b) = correct_color(num_color, percent.min(INDICATOR_BRIGHTNESS));
+        driver.stage_led(NUM_LOCK_LED_INDEX, r, g, b);
+
+        if let Err(err) = driver.flush().await {
             return Err(err);
         }
         if step < steps {
@@ -461,13 +473,12 @@ impl Runnable for BacklightRunner {
                     if connected != state.host_connected {
                         state.host_connected = connected;
                         if connected {
-                            let _ = brightness_ramp(&mut self.driver, 255, 255, 255, 100, true).await;
-                            let _ = render_all(&mut self.driver, state).await;
+                            let _ = brightness_ramp(&mut self.driver, 255, 255, 255, 100, true, state).await;
                         } else {
                             // Host disconnected: turn off all LEDs until the next
                             // connect event restores the backlight.
-                            let _ = brightness_ramp(&mut self.driver, 255, 255, 255, state.brightness, false).await;
-                            let _ = fill_all_leds(&mut self.driver, INDICATOR_OFF, state.brightness).await;
+                            let _ =
+                                brightness_ramp(&mut self.driver, 255, 255, 255, state.brightness, false, state).await;
                         }
                     }
                 },
