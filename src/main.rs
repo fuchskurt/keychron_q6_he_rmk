@@ -79,14 +79,13 @@ use pac::{ADC1_COMMON, SYSCFG, adccommon::vals::Adcpre};
 use rmk::{
     KeymapData,
     config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
-    core_traits::Runnable as _,
-    futures::future::join5,
     host::HostService,
     initialize_keymap_and_storage,
     input_device::rotary_encoder::RotaryEncoder,
     keyboard::Keyboard,
+    processor::builtin::wpm::WpmProcessor,
     run_all,
-    run_rmk,
+    usb::UsbTransport,
 };
 use static_cell::ConstStaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
@@ -254,6 +253,8 @@ async fn main(spawner: Spawner) {
     // Initialize the keyboard
     let mut keyboard = Keyboard::new(&keymap);
     let mut host_service = HostService::new(&keymap, &rmk_config);
+    let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config);
+    let mut wpm_processor = WpmProcessor::new();
 
     // LED backlight
     let spi_config = {
@@ -278,12 +279,16 @@ async fn main(spawner: Spawner) {
     let mut led_indicator = LedIndicatorProcessor::new();
 
     // Start
-    join5(
-        run_all!(matrix, encoder, enc_switch, layer_toggle, storage, led_indicator),
-        keyboard.run(),
-        host_service.run(),
-        run_rmk(driver, rmk_config),
-        backlight_runner(spi_backlight, cs0, cs1, sdb),
+    run_all!(
+        keyboard,
+        host_service,
+        matrix,
+        encoder,
+        enc_switch,
+        layer_toggle,
+        storage,
+        led_indicator,
+        backlight_runner(spi_backlight, cs0, cs1, sdb)
     )
     .await;
 }

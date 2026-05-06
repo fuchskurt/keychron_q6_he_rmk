@@ -18,10 +18,8 @@ use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Ticker, Timer};
 use embedded_hal_async::spi::ErrorType;
 use rmk::{
-    channel::KEYBOARD_REPORT_CHANNEL,
     embassy_futures::select::{Either3, select3},
     hid::{KeyboardReport, Report},
-    state::{ConnectionState, get_connection_state},
 };
 use snled27351_driver::{
     driver::Driver,
