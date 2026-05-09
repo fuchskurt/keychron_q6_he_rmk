@@ -251,7 +251,8 @@ async fn main(spawner: Spawner) {
 
     // Initialize the keyboard
     let mut keyboard = Keyboard::new(&keymap);
-    let mut host_service = HostService::new(&keymap, &rmk_config);
+    let host_ctx = rmk::host::KeyboardContext::new(&keymap);
+    let mut host_service = HostService::new(&host_ctx, &rmk_config);
     let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config);
 
     // LED backlight
