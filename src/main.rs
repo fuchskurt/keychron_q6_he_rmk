@@ -22,8 +22,6 @@ mod flash_wrapper_async;
 mod layout;
 /// Matrix scanning components.
 mod matrix;
-/// Vial configuration constants.
-mod vial;
 
 use crate::{
     backlight::{init::BacklightRunner, led_processor::LedIndicatorProcessor},
@@ -36,7 +34,6 @@ use crate::{
         hc164_cols::Hc164Cols,
         layer_toggle::{LayerToggle, MatrixPos},
     },
-    vial::{PRODUCT_NAME, USB_PID, USB_VID, VIAL_SERIAL},
 };
 use embassy_executor::{Spawner, main};
 use embassy_stm32::{
@@ -78,7 +75,7 @@ use layout::{get_default_encoder_map, get_default_keymap};
 use pac::{ADC1_COMMON, SYSCFG, adccommon::vals::Adcpre};
 use rmk::{
     KeymapData,
-    config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig},
+    config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig},
     host::HostService,
     initialize_keymap_and_storage,
     input_device::rotary_encoder::RotaryEncoder,
@@ -87,7 +84,8 @@ use rmk::{
     usb::UsbTransport,
 };
 use static_cell::ConstStaticCell;
-use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
+
+type UsbDriver = embassy_stm32::usb::Driver<'static, embassy_stm32::peripherals::USB_OTG_FS>;
 
 bind_interrupts!(struct Irqs {
     DMA2_STREAM0 => dma::InterruptHandler<peripherals::DMA2_CH0>;
@@ -163,13 +161,12 @@ async fn main(spawner: Spawner) {
 
     // Keyboard config
     let rmk_config = RmkConfig {
-        vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0), (4, 20)]),
         device_config: DeviceConfig {
             manufacturer:  "Keychron",
-            product_name:  PRODUCT_NAME,
-            vid:           USB_VID,
-            pid:           USB_PID,
-            serial_number: VIAL_SERIAL,
+            product_name:  "Q6 HE",
+            vid:           0x3434,
+            pid:           0x0B60,
+            serial_number: "rmk:q6he:000006",
         },
         ..Default::default()
     };
@@ -251,9 +248,9 @@ async fn main(spawner: Spawner) {
 
     // Initialize the keyboard
     let mut keyboard = Keyboard::new(&keymap);
-    let host_ctx = rmk::host::KeyboardContext::new(&keymap);
-    let mut host_service = HostService::new(&host_ctx, &rmk_config);
     let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config);
+    let mut host_service: HostService<'_, UsbDriver> =
+        HostService::new(&keymap, usb_transport.take_rmk_protocol_endpoints());
 
     // LED backlight
     let spi_config = {
