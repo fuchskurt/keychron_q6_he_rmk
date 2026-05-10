@@ -13,7 +13,7 @@ pub struct Hc164Cols<'peripherals> {
 impl<'peripherals> Hc164Cols<'peripherals> {
     /// Advance the walking-one to the next column.
     /// Call this for every column after the first.
-    #[inline]
+    #[inline(always)]
     pub fn advance(&mut self) {
         self.cp.set_high();
         self.cp.set_low();
@@ -26,7 +26,7 @@ impl<'peripherals> Hc164Cols<'peripherals> {
 
     /// Reset the register and clock in the walking-one at position 0.
     /// Call this before the first column of every scan.
-    #[inline]
+    #[inline(always)]
     pub fn reset(&mut self) {
         self.mr.set_low();
         self.mr.set_high();

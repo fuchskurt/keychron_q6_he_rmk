@@ -70,12 +70,12 @@ where
             for col in 0..COL {
                 Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
+                cols.advance();
                 for (acc_row, &raw) in acc.iter_mut().zip(buf.iter()) {
                     if let Some(cell) = acc_row.get_mut(col) {
                         *cell = cell.saturating_add(u32::from(raw));
                     }
                 }
-                cols.advance();
             }
         }
 
@@ -218,6 +218,7 @@ where
             for col in 0..COL {
                 Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
+                cols.advance();
 
                 // Only valid sensor positions are stored in VALID_ROWS_BY_COL;
                 // columns with no sensors produce an empty list and are skipped
@@ -275,8 +276,6 @@ where
                                             BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibProgress(pct)).ok();
                                         }
                                     }
-                                    // else: still within hold window; keep
-                                    // waiting.
                                 } else {
                                     // Released before hold duration; reset so the
                                     // user must press it all the way down again.
@@ -287,7 +286,6 @@ where
                         }
                     }
                 } // end if let Some(valid) – Phase A
-                cols.advance();
             }
         }
 
@@ -309,6 +307,7 @@ where
             for col in 0..COL {
                 Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
+                cols.advance();
                 if let Some(valid) = VALID_ROWS_BY_COL.get(col) {
                     for i in 0..valid.count {
                         let Some(key) = valid.keys.get(i) else { continue };
@@ -316,7 +315,6 @@ where
                         update_min(usize::from(key.key_row), col, raw);
                     }
                 }
-                cols.advance();
             }
         }
 

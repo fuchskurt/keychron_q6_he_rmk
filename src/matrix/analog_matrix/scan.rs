@@ -42,7 +42,7 @@ use rmk::event::{KeyboardEvent, publish_event_async};
 /// [`AUTO_CALIB_MIN_RANGE`]; partial presses or noisy readings are
 /// discarded. Updated calibration takes effect immediately on the next
 /// travel computation within the same scan pass.
-#[inline]
+#[inline(always)]
 #[optimize(speed)]
 fn auto_calib_update(entry: &mut KeyEntry, raw: u16) {
     match entry.ac_phase {
@@ -141,6 +141,7 @@ where
             for col in 0..COL {
                 Timer::after(col_settle_us).await;
                 seq.read(buf).await;
+                cols.advance();
 
                 // Only valid sensor positions are stored in VALID_ROWS_BY_COL;
                 // columns with no sensors produce an empty list and are skipped
@@ -239,7 +240,6 @@ where
                         }
                     }
                 } // end if let (valid / valid_keys / key_col)
-                cols.advance();
             }
         }
     }

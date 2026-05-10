@@ -330,7 +330,7 @@ impl KeyEntry {
     /// Convert a raw ADC reading into a travel value.
     ///
     /// Returns `None` if the position is uncalibrated or `inv_scale == 0`.
-    #[inline]
+    #[inline(always)]
     #[optimize(speed)]
     pub(crate) fn travel_from(&self, raw: u16) -> Option<u8> {
         if unlikely(!self.calib_used || self.inv_scale == 0) {
@@ -340,7 +340,7 @@ impl KeyEntry {
         let raw_lut_val = Self::get_lut_val(raw);
         let delta = raw_lut_val.saturating_sub(self.lut_zero);
         let scaled: u32 = u32::from(delta).saturating_mul(self.inv_scale);
-        let travel: u32 = scaled.checked_shr(INV_SCALE_FRAC_BITS).unwrap_or(0).min(u32::from(FULL_TRAVEL_UNIT));
+        let travel = scaled.wrapping_shr(INV_SCALE_FRAC_BITS).min(u32::from(FULL_TRAVEL_UNIT));
         Some(u8::try_from(travel).unwrap_or(FULL_TRAVEL_UNIT))
     }
 
