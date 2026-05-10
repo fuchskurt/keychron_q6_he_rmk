@@ -113,10 +113,8 @@ pub static VALID_ROWS_BY_COL: [ColValidKeys; COL] = {
             if has_sensor {
                 if let Some(col_entry) = result.get_mut(col) {
                     if let Some(slot) = col_entry.keys.get_mut(count) {
-                        *slot = ValidKey {
-                            buf_row: u8::try_from(row).unwrap_or(u8::MAX),
-                            key_row: u8::try_from(row).unwrap_or(u8::MAX),
-                        };
+                        let row_u8 = u8::try_from(row).unwrap_or(u8::MAX);
+                        *slot = ValidKey { buf_row: row_u8, key_row: row_u8 };
                     }
                 }
                 count = count.saturating_add(1);
@@ -172,7 +170,7 @@ const _: () = {
 
         while let Some(cell_option) = row_slice.get(column_index) {
             if let Some(led_index) = *cell_option {
-                let led_index_usize = led_index as usize;
+                let led_index_usize = usize::from(led_index);
 
                 assert!(led_index_usize < led_count, "MATRIX_TO_LED contains an out-of-bounds LED index");
             }

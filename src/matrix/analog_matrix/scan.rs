@@ -33,7 +33,7 @@ use rmk::event::{KeyboardEvent, publish_event_async};
 ///
 /// Called on every scan reading that passes the noise gate, before the
 /// travel computation and rapid-trigger logic. Watches complete
-/// press/release cycles and refines `calib[row][col]` once
+/// press/release cycles and refines the live calibration once
 /// [`AUTO_CALIB_CONFIDENCE_THRESHOLD`] confident cycles have accumulated,
 /// compensating for temperature and mechanical drift without requiring a
 /// manual re-calibration.
@@ -45,51 +45,50 @@ use rmk::event::{KeyboardEvent, publish_event_async};
 #[inline]
 #[optimize(speed)]
 fn auto_calib_update(entry: &mut KeyEntry, raw: u16) {
-    match entry.auto_calib.phase {
+    match entry.ac_phase {
         AutoCalibPhase::Idle => {
             if raw < AUTO_CALIB_FULL_TRAVEL_THRESHOLD {
-                entry.auto_calib.full_candidate = raw;
-                entry.auto_calib.phase = AutoCalibPhase::Pressing;
+                entry.ac_full_cand = raw;
+                entry.ac_phase = AutoCalibPhase::Pressing;
             }
         },
         AutoCalibPhase::Pressing => {
-            if raw < entry.auto_calib.full_candidate {
+            if raw < entry.ac_full_cand {
                 // Key is pressing deeper; track the running minimum.
-                entry.auto_calib.full_candidate = raw;
-            } else if raw.saturating_sub(entry.auto_calib.full_candidate) >= AUTO_CALIB_RELEASE_THRESHOLD {
+                entry.ac_full_cand = raw;
+            } else if raw.saturating_sub(entry.ac_full_cand) >= AUTO_CALIB_RELEASE_THRESHOLD {
                 // Key has lifted enough above the minimum to count as releasing.
-                entry.auto_calib.zero_candidate = raw;
-                entry.auto_calib.phase = AutoCalibPhase::Releasing;
+                entry.ac_zero_cand = raw;
+                entry.ac_phase = AutoCalibPhase::Releasing;
             } else {
-                // Reading is between full_candidate and full_candidate +
+                // Reading is between ac_full_cand and ac_full_cand +
                 // AUTO_CALIB_RELEASE_THRESHOLD: bottom-of-travel jitter or
                 // a partial early lift. Stay in Pressing until a decisive rise.
             }
         },
         AutoCalibPhase::Releasing => {
-            if raw > entry.auto_calib.zero_candidate {
+            if raw > entry.ac_zero_cand {
                 // Key still rising; update the zero-travel peak.
-                entry.auto_calib.zero_candidate = raw;
+                entry.ac_zero_cand = raw;
             } else {
                 // ADC has stopped rising: either settled within jitter (score
                 // the cycle) or dropped sharply (key re-pressed mid-release).
                 // Both cases return to Idle; only the settled case also scores.
-                if entry.auto_calib.zero_candidate.saturating_sub(raw) <= AUTO_CALIB_ZERO_JITTER {
+                if entry.ac_zero_cand.saturating_sub(raw) <= AUTO_CALIB_ZERO_JITTER {
                     // ADC has settled within jitter of the zero-travel peak;
                     // score the cycle if the range is plausible.
-                    let range = entry.auto_calib.zero_candidate.saturating_sub(entry.auto_calib.full_candidate);
+                    let range = entry.ac_zero_cand.saturating_sub(entry.ac_full_cand);
                     if range >= AUTO_CALIB_MIN_RANGE {
-                        entry.auto_calib.confidence = entry.auto_calib.confidence.saturating_add(1);
+                        entry.ac_confidence = entry.ac_confidence.saturating_add(1);
                     }
 
-                    if entry.auto_calib.confidence >= AUTO_CALIB_CONFIDENCE_THRESHOLD {
+                    if entry.ac_confidence >= AUTO_CALIB_CONFIDENCE_THRESHOLD {
                         cold_path();
-                        entry.auto_calib.confidence = 0;
+                        entry.ac_confidence = 0;
 
-                        let new_zero = entry.auto_calib.zero_candidate.saturating_sub(ZERO_TRAVEL_DEAD_ZONE);
+                        let new_zero = entry.ac_zero_cand.saturating_sub(ZERO_TRAVEL_DEAD_ZONE);
                         let new_full = entry
-                            .auto_calib
-                            .full_candidate
+                            .ac_full_cand
                             .saturating_add(BOTTOM_JITTER)
                             .clamp(VALID_RAW_MIN, new_zero.saturating_sub(MIN_USEFUL_FULL_RANGE));
 
@@ -98,7 +97,7 @@ fn auto_calib_update(entry: &mut KeyEntry, raw: u16) {
                         entry.update_calib_if_drifted(new_zero, new_full);
                     }
                 }
-                entry.auto_calib.phase = AutoCalibPhase::Idle;
+                entry.ac_phase = AutoCalibPhase::Idle;
             }
         },
     }
@@ -125,7 +124,7 @@ where
     #[optimize(speed)]
     pub(super) async fn run_scan_loop(
         cols: &mut Hc164Cols<'peripherals>,
-        keys: &mut [[KeyEntry; COL]; ROW],
+        keys: &mut [[KeyEntry; ROW]; COL],
         seq: &mut ConfiguredSequence<'_, adc::Adc>,
         buf: &mut [u16; ROW],
         cfg: HallCfg,
@@ -151,18 +150,28 @@ where
                     continue;
                 };
 
-                for i in 0..valid.count {
-                    let Some(key) = valid.keys.get(i) else { continue };
-                    let buf_row = key.buf_row as usize;
-                    let key_row = key.key_row as usize;
+                // Slice to exactly the populated entries (one check instead of
+                // one per key), and hoist keys[col] out of the inner loop.
+                let Some(valid_keys) = valid.keys.get(..valid.count) else {
+                    cols.advance();
+                    continue;
+                };
+                let Some(key_col) = keys.get_mut(col) else {
+                    cols.advance();
+                    continue;
+                };
+
+                for key in valid_keys {
+                    let buf_row = usize::from(key.buf_row);
+                    let key_row = usize::from(key.key_row);
 
                     // Clamp raw ADC value to valid range to prevent out-of-bounds
                     // LUT access and ensure valid calibration updates.
                     let raw = buf.get(buf_row).copied().unwrap_or(0).clamp(VALID_RAW_MIN, VALID_RAW_MAX);
 
-                    let Some(entry) = keys.get_mut(key_row).and_then(|r| r.get_mut(col)) else { continue };
+                    let Some(entry) = key_col.get_mut(key_row) else { continue };
 
-                    let last_raw = entry.state.last_raw;
+                    let last_raw = entry.last_raw;
 
                     // Skip if the reading has not changed beyond the noise gate.
                     if likely(last_raw.abs_diff(raw) < noise_gate) {
@@ -172,16 +181,16 @@ where
                     // Record the raw value now so that repeated identical readings
                     // are filtered by the noise gate even when travel_from later
                     // returns None (uncalibrated or out-of-range position).
-                    entry.state.last_raw = raw;
+                    entry.last_raw = raw;
 
                     // Update the auto-calibrator with this reading before the
-                    // travel computation so any refined KeyCalib is used immediately.
+                    // travel computation so any refined calibration is used immediately.
                     auto_calib_update(entry, raw);
 
                     let Some(new_travel) = entry.travel_from(raw) else { continue };
 
-                    let prev_travel = entry.state.travel;
-                    let was_pressed = entry.state.pressed;
+                    let prev_travel = entry.travel;
+                    let was_pressed = entry.pressed;
 
                     // After noise gate, travel often resolves to the same
                     // quantized value; skip redundant RT logic.
@@ -189,7 +198,7 @@ where
                         continue;
                     }
 
-                    entry.state.travel = new_travel;
+                    entry.travel = new_travel;
 
                     let below_act = new_travel < act_threshold;
 
@@ -198,12 +207,12 @@ where
                         // Track the peak while held; release when travel drops at
                         // least `sensitivity_release` below it. The actuation floor
                         // is a hard lower bound that forces an immediate release.
-                        entry.state.extremum = entry.state.extremum.max(new_travel);
+                        entry.extremum = entry.extremum.max(new_travel);
                         if below_act {
                             false
                         } else {
                             // Only compute when relevant.
-                            new_travel > entry.state.extremum.saturating_sub(sensitivity_release)
+                            new_travel > entry.extremum.saturating_sub(sensitivity_release)
                         }
                     } else {
                         // Track the trough while released; re-press when travel
@@ -214,21 +223,21 @@ where
                         // When travel drops below the actuation floor the trough is
                         // additionally clamped so the key re-presses cleanly at
                         // `act_threshold` without requiring an extra delta above it.
-                        entry.state.extremum = entry.state.extremum.min(new_travel);
+                        entry.extremum = entry.extremum.min(new_travel);
                         if below_act {
-                            entry.state.extremum = entry.state.extremum.min(trough_floor);
+                            entry.extremum = entry.extremum.min(trough_floor);
                             false
                         } else {
                             // Only compute when above floor.
-                            new_travel >= entry.state.extremum.saturating_add(sensitivity_press)
+                            new_travel >= entry.extremum.saturating_add(sensitivity_press)
                         }
                     };
 
-                    if unlikely(now_pressed != entry.state.pressed) {
+                    if unlikely(now_pressed != entry.pressed) {
                         // Reset extremum so the next direction starts fresh from
                         // the transition point.
-                        entry.state.extremum = new_travel;
-                        entry.state.pressed = now_pressed;
+                        entry.extremum = new_travel;
+                        entry.pressed = now_pressed;
                         publish_event_async(KeyboardEvent::key(
                             key.key_row,
                             u8::try_from(col).unwrap_or_default(),

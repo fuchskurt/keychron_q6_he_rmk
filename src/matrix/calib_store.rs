@@ -15,8 +15,13 @@ pub const EEPROM_BASE_ADDR: u16 = 0x0000;
 const ENTRY_LEN: usize = size_of::<u16>();
 /// Byte length of the header: magic + version.
 const HEADER_LEN: usize = size_of::<u32>().saturating_add(size_of::<u8>());
-/// Format version. Must be incremented on any incompatible layout change.
-const VERSION: u8 = 1;
+/// Format version. Increment on any incompatible layout change to force a
+/// first-boot re-calibration when old EEPROM data is found.
+///
+/// Version history:
+///   1 – row-major entry order (`[[KeyEntry; COL]; ROW]` storage)
+///   2 – column-major entry order (`[[KeyEntry; ROW]; COL]` storage)
+const VERSION: u8 = 2;
 /// Magic number identifying a valid Q6 HE calibration block.
 const MAGIC: u32 = 0x5136_4845;
 
@@ -28,7 +33,7 @@ const MAGIC: u32 = 0x5136_4845;
 /// because zero is a valid output for checksums and serialized values.
 #[inline]
 fn read_array<const N: usize>(buf: &[u8], start: usize, end: usize) -> Option<[u8; N]> {
-    buf.get(start..end)?.try_into().ok()
+    buf.get(start..end).and_then(|slice| slice.try_into().ok())
 }
 
 /// Compute CRC-32 over `data` using the STM32 hardware CRC peripheral.
@@ -49,13 +54,15 @@ fn crc32_of(crc: &mut Crc<'_>, data: &[u8]) -> u32 {
     crc.read()
 }
 
-/// Serialize `keys` (row-major, `ROW × COL`) into `buf`.
+/// Serialize `keys` (column-major `[[KeyEntry; ROW]; COL]`) into `buf`.
 ///
-/// Writes the magic number, version byte, the full-travel entry from each
-/// [`KeyEntry::entry`], and a CRC-32 checksum over all preceding bytes.
-/// `buf` must be at least [`total_len`]`(ROW, COL)` bytes.
+/// Entries are written in column-major order (col outer, row inner) matching
+/// the in-memory layout, so no transposition is needed.
+///
+/// Format: magic (4 B LE) | version (1 B) | entries (COL×ROW×2 B LE) | CRC-32
+/// (4 B LE). `buf` must be at least [`total_len`]`(ROW, COL)` bytes.
 pub fn serialize<const ROW: usize, const COL: usize>(
-    keys: &[[KeyEntry; COL]; ROW],
+    keys: &[[KeyEntry; ROW]; COL],
     buf: &mut [u8; CALIB_BUF_LEN],
     crc: &mut Crc<'_>,
 ) {
@@ -68,11 +75,11 @@ pub fn serialize<const ROW: usize, const COL: usize>(
         *version_byte = VERSION;
     }
     let mut pos = HEADER_LEN;
-    for row in keys {
-        for key in row {
+    for key_col in keys.iter() {
+        for key in key_col.iter() {
             let end = pos.saturating_add(ENTRY_LEN);
             if let Some(dst) = buf.get_mut(pos..end) {
-                dst.copy_from_slice(&key.entry.full.to_le_bytes());
+                dst.copy_from_slice(&key.entry_full.to_le_bytes());
             }
             pos = end;
         }
@@ -89,13 +96,13 @@ pub fn serialize<const ROW: usize, const COL: usize>(
 /// Attempt to deserialize a calibration block from `buf` into `out`.
 ///
 /// Validates the magic number, version byte, and CRC-32 checksum.
-/// Returns `true` and populates [`KeyEntry::entry`] for every position in
-/// `out` on success. Returns `false` without modifying `out` on any
+/// Returns `true` and populates [`KeyEntry::entry_full`] for every position
+/// in `out` on success. Returns `false` without modifying `out` on any
 /// validation failure, including a VERSION mismatch which rejects data
 /// written by an incompatible layout.
 pub fn try_deserialize<const ROW: usize, const COL: usize>(
     buf: &[u8],
-    out: &mut [[KeyEntry; COL]; ROW],
+    out: &mut [[KeyEntry; ROW]; COL],
     crc: &mut Crc<'_>,
 ) -> bool {
     if buf.len() < CALIB_BUF_LEN {
@@ -124,11 +131,11 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(
     }
     // Deserialize entries directly into each key's persistent calibration slot.
     let mut pos = HEADER_LEN;
-    for row in out.iter_mut() {
-        for key in row.iter_mut() {
+    for key_col in out.iter_mut() {
+        for key in key_col.iter_mut() {
             let end = pos.saturating_add(ENTRY_LEN);
             let Some(fb) = read_array::<2>(buf, pos, end) else { return false };
-            key.entry.full = u16::from_le_bytes(fb);
+            key.entry_full = u16::from_le_bytes(fb);
             pos = end;
         }
     }

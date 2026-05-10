@@ -135,7 +135,7 @@ where
             for i in 0..valid.count {
                 let Some(key) = valid.keys.get(i) else { continue };
                 let in_range = zero_raw
-                    .get(key.key_row as usize)
+                    .get(usize::from(key.key_row))
                     .and_then(|r| r.get(col_idx))
                     .copied()
                     .is_some_and(|zero| zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE);
@@ -165,8 +165,8 @@ where
 
                 for i in 0..valid.count {
                     let Some(key) = valid.keys.get(i) else { continue };
-                    let buf_row = key.buf_row as usize;
-                    let key_row = key.key_row as usize;
+                    let buf_row = usize::from(key.buf_row);
+                    let key_row = usize::from(key.key_row);
                     let raw = buf.get(buf_row).copied().unwrap_or(0);
 
                     // Always track the deepest reading seen, regardless of
@@ -255,8 +255,8 @@ where
                 };
                 for i in 0..valid.count {
                     let Some(key) = valid.keys.get(i) else { continue };
-                    let raw = buf.get(key.buf_row as usize).copied().unwrap_or(0);
-                    update_min(key.key_row as usize, col, raw);
+                    let raw = buf.get(usize::from(key.buf_row)).copied().unwrap_or(0);
+                    update_min(usize::from(key.key_row), col, raw);
                 }
                 cols.advance();
             }
@@ -285,7 +285,7 @@ where
         cfg: HallCfg,
         eeprom: &mut Ft24c64<'_, IM>,
         crc: &mut Crc<'_>,
-        keys: &mut [[KeyEntry; COL]; ROW],
+        keys: &mut [[KeyEntry; ROW]; COL],
         eeprom_buf: &mut [u8; CALIB_BUF_LEN],
     ) {
         BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Zero)).ok();
@@ -294,9 +294,13 @@ where
         BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Full)).ok();
         let full_raw = Self::sample_full_raw(cols, seq, buf, cfg, &zero_raw).await;
 
-        for ((key_row, zero_row), full_row) in keys.iter_mut().zip(zero_raw.iter()).zip(full_raw.iter()) {
-            for ((key, &zero), &seen_min) in key_row.iter_mut().zip(zero_row).zip(full_row) {
-                key.entry.full = if zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
+        // Compute entry_full for every key from the measured zero and the
+        // minimum ADC seen during the full-travel press window.
+        for (col, key_col) in keys.iter_mut().enumerate() {
+            for (row, key) in key_col.iter_mut().enumerate() {
+                let zero = zero_raw.get(row).and_then(|r| r.get(col)).copied().unwrap_or(REF_ZERO_TRAVEL);
+                let seen_min = full_raw.get(row).and_then(|r| r.get(col)).copied().unwrap_or(u16::MAX);
+                key.entry_full = if zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
                     seen_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE))
                 } else {
                     zero.saturating_sub(DEFAULT_FULL_RANGE).max(VALID_RAW_MIN)

@@ -122,9 +122,11 @@ where
     eeprom:   Ft24c64<'peripherals, IM>,
     /// DMA interrupt binding reused for every ADC sequence read.
     irq:      IRQ,
-    /// Per-key runtime state, calibration, and auto-calibration grouped for
-    /// cache locality.
-    keys:     [[KeyEntry; COL]; ROW],
+    /// Per-key runtime state, calibration, and auto-calibration stored
+    /// column-major for cache efficiency during column scans: all ROW entries
+    /// for one HC164 column are contiguous, fitting in at most three 64-byte
+    /// cache lines.
+    keys:     [[KeyEntry; ROW]; COL],
 }
 
 impl<'peripherals, ADC, D, IRQ, IM, const ROW: usize, const COL: usize>
@@ -151,15 +153,19 @@ where
         Self { adc_part, cfg, cols, crc, eeprom, irq, keys: from_fn(|_| from_fn(|_| KeyEntry::default())) }
     }
 
-    /// Recompute [`KeyEntry::calib`] for every key from the freshly measured
-    /// zero-travel readings in `zero_raw`, using the full-travel value stored
-    /// in each [`KeyEntry::entry`]. Called after EEPROM load and after
-    /// first-boot calibration to make the scan loop hot path purely
-    /// arithmetic.
-    fn apply_calib(keys: &mut [[KeyEntry; COL]; ROW], zero_raw: &[[u16; COL]; ROW]) {
-        for (key_row, zero_row) in keys.iter_mut().zip(zero_raw) {
-            for (key, &zero) in key_row.iter_mut().zip(zero_row) {
-                key.apply_zero(zero);
+    /// Recompute [`KeyEntry::calib_used`] and the hot-path calibration fields
+    /// for every key from the freshly measured zero-travel readings in
+    /// `zero_raw`, using the full-travel value stored in each
+    /// [`KeyEntry::entry_full`].
+    ///
+    /// Called after EEPROM load and after first-boot calibration to make the
+    /// scan loop hot path purely arithmetic.
+    fn apply_calib(keys: &mut [[KeyEntry; ROW]; COL], zero_raw: &[[u16; COL]; ROW]) {
+        for (col, key_col) in keys.iter_mut().enumerate() {
+            for (key, zero_row) in key_col.iter_mut().zip(zero_raw.iter()) {
+                if let Some(&zero) = zero_row.get(col) {
+                    key.apply_zero(zero);
+                }
             }
         }
     }

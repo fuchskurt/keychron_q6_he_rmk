@@ -64,7 +64,10 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// accommodating the power-on reset delay without requiring a fixed
     /// worst-case wait from the caller.
     pub async fn read(&mut self, addr: u16, buf: &mut [u8]) -> Result<(), Error> {
-        self.poll_until_ready(20).await?;
+        let ready = self.poll_until_ready(20).await;
+        if let Err(error) = ready {
+            return Err(error);
+        }
         self.i2c.write_read(DEVICE_ADDR, &addr.to_be_bytes(), buf).await
     }
 

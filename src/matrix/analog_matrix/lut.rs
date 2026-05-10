@@ -1,9 +1,9 @@
 //! Precomputed lookup table for the Hall sensor transfer function.
 //!
-//! [`crate::matrix::analog_matrix::types::KeyCalib::new`] looks up `lut_zero`
-//! from the LUT and stores it alongside `inv_scale`. The hot path computes
-//! travel as a u16 subtraction followed by a u32 multiply-shift; the LUT bias
-//! cancels in the subtraction so it never has to be undone at runtime.
+//! [`crate::matrix::analog_matrix::types::KeyEntry::apply_zero`] looks up
+//! `lut_zero` from the LUT and stores it in [`KeyEntry`]. The hot path
+//! computes travel as a u16 subtraction followed by a u32 multiply-shift; the
+//! LUT bias cancels in the subtraction so it never has to be undone at runtime.
 use crate::matrix::analog_matrix::types::{VALID_RAW_MAX, VALID_RAW_MIN};
 
 pub(crate) const TRAVEL_LUT_LEN: usize = usize::from(VALID_RAW_MAX.saturating_sub(VALID_RAW_MIN).saturating_add(1));
