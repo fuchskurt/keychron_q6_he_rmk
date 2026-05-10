@@ -13,14 +13,21 @@
     default_field_values
 )]
 extern crate cortex_m as _;
+#[cfg(feature = "defmt")] use defmt_rtt as _;
+
 /// Backlight driver integration.
 mod backlight;
+/// Cycle-accurate performance benchmarking using the DWT counter.
+#[cfg(feature = "bench")]
+mod bench;
 /// EEPROM I²C driver.
 mod eeprom;
 /// Flash storage wrapper types.
 mod flash_wrapper_async;
 /// Default layout definitions.
 mod layout;
+/// Logging abstraction gated behind the `defmt` feature flag.
+mod log;
 /// Matrix scanning components.
 mod matrix;
 
@@ -275,6 +282,9 @@ async fn main(spawner: Spawner) {
     let sdb = Output::new(peripheral.PB7, Level::Low, Speed::VeryHigh);
     let mut led_indicator = LedIndicatorProcessor::new();
     let mut backlight = BacklightRunner::new(spi_backlight, cs0, cs1, sdb);
+
+    #[cfg(feature = "bench")]
+    bench::init();
 
     // Start
     run_all!(

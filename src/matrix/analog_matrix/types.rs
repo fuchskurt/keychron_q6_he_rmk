@@ -1,4 +1,4 @@
-use crate::matrix::analog_matrix::lut::TRAVEL_LUT;
+use crate::{log::debug, matrix::analog_matrix::lut::TRAVEL_LUT};
 use core::hint::{cold_path, unlikely};
 use embassy_stm32::adc::{BasicAdcRegs, BasicInstance};
 use embassy_time::{Duration, Instant};
@@ -349,6 +349,10 @@ impl KeyEntry {
     /// bounds.
     pub(crate) fn update_calib_if_drifted(&mut self, new_zero: u16, new_full: u16) {
         if self.calib_zero.abs_diff(new_zero) > AUTO_CALIB_ZERO_UPDATE_THRESHOLD {
+            debug!(
+                "auto-calib update: zero {} -> {} full {} -> {}",
+                self.calib_zero, new_zero, self.entry_full, new_full
+            );
             self.apply_calib(new_zero, new_full);
         }
     }

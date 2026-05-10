@@ -1,6 +1,7 @@
 use super::{AdcSampleTime, AnalogHallMatrix, HallCfg};
 use crate::{
     layout::VALID_ROWS_BY_COL,
+    log::trace,
     matrix::{
         analog_matrix::types::{
             AUTO_CALIB_CONFIDENCE_THRESHOLD,
@@ -131,6 +132,9 @@ where
         buf: &mut [u16; ROW],
         cfg: HallCfg,
     ) -> ! {
+        #[cfg(feature = "bench")] use crate::bench;
+        #[cfg(feature = "bench")]
+        let mut acc = bench::Accumulator::new();
         let act_threshold = cfg.actuation_pt;
         // Clamp to 1 so a zero config value never disables the dead-band.
         let sensitivity_press = cfg.rt_sensitivity_press.max(1);
@@ -143,7 +147,8 @@ where
             for col in 0..COL {
                 seq.read(buf).await;
                 cols.advance();
-
+                #[cfg(feature = "bench")]
+                let t = bench::cycles();
                 // Only valid sensor positions are stored in VALID_ROWS_BY_COL;
                 // columns with no sensors produce an empty list and are skipped
                 // entirely without touching the key-state machine.
@@ -238,9 +243,16 @@ where
                                 now_pressed,
                             ))
                             .await;
+                            trace!("key row={} col={} pressed={}", key.key_row, col, now_pressed);
                         }
                     }
-                } // end if let (valid / valid_keys / key_col)
+                }
+                #[cfg(feature = "bench")]
+                if let Some(avg) = acc.record(bench::elapsed(t)) {
+                    use crate::log::debug;
+
+                    debug!("scan avg={} cycles/col", avg);
+                }
             }
         }
     }
