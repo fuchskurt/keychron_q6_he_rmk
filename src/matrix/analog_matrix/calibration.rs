@@ -92,6 +92,70 @@ where
         result
     }
 
+    /// Run the guided first-boot two-phase calibration, persist the result to
+    /// EEPROM, and apply it to `keys`.
+    ///
+    /// Backlight signals during the process:
+    /// - **Amber** - zero-travel pass, all keys must be released.
+    /// - **Blue → green per key** - full-travel press window.
+    /// - **Green blink ×3** - all keys accepted; keys may be released.
+    /// - **Green for 2 s** - calibration stored successfully.
+    /// - **Amber** - EEPROM write-back verification failed; keyboard will
+    ///   re-calibrate on the next boot.
+    ///
+    /// Keys not pressed during the full-travel window fall back to
+    /// `zero − DEFAULT_FULL_RANGE` so the keyboard remains functional.
+    pub(super) async fn run_first_boot_calib(
+        cols: &mut Hc164Cols<'_>,
+        seq: &mut ConfiguredSequence<'_, adc::Adc>,
+        buf: &mut [u16; ROW],
+        cfg: HallCfg,
+        eeprom: &mut Ft24c64<'_, IM>,
+        crc: &mut Crc<'_>,
+        keys: &mut [[KeyEntry; ROW]; COL],
+        eeprom_buf: &mut [u8; CALIB_BUF_LEN],
+    ) {
+        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Zero)).ok();
+        let zero_raw = Self::calibrate_zero_raw(cols, seq, buf, cfg).await;
+
+        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Full)).ok();
+        let full_raw = Self::sample_full_raw(cols, seq, buf, cfg, &zero_raw).await;
+
+        // Compute entry_full for every key from the measured zero and the
+        // minimum ADC seen during the full-travel press window.
+        for (col, key_col) in keys.iter_mut().enumerate() {
+            for (row, key) in key_col.iter_mut().enumerate() {
+                let zero = zero_raw.get(row).and_then(|r| r.get(col)).copied().unwrap_or(REF_ZERO_TRAVEL);
+                let seen_min = full_raw.get(row).and_then(|r| r.get(col)).copied().unwrap_or(u16::MAX);
+                key.entry_full = if zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
+                    seen_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE))
+                } else {
+                    zero.saturating_sub(DEFAULT_FULL_RANGE).max(VALID_RAW_MIN)
+                };
+            }
+        }
+
+        Self::apply_calib(keys, &zero_raw);
+
+        calib_store::serialize(keys, eeprom_buf, crc);
+
+        // Verify by reading back into the same buffer and re-deserializing.
+        // Reusing the buffer avoids a second large stack allocation.
+        let verified = eeprom.erase().await.is_ok()
+            && eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
+            && eeprom.read(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
+            && try_deserialize::<ROW, COL>(eeprom_buf, keys, crc);
+
+        if !verified {
+            // Signal amber so the user knows calibration will repeat on the
+            // next boot.
+            BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Zero)).ok();
+            return;
+        }
+
+        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Done)).ok();
+    }
+
     /// Sample the matrix for `duration` (or until all real keys are accepted),
     /// recording the minimum ADC reading seen per key.
     ///
@@ -158,75 +222,71 @@ where
                 // Only valid sensor positions are stored in VALID_ROWS_BY_COL;
                 // columns with no sensors produce an empty list and are skipped
                 // entirely without touching the calibration state machine.
-                let Some(valid) = VALID_ROWS_BY_COL.get(col) else {
-                    cols.advance();
-                    continue;
-                };
+                if let Some(valid) = VALID_ROWS_BY_COL.get(col) {
+                    for i in 0..valid.count {
+                        let Some(key) = valid.keys.get(i) else { continue };
+                        let buf_row = usize::from(key.buf_row);
+                        let key_row = usize::from(key.key_row);
+                        let raw = buf.get(buf_row).copied().unwrap_or(0);
 
-                for i in 0..valid.count {
-                    let Some(key) = valid.keys.get(i) else { continue };
-                    let buf_row = usize::from(key.buf_row);
-                    let key_row = usize::from(key.key_row);
-                    let raw = buf.get(buf_row).copied().unwrap_or(0);
+                        // Always track the deepest reading seen, regardless of
+                        // whether the key has been accepted yet.
+                        update_min(key_row, col, raw);
 
-                    // Always track the deepest reading seen, regardless of
-                    // whether the key has been accepted yet.
-                    update_min(key_row, col, raw);
+                        let Some(calib_row) = calib_state.get_mut(key_row) else { continue };
+                        let Some(key_state) = calib_row.get_mut(col) else { continue };
 
-                    let Some(key_state) = calib_state.get_mut(key_row).and_then(|calib_row| calib_row.get_mut(col))
-                    else {
-                        continue;
-                    };
+                        // Skip keys already accepted.
+                        if likely(matches!(*key_state, KeyCalibState::Accepted)) {
+                            continue;
+                        }
 
-                    // Skip keys already accepted.
-                    if likely(matches!(*key_state, KeyCalibState::Accepted)) {
-                        continue;
-                    }
+                        let zero = zero_raw.get(key_row).and_then(|r| r.get(col)).copied().unwrap_or(REF_ZERO_TRAVEL);
+                        let pressed = zero.saturating_sub(raw) >= CALIB_PRESS_THRESHOLD;
 
-                    let zero = zero_raw.get(key_row).and_then(|r| r.get(col)).copied().unwrap_or(REF_ZERO_TRAVEL);
-                    let pressed = zero.saturating_sub(raw) >= CALIB_PRESS_THRESHOLD;
-
-                    match *key_state {
-                        KeyCalibState::Waiting => {
-                            if pressed {
-                                // Start hold timer on first threshold crossing.
-                                *key_state = KeyCalibState::Holding(Instant::now());
-                            }
-                        },
-                        KeyCalibState::Holding(first_seen) => {
-                            if pressed {
-                                if unlikely(first_seen.elapsed() >= hold_duration) {
-                                    // Hold duration satisfied; accept this key.
-                                    *key_state = KeyCalibState::Accepted;
-                                    calibrated_count = calibrated_count.saturating_add(1);
-
-                                    if let Some(Some(led_idx)) =
-                                        MATRIX_TO_LED.get(key_row).and_then(|led_row| led_row.get(col)).copied()
-                                    {
-                                        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibKeyDone(led_idx)).ok();
-                                    }
-
-                                    let pct = u8::try_from(
-                                        calibrated_count.saturating_mul(100).checked_div(total_keys).unwrap_or(0),
-                                    )
-                                    .unwrap_or(100)
-                                    .min(100);
-
-                                    if pct != last_pct {
-                                        last_pct = pct;
-                                        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibProgress(pct)).ok();
-                                    }
+                        match *key_state {
+                            KeyCalibState::Waiting => {
+                                if pressed {
+                                    // Start hold timer on first threshold crossing.
+                                    *key_state = KeyCalibState::Holding(Instant::now());
                                 }
-                                // else: still within hold window; keep waiting.
-                            } else {
-                                // Released before hold duration; reset so the
-                                // user must press it all the way down again.
-                                *key_state = KeyCalibState::Waiting;
-                            }
-                        },
-                        KeyCalibState::Accepted => {},
+                            },
+                            KeyCalibState::Holding(first_seen) => {
+                                if pressed {
+                                    if unlikely(first_seen.elapsed() >= hold_duration) {
+                                        // Hold duration satisfied; accept this key.
+                                        *key_state = KeyCalibState::Accepted;
+                                        calibrated_count = calibrated_count.saturating_add(1);
+
+                                        if let Some(led_row) = MATRIX_TO_LED.get(key_row)
+                                            && let Some(&Some(led_idx)) = led_row.get(col)
+                                        {
+                                            BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibKeyDone(led_idx)).ok();
+                                        }
+
+                                        let pct = u8::try_from(
+                                            calibrated_count.saturating_mul(100).checked_div(total_keys).unwrap_or(0),
+                                        )
+                                        .unwrap_or(100)
+                                        .min(100);
+
+                                        if pct != last_pct {
+                                            last_pct = pct;
+                                            BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibProgress(pct)).ok();
+                                        }
+                                    }
+                                    // else: still within hold window; keep
+                                    // waiting.
+                                } else {
+                                    // Released before hold duration; reset so the
+                                    // user must press it all the way down again.
+                                    *key_state = KeyCalibState::Waiting;
+                                }
+                            },
+                            KeyCalibState::Accepted => {},
+                        }
                     }
-                }
+                } // end if let Some(valid) – Phase A
                 cols.advance();
             }
         }
@@ -249,83 +309,17 @@ where
             for col in 0..COL {
                 Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
-                let Some(valid) = VALID_ROWS_BY_COL.get(col) else {
-                    cols.advance();
-                    continue;
-                };
-                for i in 0..valid.count {
-                    let Some(key) = valid.keys.get(i) else { continue };
-                    let raw = buf.get(usize::from(key.buf_row)).copied().unwrap_or(0);
-                    update_min(usize::from(key.key_row), col, raw);
+                if let Some(valid) = VALID_ROWS_BY_COL.get(col) {
+                    for i in 0..valid.count {
+                        let Some(key) = valid.keys.get(i) else { continue };
+                        let raw = buf.get(usize::from(key.buf_row)).copied().unwrap_or(0);
+                        update_min(usize::from(key.key_row), col, raw);
+                    }
                 }
                 cols.advance();
             }
         }
 
         min_raw
-    }
-
-    /// Run the guided first-boot two-phase calibration, persist the result to
-    /// EEPROM, and apply it to `keys`.
-    ///
-    /// Backlight signals during the process:
-    /// - **Amber** - zero-travel pass, all keys must be released.
-    /// - **Blue → green per key** - full-travel press window.
-    /// - **Green blink ×3** - all keys accepted; keys may be released.
-    /// - **Green for 2 s** - calibration stored successfully.
-    /// - **Amber** - EEPROM write-back verification failed; keyboard will
-    ///   re-calibrate on the next boot.
-    ///
-    /// Keys not pressed during the full-travel window fall back to
-    /// `zero − DEFAULT_FULL_RANGE` so the keyboard remains functional.
-    pub(super) async fn run_first_boot_calib(
-        cols: &mut Hc164Cols<'_>,
-        seq: &mut ConfiguredSequence<'_, adc::Adc>,
-        buf: &mut [u16; ROW],
-        cfg: HallCfg,
-        eeprom: &mut Ft24c64<'_, IM>,
-        crc: &mut Crc<'_>,
-        keys: &mut [[KeyEntry; ROW]; COL],
-        eeprom_buf: &mut [u8; CALIB_BUF_LEN],
-    ) {
-        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Zero)).ok();
-        let zero_raw = Self::calibrate_zero_raw(cols, seq, buf, cfg).await;
-
-        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Full)).ok();
-        let full_raw = Self::sample_full_raw(cols, seq, buf, cfg, &zero_raw).await;
-
-        // Compute entry_full for every key from the measured zero and the
-        // minimum ADC seen during the full-travel press window.
-        for (col, key_col) in keys.iter_mut().enumerate() {
-            for (row, key) in key_col.iter_mut().enumerate() {
-                let zero = zero_raw.get(row).and_then(|r| r.get(col)).copied().unwrap_or(REF_ZERO_TRAVEL);
-                let seen_min = full_raw.get(row).and_then(|r| r.get(col)).copied().unwrap_or(u16::MAX);
-                key.entry_full = if zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
-                    seen_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE))
-                } else {
-                    zero.saturating_sub(DEFAULT_FULL_RANGE).max(VALID_RAW_MIN)
-                };
-            }
-        }
-
-        Self::apply_calib(keys, &zero_raw);
-
-        calib_store::serialize(keys, eeprom_buf, crc);
-
-        // Verify by reading back into the same buffer and re-deserializing.
-        // Reusing the buffer avoids a second large stack allocation.
-        let verified = eeprom.erase().await.is_ok()
-            && eeprom.write(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
-            && eeprom.read(EEPROM_BASE_ADDR, eeprom_buf).await.is_ok()
-            && try_deserialize::<ROW, COL>(eeprom_buf, keys, crc);
-
-        if !verified {
-            // Signal amber so the user knows calibration will repeat on the
-            // next boot.
-            BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Zero)).ok();
-            return;
-        }
-
-        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Done)).ok();
     }
 }

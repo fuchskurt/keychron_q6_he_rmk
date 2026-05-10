@@ -54,14 +54,12 @@ pub(crate) const SENSOR_BY_COL: [[bool; ROW]; COL] = {
     while col < COL {
         let mut row = 0;
         while row < ROW {
-            if let Some(sensor_row) = SENSOR_POSITIONS.get(row) {
-                if let Some(&val) = sensor_row.get(col) {
-                    if let Some(out_row) = out.get_mut(col) {
-                        if let Some(cell) = out_row.get_mut(row) {
-                            *cell = val;
-                        }
-                    }
-                }
+            if let Some(sensor_row) = SENSOR_POSITIONS.get(row)
+                && let Some(&val) = sensor_row.get(col)
+                && let Some(out_row) = out.get_mut(col)
+                && let Some(cell) = out_row.get_mut(row)
+            {
+                *cell = val;
             }
             row = row.saturating_add(1);
         }
@@ -104,18 +102,20 @@ pub static VALID_ROWS_BY_COL: [ColValidKeys; COL] = {
         let mut count = 0_usize;
         let mut row = 0_usize;
         while row < ROW {
-            let has_sensor = if let Some(col_sensors) = SENSOR_BY_COL.get(col) {
-                if let Some(&val) = col_sensors.get(row) { val } else { false }
+            let has_sensor = if let Some(col_sensors) = SENSOR_BY_COL.get(col)
+                && let Some(&val) = col_sensors.get(row)
+            {
+                val
             } else {
                 false
             };
 
             if has_sensor {
-                if let Some(col_entry) = result.get_mut(col) {
-                    if let Some(slot) = col_entry.keys.get_mut(count) {
-                        let row_u8 = u8::try_from(row).unwrap_or(u8::MAX);
-                        *slot = ValidKey { buf_row: row_u8, key_row: row_u8 };
-                    }
+                if let Some(col_entry) = result.get_mut(col)
+                    && let Some(slot) = col_entry.keys.get_mut(count)
+                {
+                    let row_u8 = u8::try_from(row).unwrap_or(u8::MAX);
+                    *slot = ValidKey { buf_row: row_u8, key_row: row_u8 };
                 }
                 count = count.saturating_add(1);
             }
@@ -144,6 +144,9 @@ pub struct ValidKey {
     pub key_row: u8,
 }
 
+/// Return the default encoder action map for each layer.
+pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAYER] { [ENCODER_VOLUME, ENCODER_VOLUME] }
+
 /// Return the default keymap for all layers.
 pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
     [
@@ -154,11 +157,12 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
     ]
 }
 
-/// Return the default encoder action map for each layer.
-pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAYER] { [ENCODER_VOLUME, ENCODER_VOLUME] }
-
 /// Compile-time guard: [`LED_LAYOUT`] must fit within the 128-bit bitset.
 const _: () = assert!(LED_LAYOUT.len() <= 128, "LED_LAYOUT exceeds the 128-LED capacity of the calib_leds_done bitset");
+
+/// Compile-time guard: COL must fit in a u8 so the scan loop can emit
+/// `KeyboardEvent::key(row, col_as_u8, pressed)` without loss.
+const _: () = assert!(COL <= usize::from(u8::MAX), "COL exceeds u8::MAX; scan loop col cast will truncate");
 
 /// Compile-time guard: [`MATRIX_TO_LED`] indices must be valid.
 const _: () = {

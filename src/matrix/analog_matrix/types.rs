@@ -98,11 +98,16 @@ pub(crate) const CALIB_ZERO_TOLERANCE: u16 = 500;
 /// Default full-range calibration delta used when no better value is available.
 pub(crate) const DEFAULT_FULL_RANGE: u16 = 900;
 
+/// Precomputed numerator for the Q16.16 `inv_scale` field.
+pub(crate) const FULL_TRAVEL_SCALED: u32 = u32::from(FULL_TRAVEL_UNIT).saturating_mul(INV_SCALE_ONE);
+
 /// Expected travel distance in physical units, represents 4.0 mm.
 pub(crate) const FULL_TRAVEL_UNIT: u8 = 40;
 
-/// Precomputed numerator for the Q16.16 `inv_scale` field.
-pub(crate) const FULL_TRAVEL_SCALED: u32 = u32::from(FULL_TRAVEL_UNIT).saturating_mul(INV_SCALE_ONE);
+/// Number of bits in the Q16.16 representation of [`KeyEntry::inv_scale`].
+pub(crate) const INV_SCALE_FRAC_BITS: u32 = 16;
+/// The value of `1.0` in the Q16.16 format used by [`KeyEntry::inv_scale`].
+pub(crate) const INV_SCALE_ONE: u32 = 1_u32.checked_shl(INV_SCALE_FRAC_BITS).expect("INV_SCALE_FRAC_BITS < u32::BITS");
 
 /// Minimum ADC delta (zero − full) required to treat a full-travel reading as
 /// usable. Guards only against completely flat or absent sensor readings;
@@ -119,10 +124,6 @@ pub(crate) const VALID_RAW_MAX: u16 = 3500;
 /// Minimum acceptable raw ADC value.
 pub(crate) const VALID_RAW_MIN: u16 = 1200;
 
-/// Number of bits in the Q16.16 representation of [`KeyEntry::inv_scale`].
-pub(crate) const INV_SCALE_FRAC_BITS: u32 = 16;
-/// The value of `1.0` in the Q16.16 format used by [`KeyEntry::inv_scale`].
-pub(crate) const INV_SCALE_ONE: u32 = 1_u32.checked_shl(INV_SCALE_FRAC_BITS).expect("INV_SCALE_FRAC_BITS < u32::BITS");
 /// ADC counts subtracted from the averaged zero-travel reading before storing
 /// it as the calibration zero point.
 ///
@@ -143,10 +144,15 @@ pub(crate) type AdcSampleTime<ADC> = <<ADC as BasicInstance>::Regs as BasicAdcRe
 /// release. A re-press that occurs during the releasing phase resets to `Idle`
 /// without scoring; an insufficient lift from full travel stays in `Pressing`
 /// until the key rises far enough to enter `Releasing`.
-#[derive(Clone, Copy, PartialEq, Eq)]
+///
+/// `repr(u8)` pins the discriminant to one byte, matching the role of this
+/// field inside the `repr(C)` [`KeyEntry`] struct.
+#[repr(u8)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum AutoCalibPhase {
     /// Waiting for the key to be pressed past
     /// [`AUTO_CALIB_FULL_TRAVEL_THRESHOLD`].
+    #[default]
     Idle,
     /// Key is pressed; tracking the minimum ADC reading (deepest travel).
     Pressing,
@@ -155,43 +161,28 @@ pub(crate) enum AutoCalibPhase {
 }
 
 /// Configuration parameters for hall-effect key sensing.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct HallCfg {
     /// Minimum travel threshold in mm/10 units before a key is considered
     /// actuated.
-    pub actuation_pt:           u8,
+    pub actuation_pt:           u8           = 8,
     /// Number of full-matrix passes averaged together during zero-travel
     /// calibration.
-    pub calib_passes:           u32,
+    pub calib_passes:           u32          = 512,
     /// Time to wait after selecting a new column before reading ADC values,
     /// allowing the analog bus to settle.
-    pub col_settle_us:          Duration,
+    pub col_settle_us:          Duration     = Duration::from_micros(1),
     /// Duration of the full-travel sampling window during first-boot
     /// calibration.
-    pub full_calib_duration:    Duration,
+    pub full_calib_duration:    Duration     = Duration::from_secs(360),
     /// Raw ADC delta below which readings are treated as noise and discarded.
-    pub noise_gate:             u16,
+    pub noise_gate:             u16          = 10,
     /// Minimum upward travel from the trough required to register a new press,
     /// in mm/10 units (e.g. 1 = 0.1 mm).
-    pub rt_sensitivity_press:   u8,
+    pub rt_sensitivity_press:   u8           = 3,
     /// Minimum downward travel from the peak required to register a release,
     /// in mm/10 units (e.g. 1 = 0.1 mm).
-    pub rt_sensitivity_release: u8,
-}
-
-impl Default for HallCfg {
-    /// Provide default hall configuration values.
-    fn default() -> Self {
-        Self {
-            actuation_pt:           8,
-            calib_passes:           512,
-            col_settle_us:          Duration::from_micros(1),
-            full_calib_duration:    Duration::from_secs(360),
-            noise_gate:             10,
-            rt_sensitivity_press:   3,
-            rt_sensitivity_release: 3,
-        }
-    }
+    pub rt_sensitivity_release: u8           = 3,
 }
 
 /// Hold-detection state for a single key during the full-travel calibration
@@ -221,17 +212,23 @@ pub(crate) enum KeyCalibState {
 /// `inv_scale`, `travel`, `extremum`, `pressed`, `calib_used`).  A single
 /// 64-byte cache-line load therefore services the entire common path.
 ///
+/// `repr(C)` preserves declaration order, guaranteeing the documented byte
+/// offsets.  Without it the compiler is free to reorder fields for alignment,
+/// which could scatter the hot fields across multiple cache lines.
+///
 /// The matrix stores entries column-major as `[[KeyEntry; ROW]; COL]` so all
 /// row entries for one HC164 column are contiguous; a column scan needs at
 /// most three cache lines for all six keys rather than six scattered loads.
 ///
 /// Initialise via [`Default`]; call [`KeyEntry::apply_zero`] with the measured
 /// resting ADC after loading EEPROM or completing first-boot calibration.
+#[repr(C)]
+#[derive(Default)]
 pub(crate) struct KeyEntry {
     // ── hot: read/written on every noise-gated scan pass ─────────────────
     /// Raw ADC from the previous scan cycle (noise gate filter).
     /// `u16::MAX` on first boot so the first real reading always passes.
-    pub last_raw:      u16,
+    pub last_raw:      u16 = u16::MAX,
     /// LUT value at zero travel, precomputed for fast travel arithmetic.
     pub lut_zero:      u16,
     /// Q16.16 reciprocal of the calibrated travel range.
@@ -240,7 +237,7 @@ pub(crate) struct KeyEntry {
     pub travel:        u8,
     /// Local extremum for rapid-trigger (peak while pressed, trough while
     /// released). Reset to `new_travel` on every press↔release transition.
-    pub extremum:      u8,
+    pub extremum:      u8 = u8::MAX,
     /// Whether the key is currently considered pressed.
     pub pressed:       bool,
     /// Whether this matrix position has a valid hall-effect sensor.
@@ -250,7 +247,7 @@ pub(crate) struct KeyEntry {
     pub ac_zero_cand:  u16,
     /// Candidate full-travel ADC minimum tracked during the pressing phase.
     /// Initialised to `u16::MAX` so the first genuine press overwrites it.
-    pub ac_full_cand:  u16,
+    pub ac_full_cand:  u16 = u16::MAX,
     /// Current phase of the auto-calibration state machine.
     pub ac_phase:      AutoCalibPhase,
     /// Confidence counter; incremented per scored cycle, reset after an update.
@@ -258,31 +255,28 @@ pub(crate) struct KeyEntry {
     // ── calibration anchors: touched only on calibration updates ─────────
     /// Raw ADC at zero travel; stored for drift detection in
     /// [`KeyEntry::update_calib_if_drifted`].
-    pub calib_zero:    u16,
+    pub calib_zero:    u16 = REF_ZERO_TRAVEL,
     /// Persistent full-travel ADC reading loaded from / stored to EEPROM.
     /// Combined with a freshly measured zero reading on each boot to derive
     /// the hot-path fields via [`KeyEntry::apply_zero`].
-    pub entry_full:    u16,
+    pub entry_full:    u16 = REF_ZERO_TRAVEL.saturating_sub(DEFAULT_FULL_RANGE),
 }
 
-impl KeyEntry {
-    /// Look up the precomputed LUT value for ADC reading `raw`.
-    ///
-    /// Inputs outside [`VALID_RAW_MIN`]..=[`VALID_RAW_MAX`] cannot occur on
-    /// the hot path because `travel_from` validates the range first. If an
-    /// out-of-range value is passed anyway, the saturating subtract clamps to
-    /// index 0 and `.get` clamps the upper end, returning a value at the LUT
-    /// edge instead of panicking.
-    #[inline]
-    pub(crate) fn get_lut_val(raw: u16) -> u16 {
-        let idx = usize::from(raw.saturating_sub(VALID_RAW_MIN));
-        TRAVEL_LUT.get(idx).copied().unwrap_or_else(|| {
-            cold_path();
-            // Only reached for raw > VALID_RAW_MAX; clamp to the edge entry.
-            TRAVEL_LUT.last().copied().unwrap_or(0)
-        })
-    }
+/// Compile-time verification that the `repr(C)` field order produces the
+/// documented hot-field layout.  Breaks the build rather than silently
+/// degrading cache behaviour if a field is added or reordered.
+const _: () = {
+    use core::mem::offset_of;
+    assert!(offset_of!(KeyEntry, last_raw) == 0);
+    assert!(offset_of!(KeyEntry, lut_zero) == 2);
+    assert!(offset_of!(KeyEntry, inv_scale) == 4);
+    assert!(offset_of!(KeyEntry, travel) == 8);
+    assert!(offset_of!(KeyEntry, extremum) == 9);
+    assert!(offset_of!(KeyEntry, pressed) == 10);
+    assert!(offset_of!(KeyEntry, calib_used) == 11);
+};
 
+impl KeyEntry {
     /// Recompute the hot-path calibration fields from `zero` and `full` ADC
     /// readings.
     ///
@@ -309,22 +303,35 @@ impl KeyEntry {
         self.apply_calib(zero, full);
     }
 
-    /// Update calibration if `new_zero` differs meaningfully from the current
-    /// zero-travel value, avoiding unnecessary recalculation due to noise.
+    /// Look up the precomputed LUT value for ADC reading `raw`.
     ///
-    /// Prevents small fluctuations from repeatedly rewriting the derived
-    /// constants when the resting position shifts only within normal drift
-    /// bounds.
-    pub(crate) fn update_calib_if_drifted(&mut self, new_zero: u16, new_full: u16) {
-        if self.calib_zero.abs_diff(new_zero) > AUTO_CALIB_ZERO_UPDATE_THRESHOLD {
-            self.apply_calib(new_zero, new_full);
-        }
+    /// Inputs outside [`VALID_RAW_MIN`]..=[`VALID_RAW_MAX`] cannot occur on
+    /// the hot path because `travel_from` validates the range first. If an
+    /// out-of-range value is passed anyway, the saturating subtract clamps to
+    /// index 0 and `.get` clamps the upper end, returning a value at the LUT
+    /// edge instead of panicking.
+    ///
+    /// # Safety
+    ///
+    /// `dsp` is globally enabled via `target-cpu=cortex-m4`; the compiler uses
+    /// DSP instructions wherever profitable without a per-function annotation.
+    /// `#[inline(always)]` eliminates call overhead at the two hot-path sites.
+    #[inline(always)]
+    #[optimize(speed)]
+    pub(crate) fn get_lut_val(raw: u16) -> u16 {
+        let idx = usize::from(raw.saturating_sub(VALID_RAW_MIN));
+        TRAVEL_LUT.get(idx).copied().unwrap_or_else(|| {
+            cold_path();
+            // Only reached for raw > VALID_RAW_MAX; clamp to the edge entry.
+            TRAVEL_LUT.last().copied().unwrap_or(0)
+        })
     }
 
     /// Convert a raw ADC reading into a travel value.
     ///
     /// Returns `None` if the position is uncalibrated or `inv_scale == 0`.
     #[inline]
+    #[optimize(speed)]
     pub(crate) fn travel_from(&self, raw: u16) -> Option<u8> {
         if unlikely(!self.calib_used || self.inv_scale == 0) {
             cold_path();
@@ -336,24 +343,16 @@ impl KeyEntry {
         let travel: u32 = scaled.checked_shr(INV_SCALE_FRAC_BITS).unwrap_or(0).min(u32::from(FULL_TRAVEL_UNIT));
         Some(u8::try_from(travel).unwrap_or(FULL_TRAVEL_UNIT))
     }
-}
 
-impl Default for KeyEntry {
-    fn default() -> Self {
-        Self {
-            last_raw:      u16::MAX,
-            lut_zero:      0,
-            inv_scale:     0,
-            travel:        0,
-            extremum:      u8::MAX,
-            pressed:       false,
-            calib_used:    false,
-            ac_zero_cand:  0,
-            ac_full_cand:  u16::MAX,
-            ac_phase:      AutoCalibPhase::Idle,
-            ac_confidence: 0,
-            calib_zero:    REF_ZERO_TRAVEL,
-            entry_full:    REF_ZERO_TRAVEL.saturating_sub(DEFAULT_FULL_RANGE),
+    /// Update calibration if `new_zero` differs meaningfully from the current
+    /// zero-travel value, avoiding unnecessary recalculation due to noise.
+    ///
+    /// Prevents small fluctuations from repeatedly rewriting the derived
+    /// constants when the resting position shifts only within normal drift
+    /// bounds.
+    pub(crate) fn update_calib_if_drifted(&mut self, new_zero: u16, new_full: u16) {
+        if self.calib_zero.abs_diff(new_zero) > AUTO_CALIB_ZERO_UPDATE_THRESHOLD {
+            self.apply_calib(new_zero, new_full);
         }
     }
 }

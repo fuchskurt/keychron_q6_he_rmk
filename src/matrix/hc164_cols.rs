@@ -11,17 +11,17 @@ pub struct Hc164Cols<'peripherals> {
 }
 
 impl<'peripherals> Hc164Cols<'peripherals> {
-    /// Create a new column selector for the HC164.
-    pub const fn new(ds: Output<'peripherals>, cp: Output<'peripherals>, mr: Output<'peripherals>) -> Self {
-        Self { cp, ds, mr }
-    }
-
     /// Advance the walking-one to the next column.
     /// Call this for every column after the first.
     #[inline]
     pub fn advance(&mut self) {
         self.cp.set_high();
         self.cp.set_low();
+    }
+
+    /// Create a new column selector for the HC164.
+    pub const fn new(ds: Output<'peripherals>, cp: Output<'peripherals>, mr: Output<'peripherals>) -> Self {
+        Self { cp, ds, mr }
     }
 
     /// Reset the register and clock in the walking-one at position 0.

@@ -17,11 +17,7 @@ const ENTRY_LEN: usize = size_of::<u16>();
 const HEADER_LEN: usize = size_of::<u32>().saturating_add(size_of::<u8>());
 /// Format version. Increment on any incompatible layout change to force a
 /// first-boot re-calibration when old EEPROM data is found.
-///
-/// Version history:
-///   1 – row-major entry order (`[[KeyEntry; COL]; ROW]` storage)
-///   2 – column-major entry order (`[[KeyEntry; ROW]; COL]` storage)
-const VERSION: u8 = 2;
+const VERSION: u8 = 1;
 /// Magic number identifying a valid Q6 HE calibration block.
 const MAGIC: u32 = 0x5136_4845;
 

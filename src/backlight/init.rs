@@ -153,14 +153,14 @@ async fn fill_all_leds(driver: &mut BacklightDriver, color: (u8, u8, u8), bright
 
 /// Full backlight state, kept in one place so any path can do a consistent
 /// redraw without losing information.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct BacklightState {
     /// Whether Caps Lock is currently active.
     caps_lock:       bool,
     /// Whether Num Lock is currently active.
     num_lock:        bool,
     /// Global brightness percentage (0–100); reduced under thermal throttle.
-    brightness:      u8,
+    brightness:      u8 = 100,
     /// Whether the USB host is currently connected and enumerated.
     ///
     /// Tracked across [`CONNECTION_POLL`] ticks to detect connect and
@@ -189,20 +189,6 @@ struct BacklightState {
     /// Cleared to zero alongside [`BacklightState::calib_leds_done`] on
     /// calibration completion.
     calib_pct:       u8,
-}
-
-impl BacklightState {
-    const fn new() -> Self {
-        Self {
-            brightness:      100,
-            calib_leds_done: 0,
-            calib_pct:       0,
-            caps_lock:       false,
-            host_connected:  false,
-            in_calib:        false,
-            num_lock:        false,
-        }
-    }
 }
 
 /// Writes every LED to hardware according to `state`.
@@ -249,6 +235,23 @@ async fn render_calib(driver: &mut BacklightDriver, state: BacklightState) -> Re
     driver.flush().await
 }
 
+/// Stage both indicator LEDs with the given `brightness` without flushing.
+///
+/// Caps Lock: red when active, white when inactive.
+/// Num Lock: white when active, off when inactive.
+///
+/// Separated from the flush so callers in the brightness-ramp loop can batch
+/// per-step indicator staging with the background colour before a single flush.
+fn stage_indicator_leds(driver: &mut BacklightDriver, state: BacklightState, brightness: u8) {
+    let caps_color = if state.caps_lock { INDICATOR_RED } else { INDICATOR_WHITE };
+    let (r, g, b) = correct_color(caps_color, brightness);
+    driver.stage_led(CAPS_LOCK_LED_INDEX, r, g, b);
+
+    let num_color = if state.num_lock { INDICATOR_WHITE } else { INDICATOR_OFF };
+    let (r, g, b) = correct_color(num_color, brightness);
+    driver.stage_led(NUM_LOCK_LED_INDEX, r, g, b);
+}
+
 /// Writes only the two indicator LEDs according to `state`.
 ///
 /// Used when only indicator state has changed and the background is already
@@ -258,14 +261,7 @@ async fn render_calib(driver: &mut BacklightDriver, state: BacklightState) -> Re
 ///
 /// Returns `Err` if any bus transaction fails. See [`BacklightDriver::flush`].
 async fn render_indicators(driver: &mut BacklightDriver, state: BacklightState) -> Result<(), BusError> {
-    let caps_color = if state.caps_lock { INDICATOR_RED } else { INDICATOR_WHITE };
-    let (red, green, blue) = correct_color(caps_color, INDICATOR_BRIGHTNESS);
-    driver.stage_led(CAPS_LOCK_LED_INDEX, red, green, blue);
-
-    let num_color = if state.num_lock { INDICATOR_WHITE } else { INDICATOR_OFF };
-    let (red, green, blue) = correct_color(num_color, INDICATOR_BRIGHTNESS);
-    driver.stage_led(NUM_LOCK_LED_INDEX, red, green, blue);
-
+    stage_indicator_leds(driver, state, INDICATOR_BRIGHTNESS);
     driver.flush().await
 }
 
@@ -279,13 +275,12 @@ async fn render_indicators(driver: &mut BacklightDriver, state: BacklightState) 
 /// Returns `Err` if any bus transaction fails during the ramp.
 async fn brightness_ramp(
     driver: &mut BacklightDriver,
-    base_red: u8,
-    base_green: u8,
-    base_blue: u8,
+    base_color: (u8, u8, u8),
     target_brightness: u8,
     ramp_up: bool,
     state: BacklightState,
 ) -> Result<(), BusError> {
+    let (base_red, base_green, base_blue) = base_color;
     let target = u32::from(target_brightness.min(100));
     let steps = u32::from(SOFTSTART_STEPS.max(1));
     let delay_ms = u64::from(SOFTSTART_RAMP_MS.checked_div(steps).unwrap_or(0));
@@ -296,14 +291,7 @@ async fn brightness_ramp(
 
         let (red, green, blue) = correct(base_red, base_green, base_blue, percent);
         driver.stage_all_leds(red, green, blue);
-
-        let caps_color = if state.caps_lock { INDICATOR_RED } else { INDICATOR_WHITE };
-        let (r, g, b) = correct_color(caps_color, percent.min(INDICATOR_BRIGHTNESS));
-        driver.stage_led(CAPS_LOCK_LED_INDEX, r, g, b);
-
-        let num_color = if state.num_lock { INDICATOR_WHITE } else { INDICATOR_OFF };
-        let (r, g, b) = correct_color(num_color, percent.min(INDICATOR_BRIGHTNESS));
-        driver.stage_led(NUM_LOCK_LED_INDEX, r, g, b);
+        stage_indicator_leds(driver, state, percent.min(INDICATOR_BRIGHTNESS));
 
         if let Err(err) = driver.flush().await {
             return Err(err);
@@ -378,7 +366,7 @@ impl Runnable for BacklightRunner {
         let rx = BACKLIGHT_CH.receiver();
         let mut thermal_ticker = Ticker::every(THERMAL_POLL);
         let mut connection_ticker = Ticker::every(CONNECTION_POLL);
-        let mut state = BacklightState::new();
+        let mut state = BacklightState::default();
 
         loop {
             match select3(rx.receive(), thermal_ticker.next(), connection_ticker.next()).await {
@@ -474,12 +462,12 @@ impl Runnable for BacklightRunner {
                         state.host_connected = connected;
                         if connected {
                             let _ = self.driver.wake().await;
-                            let _ = brightness_ramp(&mut self.driver, 255, 255, 255, 100, true, state).await;
+                            let _ = brightness_ramp(&mut self.driver, INDICATOR_WHITE, 100, true, state).await;
                         } else {
                             // Host disconnected: turn off all LEDs until the next
                             // connect event restores the backlight.
-                            let _ =
-                                brightness_ramp(&mut self.driver, 255, 255, 255, state.brightness, false, state).await;
+                            let _ = brightness_ramp(&mut self.driver, INDICATOR_WHITE, state.brightness, false, state)
+                                .await;
                             let _ = self.driver.shutdown().await;
                         }
                     }

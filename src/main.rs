@@ -9,7 +9,8 @@
     const_result_trait_fn,
     impl_trait_in_assoc_type,
     optimize_attribute,
-    likely_unlikely
+    likely_unlikely,
+    default_field_values
 )]
 extern crate cortex_m as _;
 /// Backlight driver integration.
@@ -104,7 +105,7 @@ bind_interrupts!(struct Irqs {
 /// Entry point for the firmware.
 #[main]
 async fn main(spawner: Spawner) {
-    // Tasks run inline via join4; spawner is unused.
+    // Tasks run inline via run_all!; spawner is unused.
     let _: Spawner = spawner;
     // Initialize peripherals
     let mut peripheral = init({

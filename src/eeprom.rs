@@ -12,8 +12,12 @@ const DEVICE_ADDR: u8 = 0x51;
 const EEPROM_SIZE: usize = 8192;
 /// Page write size in bytes per the FT24C64 datasheet.
 const PAGE_SIZE: usize = 32;
-/// Number of successive I²C acknowledgement polls.
+/// Number of successive I²C acknowledgement polls during page writes.
 const READY_POLL_ATTEMPTS: u8 = 255;
+/// Number of successive I²C acknowledgement polls before a read, limited to a
+/// shorter budget to avoid stalling the keyboard for the full write-cycle
+/// window when the device is absent or malfunctioning.
+const READ_POLL_ATTEMPTS: u8 = 20;
 /// Delay between successive I²C acknowledgement polls.
 const READY_POLL_INTERVAL: Duration = Duration::from_micros(20);
 
@@ -64,7 +68,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// accommodating the power-on reset delay without requiring a fixed
     /// worst-case wait from the caller.
     pub async fn read(&mut self, addr: u16, buf: &mut [u8]) -> Result<(), Error> {
-        let ready = self.poll_until_ready(20).await;
+        let ready = self.poll_until_ready(READ_POLL_ATTEMPTS).await;
         if let Err(error) = ready {
             return Err(error);
         }

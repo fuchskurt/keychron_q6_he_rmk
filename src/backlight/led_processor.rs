@@ -4,8 +4,14 @@ use rmk::{
     macros::processor,
 };
 
+/// Capacity of [`BACKLIGHT_CH`].
+///
+/// Sized to absorb one message per variant type arriving in quick succession
+/// without blocking the matrix scanner.
+const BACKLIGHT_CH_CAPACITY: usize = 8;
+
 /// Channel used to send backlight indicator commands.
-pub static BACKLIGHT_CH: Channel<CriticalSectionRawMutex, BacklightCmd, 8> = Channel::new();
+pub static BACKLIGHT_CH: Channel<CriticalSectionRawMutex, BacklightCmd, BACKLIGHT_CH_CAPACITY> = Channel::new();
 
 /// Commands for lock indicator LEDs.
 #[derive(Copy, Clone)]

@@ -29,6 +29,9 @@ pub struct LayerToggle<'peripherals> {
 }
 
 impl<'peripherals> LayerToggle<'peripherals> {
+    /// Default debounce window in milliseconds.
+    const DEFAULT_DEBOUNCE_MS: u64 = 15;
+
     /// Emit an event if the level has changed.
     fn maybe_emit_for_level(&mut self, new_level: bool) -> Option<KeyboardEvent> {
         if self.last_level == Some(new_level) {
@@ -56,7 +59,7 @@ impl<'peripherals> LayerToggle<'peripherals> {
         high_pos: MatrixPos,
         low_pos: MatrixPos,
     ) -> Self {
-        Self::new(pin, high_pos, low_pos, Duration::from_millis(15))
+        Self::new(pin, high_pos, low_pos, Duration::from_millis(Self::DEFAULT_DEBOUNCE_MS))
     }
 
     /// Select the matrix position for the provided level.

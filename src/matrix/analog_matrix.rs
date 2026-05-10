@@ -138,21 +138,6 @@ where
     IM: MasterMode,
     AdcSampleTime<ADC>: Clone,
 {
-    /// Create a new matrix scanner.
-    ///
-    /// Calibration is deferred to [`Runnable::run`], which loads from EEPROM
-    /// on subsequent boots or runs a full first-boot calibration pass.
-    pub fn new(
-        adc_part: AdcPart<'peripherals, ADC, D, ROW>,
-        irq: IRQ,
-        cols: Hc164Cols<'peripherals>,
-        cfg: HallCfg,
-        eeprom: Ft24c64<'peripherals, IM>,
-        crc: Crc<'peripherals>,
-    ) -> Self {
-        Self { adc_part, cfg, cols, crc, eeprom, irq, keys: from_fn(|_| from_fn(|_| KeyEntry::default())) }
-    }
-
     /// Recompute [`KeyEntry::calib_used`] and the hot-path calibration fields
     /// for every key from the freshly measured zero-travel readings in
     /// `zero_raw`, using the full-travel value stored in each
@@ -168,6 +153,21 @@ where
                 }
             }
         }
+    }
+
+    /// Create a new matrix scanner.
+    ///
+    /// Calibration is deferred to [`Runnable::run`], which loads from EEPROM
+    /// on subsequent boots or runs a full first-boot calibration pass.
+    pub fn new(
+        adc_part: AdcPart<'peripherals, ADC, D, ROW>,
+        irq: IRQ,
+        cols: Hc164Cols<'peripherals>,
+        cfg: HallCfg,
+        eeprom: Ft24c64<'peripherals, IM>,
+        crc: Crc<'peripherals>,
+    ) -> Self {
+        Self { adc_part, cfg, cols, crc, eeprom, irq, keys: from_fn(|_| from_fn(|_| KeyEntry::default())) }
     }
 }
 

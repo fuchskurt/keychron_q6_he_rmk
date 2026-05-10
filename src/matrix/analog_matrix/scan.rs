@@ -56,14 +56,14 @@ fn auto_calib_update(entry: &mut KeyEntry, raw: u16) {
             if raw < entry.ac_full_cand {
                 // Key is pressing deeper; track the running minimum.
                 entry.ac_full_cand = raw;
-            } else if raw.saturating_sub(entry.ac_full_cand) >= AUTO_CALIB_RELEASE_THRESHOLD {
-                // Key has lifted enough above the minimum to count as releasing.
-                entry.ac_zero_cand = raw;
-                entry.ac_phase = AutoCalibPhase::Releasing;
             } else {
-                // Reading is between ac_full_cand and ac_full_cand +
-                // AUTO_CALIB_RELEASE_THRESHOLD: bottom-of-travel jitter or
-                // a partial early lift. Stay in Pressing until a decisive rise.
+                // Reading has risen above the tracked minimum; only advance
+                // to Releasing when the rise is decisive.  Bottom-of-travel
+                // jitter or a partial early lift stays in Pressing.
+                if raw.saturating_sub(entry.ac_full_cand) >= AUTO_CALIB_RELEASE_THRESHOLD {
+                    entry.ac_zero_cand = raw;
+                    entry.ac_phase = AutoCalibPhase::Releasing;
+                }
             }
         },
         AutoCalibPhase::Releasing => {
@@ -145,107 +145,100 @@ where
                 // Only valid sensor positions are stored in VALID_ROWS_BY_COL;
                 // columns with no sensors produce an empty list and are skipped
                 // entirely without touching the key-state machine.
-                let Some(valid) = VALID_ROWS_BY_COL.get(col) else {
-                    cols.advance();
-                    continue;
-                };
-
                 // Slice to exactly the populated entries (one check instead of
                 // one per key), and hoist keys[col] out of the inner loop.
-                let Some(valid_keys) = valid.keys.get(..valid.count) else {
-                    cols.advance();
-                    continue;
-                };
-                let Some(key_col) = keys.get_mut(col) else {
-                    cols.advance();
-                    continue;
-                };
+                if let Some(valid) = VALID_ROWS_BY_COL.get(col)
+                    && let Some(valid_keys) = valid.keys.get(..valid.count)
+                    && let Some(key_col) = keys.get_mut(col)
+                {
+                    for key in valid_keys {
+                        let buf_row = usize::from(key.buf_row);
+                        let key_row = usize::from(key.key_row);
 
-                for key in valid_keys {
-                    let buf_row = usize::from(key.buf_row);
-                    let key_row = usize::from(key.key_row);
+                        // Clamp raw ADC value to valid range to prevent out-of-bounds
+                        // LUT access and ensure valid calibration updates.
+                        let raw = buf.get(buf_row).copied().unwrap_or(0).clamp(VALID_RAW_MIN, VALID_RAW_MAX);
 
-                    // Clamp raw ADC value to valid range to prevent out-of-bounds
-                    // LUT access and ensure valid calibration updates.
-                    let raw = buf.get(buf_row).copied().unwrap_or(0).clamp(VALID_RAW_MIN, VALID_RAW_MAX);
+                        let Some(entry) = key_col.get_mut(key_row) else { continue };
 
-                    let Some(entry) = key_col.get_mut(key_row) else { continue };
+                        let last_raw = entry.last_raw;
 
-                    let last_raw = entry.last_raw;
-
-                    // Skip if the reading has not changed beyond the noise gate.
-                    if likely(last_raw.abs_diff(raw) < noise_gate) {
-                        continue;
-                    }
-
-                    // Record the raw value now so that repeated identical readings
-                    // are filtered by the noise gate even when travel_from later
-                    // returns None (uncalibrated or out-of-range position).
-                    entry.last_raw = raw;
-
-                    // Update the auto-calibrator with this reading before the
-                    // travel computation so any refined calibration is used immediately.
-                    auto_calib_update(entry, raw);
-
-                    let Some(new_travel) = entry.travel_from(raw) else { continue };
-
-                    let prev_travel = entry.travel;
-                    let was_pressed = entry.pressed;
-
-                    // After noise gate, travel often resolves to the same
-                    // quantized value; skip redundant RT logic.
-                    if likely(new_travel == prev_travel) {
-                        continue;
-                    }
-
-                    entry.travel = new_travel;
-
-                    let below_act = new_travel < act_threshold;
-
-                    // Dynamic Rapid Trigger
-                    let now_pressed = if was_pressed {
-                        // Track the peak while held; release when travel drops at
-                        // least `sensitivity_release` below it. The actuation floor
-                        // is a hard lower bound that forces an immediate release.
-                        entry.extremum = entry.extremum.max(new_travel);
-                        if below_act {
-                            false
-                        } else {
-                            // Only compute when relevant.
-                            new_travel > entry.extremum.saturating_sub(sensitivity_release)
+                        // Skip if the reading has not changed beyond the noise gate.
+                        if likely(last_raw.abs_diff(raw) < noise_gate) {
+                            continue;
                         }
-                    } else {
-                        // Track the trough while released; re-press when travel
-                        // climbs at least `sensitivity_press` above it AND exceeds
-                        // the actuation floor. The trough is not required to have
-                        // dipped below the floor first, so a finger hovering
-                        // mid-travel after an RT-release can re-fire immediately.
-                        // When travel drops below the actuation floor the trough is
-                        // additionally clamped so the key re-presses cleanly at
-                        // `act_threshold` without requiring an extra delta above it.
-                        entry.extremum = entry.extremum.min(new_travel);
-                        if below_act {
-                            entry.extremum = entry.extremum.min(trough_floor);
-                            false
-                        } else {
-                            // Only compute when above floor.
-                            new_travel >= entry.extremum.saturating_add(sensitivity_press)
-                        }
-                    };
 
-                    if unlikely(now_pressed != entry.pressed) {
-                        // Reset extremum so the next direction starts fresh from
-                        // the transition point.
-                        entry.extremum = new_travel;
-                        entry.pressed = now_pressed;
-                        publish_event_async(KeyboardEvent::key(
-                            key.key_row,
-                            u8::try_from(col).unwrap_or_default(),
-                            now_pressed,
-                        ))
-                        .await;
+                        // Record the raw value now so that repeated identical readings
+                        // are filtered by the noise gate even when travel_from later
+                        // returns None (uncalibrated or out-of-range position).
+                        entry.last_raw = raw;
+
+                        // Update the auto-calibrator with this reading before the
+                        // travel computation so any refined calibration is used immediately.
+                        auto_calib_update(entry, raw);
+
+                        let Some(new_travel) = entry.travel_from(raw) else { continue };
+
+                        let prev_travel = entry.travel;
+                        let was_pressed = entry.pressed;
+
+                        // After noise gate, travel often resolves to the same
+                        // quantized value; skip redundant RT logic.
+                        if likely(new_travel == prev_travel) {
+                            continue;
+                        }
+
+                        entry.travel = new_travel;
+
+                        let below_act = new_travel < act_threshold;
+
+                        // Dynamic Rapid Trigger
+                        let now_pressed = if was_pressed {
+                            // Track the peak while held; release when travel drops at
+                            // least `sensitivity_release` below it. The actuation floor
+                            // is a hard lower bound that forces an immediate release.
+                            entry.extremum = entry.extremum.max(new_travel);
+                            if below_act {
+                                false
+                            } else {
+                                // Only compute when relevant.
+                                new_travel > entry.extremum.saturating_sub(sensitivity_release)
+                            }
+                        } else {
+                            // Track the trough while released; re-press when travel
+                            // climbs at least `sensitivity_press` above it AND exceeds
+                            // the actuation floor. The trough is not required to have
+                            // dipped below the floor first, so a finger hovering
+                            // mid-travel after an RT-release can re-fire immediately.
+                            // When travel drops below the actuation floor the trough is
+                            // additionally clamped so the key re-presses cleanly at
+                            // `act_threshold` without requiring an extra delta above it.
+                            entry.extremum = entry.extremum.min(new_travel);
+                            if below_act {
+                                entry.extremum = entry.extremum.min(trough_floor);
+                                false
+                            } else {
+                                // Only compute when above floor.
+                                new_travel >= entry.extremum.saturating_add(sensitivity_press)
+                            }
+                        };
+
+                        if unlikely(now_pressed != entry.pressed) {
+                            // Reset extremum so the next direction starts fresh from
+                            // the transition point.
+                            entry.extremum = new_travel;
+                            entry.pressed = now_pressed;
+                            publish_event_async(KeyboardEvent::key(
+                                key.key_row,
+                                // COL ≤ 255 is enforced by a compile-time assert in layout.rs;
+                                // u8::MAX is used as sentinel so a failure is obviously wrong.
+                                u8::try_from(col).unwrap_or(u8::MAX),
+                                now_pressed,
+                            ))
+                            .await;
+                        }
                     }
-                }
+                } // end if let (valid / valid_keys / key_col)
                 cols.advance();
             }
         }
