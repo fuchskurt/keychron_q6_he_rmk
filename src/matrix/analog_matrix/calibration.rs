@@ -67,8 +67,8 @@ where
         let mut acc = [[0_u32; COL]; ROW];
         for _ in 0..cfg.calib_passes {
             cols.reset();
+            Timer::after(cfg.col_settle_us).await;
             for col in 0..COL {
-                Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
                 cols.advance();
                 for (acc_row, &raw) in acc.iter_mut().zip(buf.iter()) {
@@ -215,8 +215,8 @@ where
         // Phase A: sample until all real keys are accepted or the deadline expires.
         while Instant::now() < deadline && calibrated_count < total_keys {
             cols.reset();
+            Timer::after(cfg.col_settle_us).await;
             for col in 0..COL {
-                Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
                 cols.advance();
 
@@ -304,8 +304,8 @@ where
         let settle_deadline = Instant::now().saturating_add(CALIB_SETTLE_AFTER_ALL_DONE);
         while Instant::now() < settle_deadline {
             cols.reset();
+            Timer::after(cfg.col_settle_us).await;
             for col in 0..COL {
-                Timer::after(cfg.col_settle_us).await;
                 seq.read(buf).await;
                 cols.advance();
                 if let Some(valid) = VALID_ROWS_BY_COL.get(col) {

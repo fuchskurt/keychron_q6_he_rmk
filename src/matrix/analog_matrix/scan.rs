@@ -138,8 +138,8 @@ where
         let noise_gate = cfg.noise_gate;
         loop {
             cols.reset();
+            Timer::after(col_settle_us).await;
             for col in 0..COL {
-                Timer::after(col_settle_us).await;
                 seq.read(buf).await;
                 cols.advance();
 
