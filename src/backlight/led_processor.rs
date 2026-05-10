@@ -69,6 +69,6 @@ impl LedIndicatorProcessor {
         let caps = event.caps_lock();
         let num = event.num_lock();
 
-        BACKLIGHT_CH.sender().try_send(BacklightCmd::Indicators { caps, num }).ok();
+        BACKLIGHT_CH.sender().send(BacklightCmd::Indicators { caps, num }).await;
     }
 }

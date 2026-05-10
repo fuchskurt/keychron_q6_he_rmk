@@ -169,9 +169,6 @@ pub struct HallCfg {
     /// Number of full-matrix passes averaged together during zero-travel
     /// calibration.
     pub calib_passes:           u32          = 512,
-    /// Time to wait after selecting a new column before reading ADC values,
-    /// allowing the analog bus to settle.
-    pub col_settle_us:          Duration     = Duration::from_micros(1),
     /// Duration of the full-travel sampling window during first-boot
     /// calibration.
     pub full_calib_duration:    Duration     = Duration::from_secs(360),

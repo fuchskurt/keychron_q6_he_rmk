@@ -39,7 +39,8 @@ use embassy_stm32::{
     interrupt::typelevel::Binding,
     pac::adc,
 };
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Instant};
+use rmk::embassy_futures::yield_now;
 
 impl<'peripherals, ADC, D, IRQ, IM, const ROW: usize, const COL: usize>
     AnalogHallMatrix<'peripherals, ADC, D, IRQ, IM, ROW, COL>
@@ -67,8 +68,8 @@ where
         let mut acc = [[0_u32; COL]; ROW];
         for _ in 0..cfg.calib_passes {
             cols.reset();
-            Timer::after(cfg.col_settle_us).await;
             for col in 0..COL {
+                yield_now().await;
                 seq.read(buf).await;
                 cols.advance();
                 for (acc_row, &raw) in acc.iter_mut().zip(buf.iter()) {
@@ -115,10 +116,10 @@ where
         keys: &mut [[KeyEntry; ROW]; COL],
         eeprom_buf: &mut [u8; CALIB_BUF_LEN],
     ) {
-        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Zero)).ok();
+        BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Zero)).await;
         let zero_raw = Self::calibrate_zero_raw(cols, seq, buf, cfg).await;
 
-        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Full)).ok();
+        BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Full)).await;
         let full_raw = Self::sample_full_raw(cols, seq, buf, cfg, &zero_raw).await;
 
         // Compute entry_full for every key from the measured zero and the
@@ -149,11 +150,11 @@ where
         if !verified {
             // Signal amber so the user knows calibration will repeat on the
             // next boot.
-            BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Zero)).ok();
+            BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Zero)).await;
             return;
         }
 
-        BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::Done)).ok();
+        BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Done)).await;
     }
 
     /// Sample the matrix for `duration` (or until all real keys are accepted),
@@ -215,8 +216,8 @@ where
         // Phase A: sample until all real keys are accepted or the deadline expires.
         while Instant::now() < deadline && calibrated_count < total_keys {
             cols.reset();
-            Timer::after(cfg.col_settle_us).await;
             for col in 0..COL {
+                yield_now().await;
                 seq.read(buf).await;
                 cols.advance();
 
@@ -262,7 +263,7 @@ where
                                         if let Some(led_row) = MATRIX_TO_LED.get(key_row)
                                             && let Some(&Some(led_idx)) = led_row.get(col)
                                         {
-                                            BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibKeyDone(led_idx)).ok();
+                                            BACKLIGHT_CH.sender().send(BacklightCmd::CalibKeyDone(led_idx)).await;
                                         }
 
                                         let pct = u8::try_from(
@@ -273,7 +274,7 @@ where
 
                                         if pct != last_pct {
                                             last_pct = pct;
-                                            BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibProgress(pct)).ok();
+                                            BACKLIGHT_CH.sender().send(BacklightCmd::CalibProgress(pct)).await;
                                         }
                                     }
                                 } else {
@@ -293,7 +294,7 @@ where
         // backlight to blink green so the user knows to release their keys.
         // Best-effort: missing this signal only skips the animation.
         if calibrated_count >= total_keys {
-            BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibPhase(CalibPhase::AllAccepted)).ok();
+            BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::AllAccepted)).await;
         }
 
         // Phase B: continue sampling for CALIB_SETTLE_AFTER_ALL_DONE regardless
@@ -304,8 +305,8 @@ where
         let settle_deadline = Instant::now().saturating_add(CALIB_SETTLE_AFTER_ALL_DONE);
         while Instant::now() < settle_deadline {
             cols.reset();
-            Timer::after(cfg.col_settle_us).await;
             for col in 0..COL {
+                yield_now().await;
                 seq.read(buf).await;
                 cols.advance();
                 if let Some(valid) = VALID_ROWS_BY_COL.get(col) {

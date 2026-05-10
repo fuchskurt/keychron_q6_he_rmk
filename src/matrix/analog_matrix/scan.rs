@@ -26,8 +26,10 @@ use embassy_stm32::{
     interrupt::typelevel::Binding,
     pac::adc,
 };
-use embassy_time::Timer;
-use rmk::event::{KeyboardEvent, publish_event_async};
+use rmk::{
+    embassy_futures::yield_now,
+    event::{KeyboardEvent, publish_event_async},
+};
 
 /// Update the auto-calibration state machine for a single key.
 ///
@@ -134,11 +136,10 @@ where
         let sensitivity_press = cfg.rt_sensitivity_press.max(1);
         let sensitivity_release = cfg.rt_sensitivity_release.max(1);
         let trough_floor = act_threshold.saturating_sub(sensitivity_press);
-        let col_settle_us = cfg.col_settle_us;
         let noise_gate = cfg.noise_gate;
         loop {
             cols.reset();
-            Timer::after(col_settle_us).await;
+            yield_now().await;
             for col in 0..COL {
                 seq.read(buf).await;
                 cols.advance();
