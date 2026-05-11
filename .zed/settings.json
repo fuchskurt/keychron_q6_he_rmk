@@ -7,6 +7,10 @@
     "TOML": {
       "format_on_save": "on",
     },
+    "Markdown": {
+      "format_on_save": "on",
+      "formatter": "prettier",
+    },
   },
   "lsp": {
     "rust-analyzer": {
@@ -20,7 +24,7 @@
           "extraArgs": ["+nightly"],
         },
         "cargo": {
-          "features": ["ansi_layout", "bench", "defmt"],
+          "features": ["ansi_layout"],
         },
         "inlayHints": {
           "maxLength": null,

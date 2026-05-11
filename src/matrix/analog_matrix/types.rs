@@ -165,18 +165,18 @@ pub(crate) enum AutoCalibPhase {
 pub struct HallCfg {
     /// Minimum travel threshold in mm/10 units before a key is considered
     /// actuated.
-    pub actuation_pt:           u8           = 8,
+    pub actuation_pt:           u8           = 10,
     /// Number of full-matrix passes averaged together during zero-travel
     /// calibration.
     pub calib_passes:           u32          = 512,
     /// Duration of the full-travel sampling window during first-boot
     /// calibration.
-    pub full_calib_duration:    Duration     = Duration::from_secs(360),
+    pub full_calib_duration:    Duration     = Duration::from_secs(180),
     /// Raw ADC delta below which readings are treated as noise and discarded.
     pub noise_gate:             u16          = 10,
     /// Minimum upward travel from the trough required to register a new press,
     /// in mm/10 units (e.g. 1 = 0.1 mm).
-    pub rt_sensitivity_press:   u8           = 3,
+    pub rt_sensitivity_press:   u8           = 5,
     /// Minimum downward travel from the peak required to register a release,
     /// in mm/10 units (e.g. 1 = 0.1 mm).
     pub rt_sensitivity_release: u8           = 3,
@@ -222,7 +222,6 @@ pub(crate) enum KeyCalibState {
 #[repr(C)]
 #[derive(Default)]
 pub(crate) struct KeyEntry {
-    // ── hot: read/written on every noise-gated scan pass ─────────────────
     /// Raw ADC from the previous scan cycle (noise gate filter).
     /// `u16::MAX` on first boot so the first real reading always passes.
     pub last_raw:      u16 = u16::MAX,
@@ -239,7 +238,6 @@ pub(crate) struct KeyEntry {
     pub pressed:       bool,
     /// Whether this matrix position has a valid hall-effect sensor.
     pub calib_used:    bool,
-    // ── auto-calibration: updated per scored press/release cycle ──────────
     /// Candidate zero-travel ADC peak tracked during the releasing phase.
     pub ac_zero_cand:  u16,
     /// Candidate full-travel ADC minimum tracked during the pressing phase.
@@ -249,7 +247,6 @@ pub(crate) struct KeyEntry {
     pub ac_phase:      AutoCalibPhase,
     /// Confidence counter; incremented per scored cycle, reset after an update.
     pub ac_confidence: u8,
-    // ── calibration anchors: touched only on calibration updates ─────────
     /// Raw ADC at zero travel; stored for drift detection in
     /// [`KeyEntry::update_calib_if_drifted`].
     pub calib_zero:    u16 = REF_ZERO_TRAVEL,
