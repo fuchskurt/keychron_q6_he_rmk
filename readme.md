@@ -124,7 +124,7 @@ reflashing.
 
 Benchmarked on STM32F401RC at 84 MHz, 21 columns × 6 rows, measured with the DWT cycle counter
 (`cargo make bench`, `firmware-bench` profile: `lto = "fat"`, `codegen-units = 1` applied to all crates). Cycle counts cover the synchronous per-column processing
-window, noise gate, auto-calibration, travel computation, and rapid-trigger logic. ADC DMA
+window: noise gate, auto-calibration, travel computation, and rapid-trigger logic. ADC DMA
 (~9.8 µs/col) and `yield_now` (~1 µs/col) are outside the measurement window but included in
 the end-to-end figures.
 

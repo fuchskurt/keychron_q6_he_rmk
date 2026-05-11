@@ -12,20 +12,29 @@ license = "MIT OR Apache-2.0"
 ansi_layout = []
 iso_layout = []
 jis_layout = []
-defmt = ["dep:defmt", "dep:defmt-rtt"]
+defmt = [
+    "dep:defmt",
+    "dep:defmt-rtt",
+    "embassy-time/defmt",
+    "embassy-stm32/defmt",
+    "embassy-sync/defmt",
+    "embassy-executor/defmt",
+    "embassy-embedded-hal/defmt",
+    "rmk/defmt",
+]
 adc_debug   = ["defmt"]
 bench = ["defmt"]
 
 [dependencies]
 cortex-m = { version = "0", features = ["critical-section-single-core", "inline-asm", "linker-plugin-lto"] }
 cortex-m-rt = { version = "0", features = ["device", "zero-init-ram"] }
-embassy-time = { features = ["tick-hz-1_000_000", "defmt"], git = "https://github.com/embassy-rs/embassy.git" }
-embassy-stm32 = { features = ["stm32f401rc", "memory-x", "time-driver-tim5", "time", "low-power", "exti", "unstable-pac", "rt", "defmt"], git = "https://github.com/embassy-rs/embassy.git" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy.git", features = ["defmt"] }
-embassy-executor = { features = ["platform-cortex-m", "executor-thread", "nightly", "defmt"], git = "https://github.com/embassy-rs/embassy.git" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git", features = ["defmt"] }
+embassy-time = { features = ["tick-hz-1_000_000"], git = "https://github.com/embassy-rs/embassy.git" }
+embassy-stm32 = { features = ["stm32f401rc", "memory-x", "time-driver-tim5", "time", "low-power", "exti", "unstable-pac", "rt"], git = "https://github.com/embassy-rs/embassy.git" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git"}
+embassy-executor = { features = ["platform-cortex-m", "executor-thread", "nightly"], git = "https://github.com/embassy-rs/embassy.git" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
 embedded-storage-async = "0"
-rmk = { default-features = false, features = ["async_matrix", "rmk_protocol", "bulk_transfer", "storage", "defmt"], git = "https://github.com/fuchskurt/rmk.git", branch = "protocol" }
+rmk = { default-features = false, features = ["async_matrix", "rmk_protocol", "bulk_transfer", "storage"], git = "https://github.com/fuchskurt/rmk.git", branch = "protocol" }
 static_cell = "2"
 snled27351-driver = { git = "https://github.com/fuchskurt/snled27351_driver.git", features = ["spi"] }
 embedded-hal-async = "1"
