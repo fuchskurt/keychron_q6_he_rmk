@@ -120,6 +120,51 @@ reflashing.
 
 ---
 
+## Scan loop performance
+
+Benchmarked on STM32F401RC at 84 MHz, 21 columns × 6 rows, measured with the DWT cycle counter
+(`cargo make bench`, `firmware-bench` profile: `lto = "fat"`, `codegen-units = 1` applied to all crates). Cycle counts cover the synchronous per-column processing
+window, noise gate, auto-calibration, travel computation, and rapid-trigger logic. ADC DMA
+(~9.8 µs/col) and `yield_now` (~1 µs/col) are outside the measurement window but included in
+the end-to-end figures.
+
+### Configurations tested
+
+| Configuration                        | Cycles/col | Notes                            |
+| ------------------------------------ | :--------: | -------------------------------- |
+| LUT in flash, `lto = false`          |  299–301   | `firmware-debug` baseline        |
+| Polynomial approximation (2nd order) |  310–312   | slower than LUT - not used       |
+| LUT in flash, `lto = "fat"`          |  291–293   | ✓ production configuration       |
+| LUT in RAM (`.data` section)         |  290–292   | no measurable benefit - reverted |
+| LUT + `target-cpu=cortex-m4` flag    |  312–313   | scheduling regression - dropped  |
+
+### End-to-end figures (production configuration)
+
+| Metric          | Value     |
+| --------------- | --------- |
+| Time per column | ~14.3 µs  |
+| Time per pass   | ~299.8 µs |
+| Scan rate       | ~3,336 Hz |
+| Avg key latency | ~150 µs   |
+
+### Findings
+
+- **Fat LTO** saves ~8 cycles/col (~2 µs/pass) over a non-LTO build through cross-crate
+  inlining of the hot path. `firmware-bench` settings are also used for production flashing.
+
+- **Polynomial approximation is slower** than the LUT by ~19 cycles/col. The STM32F401's
+  ART prefetch keeps LUT accesses cheap; two 32-bit multiplies cost more than the table lookup
+  at this access pattern.
+
+- **ADC DMA dominates** at ~9.8 µs/col (68% of per-column budget). All processing
+  optimisations combined move average keypress latency by ~1 µs. The ADC sample time is
+  already at the hardware minimum; the scan rate ceiling is the ADC, not the firmware logic.
+
+- **USB HID poll rate** (1,000 Hz, 1 ms) is the practical latency floor for the host.
+  The 3,336 Hz scan rate means the keyboard scans more than 3× per USB frame.
+
+---
+
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE) at your option.
