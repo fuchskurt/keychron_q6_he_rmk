@@ -150,7 +150,7 @@ the end-to-end figures.
 ### Findings
 
 - **Fat LTO** saves ~8 cycles/col (~2 µs/pass) over a non-LTO build through cross-crate
-  inlining of the hot path. `firmware-bench` settings are also used for production flashing.
+  inlining of the hot path. This same production configuration is also used for flashing.
 
 - **Polynomial approximation is slower** than the LUT by ~19 cycles/col. The STM32F401's
   ART prefetch keeps LUT accesses cheap; two 32-bit multiplies cost more than the table lookup
