@@ -9,7 +9,6 @@ pub mod types;
 pub(crate) use crate::matrix::analog_matrix::types::AdcSampleTime;
 use crate::{
     eeprom::Ft24c64,
-    log::info,
     matrix::{
         analog_matrix::types::KeyEntry,
         calib_store::{CALIB_BUF_LEN, EEPROM_BASE_ADDR, try_deserialize},
@@ -189,13 +188,15 @@ where
         let mut buf = [0_u16; ROW];
         let mut seq = self.adc_part.configured_sequence(self.irq);
         if loaded {
-            info!("calibration loaded from EEPROM");
+            #[cfg(feature = "defmt")]
+            defmt::info!("calibration loaded from EEPROM");
             // Re-measure zero travel on every boot to compensate for
             // temperature drift; full-travel data comes from EEPROM.
             let zero_raw = Self::calibrate_zero_raw(&mut self.cols, &mut seq, &mut buf, self.cfg).await;
             Self::apply_calib(&mut self.keys, &zero_raw);
         } else {
-            info!("no valid EEPROM calibration, running first-boot calibration");
+            #[cfg(feature = "defmt")]
+            defmt::info!("no valid EEPROM calibration, running first-boot calibration");
             Self::run_first_boot_calib(
                 &mut self.cols,
                 &mut seq,

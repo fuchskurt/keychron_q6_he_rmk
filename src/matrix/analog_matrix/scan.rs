@@ -1,7 +1,6 @@
 use super::{AdcSampleTime, AnalogHallMatrix, HallCfg};
 use crate::{
     layout::VALID_ROWS_BY_COL,
-    log::trace,
     matrix::{
         analog_matrix::types::{
             AUTO_CALIB_CONFIDENCE_THRESHOLD,
@@ -143,12 +142,23 @@ where
         let noise_gate = cfg.noise_gate;
         loop {
             cols.reset();
-            yield_now().await;
             for col in 0..COL {
+                yield_now().await;
                 seq.read(buf).await;
+                #[cfg(feature = "adc_debug")]
+                defmt::debug!(
+                    "raw col={} r0={} r1={} r2={} r3={} r4={} r5={}",
+                    col,
+                    buf[0],
+                    buf[1],
+                    buf[2],
+                    buf[3],
+                    buf[4],
+                    buf[5]
+                );
                 cols.advance();
                 #[cfg(feature = "bench")]
-                let t = bench::cycles();
+                let time = bench::cycles();
                 // Only valid sensor positions are stored in VALID_ROWS_BY_COL;
                 // columns with no sensors produce an empty list and are skipped
                 // entirely without touching the key-state machine.
@@ -243,15 +253,15 @@ where
                                 now_pressed,
                             ))
                             .await;
-                            trace!("key row={} col={} pressed={}", key.key_row, col, now_pressed);
+                            #[cfg(feature = "defmt")]
+                            defmt::trace!("key row={} col={} pressed={}", key.key_row, col, now_pressed);
                         }
                     }
                 }
                 #[cfg(feature = "bench")]
-                if let Some(avg) = acc.record(bench::elapsed(t)) {
-                    use crate::log::debug;
-
-                    debug!("scan avg={} cycles/col", avg);
+                if let Some(avg) = acc.record(bench::elapsed(time)) {
+                    #[cfg(feature = "defmt")]
+                    defmt::debug!("scan avg={} cycles/col", avg);
                 }
             }
         }

@@ -10,7 +10,6 @@ use crate::{
     backlight::led_processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
     eeprom::Ft24c64,
     layout::{MATRIX_TO_LED, VALID_ROWS_BY_COL},
-    log::{debug, info, warn},
     matrix::{
         analog_matrix::types::{
             BOTTOM_JITTER,
@@ -149,13 +148,15 @@ where
             && try_deserialize::<ROW, COL>(eeprom_buf, keys, crc);
 
         if !verified {
-            warn!("EEPROM write-back verification failed, will recalibrate on next boot");
+            #[cfg(feature = "defmt")]
+            defmt::warn!("EEPROM write-back verification failed, will recalibrate on next boot");
             // Signal amber so the user knows calibration will repeat on the
             // next boot.
             BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Zero)).await;
             return;
         }
-        info!("calibration verified and persisted to EEPROM");
+        #[cfg(feature = "defmt")]
+        defmt::info!("calibration verified and persisted to EEPROM");
         BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Done)).await;
     }
 
@@ -261,7 +262,8 @@ where
                                         // Hold duration satisfied; accept this key.
                                         *key_state = KeyCalibState::Accepted;
                                         calibrated_count = calibrated_count.saturating_add(1);
-                                        debug!("key accepted row={} col={} raw={}", key_row, col, raw);
+                                        #[cfg(feature = "defmt")]
+                                        defmt::debug!("key accepted row={} col={} raw={}", key_row, col, raw);
 
                                         if let Some(led_row) = MATRIX_TO_LED.get(key_row)
                                             && let Some(&Some(led_idx)) = led_row.get(col)

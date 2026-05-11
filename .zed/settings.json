@@ -20,7 +20,7 @@
           "extraArgs": ["+nightly"],
         },
         "cargo": {
-          "features": ["ansi_layout"],
+          "features": ["ansi_layout", "bench", "defmt"],
         },
         "inlayHints": {
           "maxLength": null,

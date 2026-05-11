@@ -26,8 +26,6 @@ mod eeprom;
 mod flash_wrapper_async;
 /// Default layout definitions.
 mod layout;
-/// Logging abstraction gated behind the `defmt` feature flag.
-mod log;
 /// Matrix scanning components.
 mod matrix;
 
