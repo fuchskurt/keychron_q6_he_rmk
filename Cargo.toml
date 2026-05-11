@@ -86,4 +86,7 @@ inherits = "release"
 debug = 2
 strip = "none"
 opt-level = "z"
-lto = false
+lto = "fat"
+
+[profile.release.package."*"]
+codegen-units = 1

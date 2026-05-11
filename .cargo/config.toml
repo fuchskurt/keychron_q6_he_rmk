@@ -8,14 +8,6 @@ build-std-features = ["compiler-builtins-mem"]
 
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 runner = "probe-rs run --chip stm32f401rc"
-# rustflags = [
-#     "-C", "target-cpu=cortex-m4", # Cortex-M4 optimization
-#     "-C", "codegen-units=1", # Single codegen unit for maximum optimization
-#     "-C", "lto=fat", # Full Link Time Optimization (cross-crate)
-#     "-C", "linker-plugin-lto", # LTO plugin for the linker
-#     "-C", "embed-bitcode=yes", # Embed LLVM bitcode (for LTO/post-processing)
-# ]
-
 # Use flip-link overflow check: https://github.com/knurling-rs/flip-link
 linker = "flip-link"
 
