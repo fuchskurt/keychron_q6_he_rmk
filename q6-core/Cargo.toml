@@ -1,0 +1,9 @@
+[package]
+name = "q6-core"
+version = "1.0.0"
+description = "Host-testable pure logic shared by the Keychron Q6 HE firmware (no HAL dependencies)"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[lints]
+workspace = true
