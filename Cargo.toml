@@ -39,6 +39,7 @@ static_cell = "2"
 snled27351-driver = { git = "https://github.com/fuchskurt/snled27351_driver.git", features = ["spi"] }
 embedded-hal-async = "1"
 cfg-if = "1"
+q6-core = { path = "q6-core" }
 defmt     = { version = "1", optional = true }
 defmt-rtt = { version = "1", optional = true, features = ["disable-blocking-mode"] }
 
@@ -55,6 +56,7 @@ embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy.git" }
 
 [workspace]
+members = [".", "q6-core"]
 
 [workspace.lints.rust]
 warnings = "deny"

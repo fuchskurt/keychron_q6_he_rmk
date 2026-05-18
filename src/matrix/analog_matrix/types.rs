@@ -1,7 +1,8 @@
-use crate::matrix::analog_matrix::lut;
 use core::hint::{cold_path, unlikely};
 use embassy_stm32::adc::{BasicAdcRegs, BasicInstance};
 use embassy_time::{Duration, Instant};
+use q6_core::{lut, math::ceil_div_or_zero};
+pub use q6_core::lut::{VALID_RAW_MAX, VALID_RAW_MIN};
 
 /// Number of confident press/release cycles required before the
 /// auto-calibrator updates the live calibration data for a key.
@@ -121,12 +122,6 @@ pub const MIN_USEFUL_FULL_RANGE: u16 = 100;
 /// Reference zero-travel ADC value used for calibration and used-sensor
 /// validation.
 pub const REF_ZERO_TRAVEL: u16 = 3121;
-
-/// Maximum acceptable raw ADC value.
-pub const VALID_RAW_MAX: u16 = 3500;
-
-/// Minimum acceptable raw ADC value.
-pub const VALID_RAW_MIN: u16 = 1200;
 
 /// ADC counts subtracted from the averaged zero-travel reading before storing
 /// it as the calibration zero point.
@@ -463,20 +458,6 @@ impl KeyEntry {
             self.apply_calib(new_zero, new_full);
         }
     }
-}
-
-/// Ceiling division of `num` by `den`, returning 0 instead of panicking
-/// when `den` is zero.
-///
-/// Used by [`KeyEntry::apply_calib`] for the `inv_scale` Q16.16 reciprocal:
-/// rounding up ensures the scaled travel at the full-travel LUT delta hits
-/// exactly [`FULL_TRAVEL_UNIT`] after the right-shift instead of
-/// [`FULL_TRAVEL_UNIT`] - 1. A zero `den` only occurs for a degenerate
-/// calibration (`full_lut == zero_lut`) and is treated as "uncalibrated" by
-/// the [`KeyEntry::travel_from`] hot path's `inv_scale == 0` short-circuit.
-#[inline]
-pub const fn ceil_div_or_zero(num: u32, den: u32) -> u32 {
-    num.saturating_add(den.saturating_sub(1)).checked_div(den).unwrap_or(0)
 }
 
 /// Compute a calibrated full-travel ADC value from a measured minimum and

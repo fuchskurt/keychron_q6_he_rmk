@@ -1,0 +1,89 @@
+name: CI
+
+# Merge gate: runs on every pull request (and pushes to main) so clippy
+# drift and logic regressions surface in review instead of silently rotting.
+# The project tracks the latest nightly, so this is the safety net for that
+# choice. Mark the jobs below as required in branch protection to block
+# merges on failure.
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clippy:
+    name: Clippy (${{ matrix.layout }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        layout: [ansi_layout, iso_layout, jis_layout]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy, rust-src
+          targets: thumbv7em-none-eabihf
+
+      - name: Clippy
+        run: cargo clippy --release --features ${{ matrix.layout }}
+
+  build:
+    name: Build (${{ matrix.layout }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        layout: [ansi_layout, iso_layout, jis_layout]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: thumbv7em-none-eabihf
+
+      - name: Install flip-link
+        run: cargo install flip-link
+
+      - name: Build firmware
+        run: cargo build --release --features ${{ matrix.layout }}
+
+  core:
+    name: q6-core (clippy + host tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy, rust-src
+          targets: thumbv7em-none-eabihf
+
+      - name: Clippy (q6-core library, host target)
+        run: cargo clippy -p q6-core --target x86_64-unknown-linux-gnu
+
+      - name: Host unit tests (q6-core)
+        # Run from outside the repository so the workspace
+        # `.cargo/config.toml` (which forces `build-std` and the
+        # thumbv7em target for the firmware) does not apply. q6-core is
+        # pure `no_std` and its tests link the host `std`, which conflicts
+        # with `build-std` rebuilding `core`.
+        working-directory: ${{ runner.temp }}
+        run: cargo test --manifest-path "$GITHUB_WORKSPACE/q6-core/Cargo.toml"

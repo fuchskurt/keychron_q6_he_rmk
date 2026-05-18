@@ -5,6 +5,7 @@ use embassy_stm32::{
 };
 use embassy_time::{Duration, Timer};
 use embedded_hal_async::i2c::Operation;
+use q6_core::bytes::be_bytes_u16;
 
 /// 7-bit I²C device address (A0 = A1 = A2 = GND).
 const DEVICE_ADDR: u8 = 0x51;
@@ -173,15 +174,4 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         }
         self.poll_until_ready(READY_POLL_ATTEMPTS).await
     }
-}
-
-/// Split a 16-bit word address into its two big-endian bytes (MSB first), as
-/// required by the FT24C64 addressing protocol.
-///
-/// Implemented with explicit shifts and masks rather than `u16::to_be_bytes`
-/// so the byte order is spelled out at the call site.
-const fn be_bytes_u16(value: u16) -> [u8; 2] {
-    let hi = u8::try_from(value.wrapping_shr(8)).unwrap_or(0);
-    let lo = u8::try_from(value & 0xFF).unwrap_or(0);
-    [hi, lo]
 }

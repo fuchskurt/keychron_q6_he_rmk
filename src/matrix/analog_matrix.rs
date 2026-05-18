@@ -1,8 +1,6 @@
 //! Hall-effect analog matrix scanner with EEPROM-backed per-key calibration
 //! and continuous auto-calibration.
 
-/// Sparse Hall-sensor transfer-function lookup table.
-mod lut;
 /// Calibration types, constants, and per-key runtime state.
 pub mod types;
 
@@ -43,6 +41,7 @@ use embassy_stm32::{
     pac::adc,
 };
 use embassy_time::{Duration, Instant};
+use q6_core::math::pct_done;
 use rmk::{
     core_traits::Runnable,
     embassy_futures::yield_now,
@@ -677,12 +676,4 @@ fn min_into<const ROW: usize, const COL: usize>(min_raw: &mut [[u16; COL]; ROW],
     if let Some(cell) = min_raw.get_mut(key_row).and_then(|min_row| min_row.get_mut(col)) {
         *cell = (*cell).min(raw);
     }
-}
-
-/// Convert `done`/`total` into a percentage in 0..=100 using saturating
-/// arithmetic at every step so a zero or overflowing `total` returns 0
-/// instead of panicking.
-#[inline]
-const fn pct_done(done: usize, total: usize) -> u8 {
-    u8::try_from(done.saturating_mul(100).checked_div(total).unwrap_or(0)).unwrap_or(100).min(100)
 }

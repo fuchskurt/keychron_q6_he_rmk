@@ -4,6 +4,7 @@ use crate::{
 };
 use core::mem::size_of;
 use embassy_stm32::crc::Crc;
+use q6_core::bytes::{le_bytes_u16, le_bytes_u32, le_u16, le_u32, read_array};
 
 /// Pre-computed buffer length for the HE matrix.
 pub const CALIB_BUF_LEN: usize = total_len(ROW, COL);
@@ -20,55 +21,6 @@ const HEADER_LEN: usize = size_of::<u32>().saturating_add(size_of::<u8>());
 const VERSION: u8 = 2;
 /// Magic number identifying a valid Q6 HE calibration block.
 const MAGIC: u32 = 0x5136_4845;
-
-/// Assemble a little-endian `u16` from its two bytes.
-///
-/// Spelled out with explicit shifts and masks rather than `u16::from_le_bytes`
-/// so the byte order is visible at the definition site.
-const fn le_u16(bytes: [u8; 2]) -> u16 {
-    let [b0, b1] = bytes;
-    u16::from(b0) | u16::from(b1).wrapping_shl(8)
-}
-
-/// Assemble a little-endian `u32` from its four bytes.
-///
-/// Spelled out with explicit shifts and masks rather than `u32::from_le_bytes`
-/// so the byte order is visible at the definition site.
-const fn le_u32(bytes: [u8; 4]) -> u32 {
-    let [b0, b1, b2, b3] = bytes;
-    u32::from(b0) | u32::from(b1).wrapping_shl(8) | u32::from(b2).wrapping_shl(16) | u32::from(b3).wrapping_shl(24)
-}
-
-/// Split a `u16` into its two little-endian bytes (LSB first).
-const fn le_bytes_u16(value: u16) -> [u8; 2] {
-    [u8::try_from(value & 0xFF).unwrap_or(0), u8::try_from(value.wrapping_shr(8)).unwrap_or(0)]
-}
-
-/// Split a `u32` into its four little-endian bytes (LSB first).
-const fn le_bytes_u32(value: u32) -> [u8; 4] {
-    [
-        u8::try_from(value & 0xFF).unwrap_or(0),
-        u8::try_from(value.wrapping_shr(8) & 0xFF).unwrap_or(0),
-        u8::try_from(value.wrapping_shr(16) & 0xFF).unwrap_or(0),
-        u8::try_from(value.wrapping_shr(24) & 0xFF).unwrap_or(0),
-    ]
-}
-
-/// Copy exactly `N` bytes from `buf[start..end]` into a fixed-size array.
-///
-/// Returns `None` if the range is out of bounds or its length is not `N`.
-/// Callers that need a hard failure (e.g. corrupt EEPROM data) should
-/// treat `None` as a validation error rather than substituting a default,
-/// because zero is a valid output for checksums and serialized values.
-#[inline]
-fn read_array<const N: usize>(buf: &[u8], start: usize, end: usize) -> Option<[u8; N]> {
-    if let Some(src) = buf.get(start..end)
-        && let Ok(fixed) = <[u8; N]>::try_from(src)
-    {
-        return Some(fixed);
-    }
-    None
-}
 
 /// Compute CRC-32 over `data` using the STM32 hardware CRC peripheral.
 ///
