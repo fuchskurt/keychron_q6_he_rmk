@@ -3,11 +3,7 @@
 /// Layout-independent shared tables, encoder map, and compile-time guards.
 mod shared;
 
-use cfg_if::cfg_if;
-use rmk::types::action::KeyAction;
-use shared::layout::{ENCODER_VOLUME, EncoderAction};
-
-cfg_if! {
+::cfg_if::cfg_if! {
     if #[cfg(feature = "ansi_layout")] {
         /// ANSI physical layout tables.
         mod ansi;
@@ -24,6 +20,9 @@ cfg_if! {
         compile_error!("You must enable one of: ansi_layout, iso_layout, jis_layout");
     }
 }
+
+use rmk::types::action::KeyAction;
+use shared::layout::{ENCODER_VOLUME, EncoderAction};
 
 pub use selected::led::LED_LAYOUT;
 use selected::{

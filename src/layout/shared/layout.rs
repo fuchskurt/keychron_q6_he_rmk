@@ -1,3 +1,5 @@
+#![expect(clippy::min_ident_chars, reason = "rmk macro names a!/k! are fixed upstream and cannot be renamed")]
+
 use crate::layout::{COL, NUM_ENCODER};
 pub use rmk::types::action::{EncoderAction, KeyAction};
 use rmk::{a as act, df, encoder, k as key};

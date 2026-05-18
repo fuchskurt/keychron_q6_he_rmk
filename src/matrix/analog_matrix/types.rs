@@ -300,7 +300,7 @@ impl KeyEntry {
 
     /// Recompute calibration from a freshly measured `zero`-travel reading
     /// paired with the full-travel stored in [`KeyEntry::entry_full`].
-    pub fn apply_zero(&mut self, zero: u16) {
+    pub const fn apply_zero(&mut self, zero: u16) {
         let full = self.entry_full;
         self.apply_calib(zero, full);
     }
@@ -320,7 +320,7 @@ impl KeyEntry {
     /// travel computation within the same scan pass.
     #[inline]
     #[optimize(speed)]
-    pub fn auto_calib_step(&mut self, raw: u16) {
+    pub const fn auto_calib_step(&mut self, raw: u16) {
         match self.ac_phase {
             AutoCalibPhase::Idle => {
                 if raw < AUTO_CALIB_FULL_TRAVEL_THRESHOLD {
@@ -456,7 +456,7 @@ impl KeyEntry {
     /// Prevents small fluctuations from repeatedly rewriting the derived
     /// constants when the resting position shifts only within normal drift
     /// bounds.
-    pub fn update_calib_if_drifted(&mut self, new_zero: u16, new_full: u16) {
+    pub const fn update_calib_if_drifted(&mut self, new_zero: u16, new_full: u16) {
         if self.calib_zero.abs_diff(new_zero) > AUTO_CALIB_ZERO_UPDATE_THRESHOLD {
             #[cfg(feature = "defmt")]
             defmt::debug!("auto-calib update: zero {} -> {}, full {}", self.calib_zero, new_zero, new_full);

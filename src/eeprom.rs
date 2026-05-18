@@ -180,7 +180,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
 ///
 /// Implemented with explicit shifts and masks rather than `u16::to_be_bytes`
 /// so the byte order is spelled out at the call site.
-fn be_bytes_u16(value: u16) -> [u8; 2] {
+const fn be_bytes_u16(value: u16) -> [u8; 2] {
     let hi = u8::try_from(value.wrapping_shr(8)).unwrap_or(0);
     let lo = u8::try_from(value & 0xFF).unwrap_or(0);
     [hi, lo]

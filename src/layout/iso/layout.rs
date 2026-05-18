@@ -1,3 +1,5 @@
+#![expect(clippy::min_ident_chars, reason = "rmk macro names a!/k! are fixed upstream and cannot be renamed")]
+
 use crate::layout::COL;
 pub use crate::layout::shared::layout::{MAC_ROW5, ROW0, ROW1, WIN_ROW5};
 use rmk::{a as act, k as key, types::action::KeyAction};
