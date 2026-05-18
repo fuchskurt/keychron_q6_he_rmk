@@ -67,7 +67,7 @@ pub fn read_array<const N: usize>(buf: &[u8], start: usize, end: usize) -> Optio
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "none")))]
 mod tests {
     use super::{be_bytes_u16, le_bytes_u16, le_bytes_u32, le_u16, le_u32, read_array};
 

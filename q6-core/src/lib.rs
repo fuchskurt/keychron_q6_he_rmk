@@ -16,7 +16,7 @@
     optimize_attribute
 )]
 // The test harness needs `std`; the library itself stays `no_std`.
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "none")))]
 extern crate std;
 
 pub mod bytes;

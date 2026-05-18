@@ -24,7 +24,7 @@ pub const fn pct_done(done: usize, total: usize) -> u8 {
     u8::try_from(done.saturating_mul(100).checked_div(total).unwrap_or(0)).unwrap_or(100).min(100)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "none")))]
 mod tests {
     use super::{ceil_div_or_zero, pct_done};
 

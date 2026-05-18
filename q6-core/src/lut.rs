@@ -171,7 +171,7 @@ pub const fn lookup(raw: u16) -> u16 {
     u16::try_from(result).unwrap_or(u16::MAX)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "none")))]
 mod tests {
     use super::{LAST_IDX, SPARSE_N, TRAVEL_LUT, VALID_RAW_MAX, VALID_RAW_MIN, lookup};
 
