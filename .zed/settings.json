@@ -19,12 +19,22 @@
         "check": {
           "command": "clippy",
           "workspace": true,
+          "extraArgs": [
+            "--release",
+            "--target",
+            "thumbv7em-none-eabihf",
+            "--features",
+            "ansi_layout",
+            "--",
+            "-Dwarnings",
+          ],
         },
         "rustfmt": {
           "extraArgs": ["+nightly"],
         },
         "cargo": {
           "features": ["ansi_layout"],
+          "target": "thumbv7em-none-eabihf",
         },
         "inlayHints": {
           "maxLength": null,
