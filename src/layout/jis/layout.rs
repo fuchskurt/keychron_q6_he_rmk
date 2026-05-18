@@ -4,6 +4,7 @@ use crate::layout::COL;
 pub use crate::layout::shared::layout::ROW0;
 use rmk::{a as act, df, k as key, types::action::KeyAction};
 
+/// Default key actions for matrix row 1 (JIS).
 pub const ROW1: [KeyAction; COL] = [
     key!(Grave),
     key!(Kc1),
@@ -28,6 +29,7 @@ pub const ROW1: [KeyAction; COL] = [
     key!(KpAsterisk),
 ];
 
+/// Default key actions for matrix row 2 (JIS).
 pub const ROW2: [KeyAction; COL] = [
     key!(Tab),
     key!(Q),
@@ -52,6 +54,7 @@ pub const ROW2: [KeyAction; COL] = [
     key!(KpPlus),
 ];
 
+/// Default key actions for matrix row 3 (JIS).
 pub const ROW3: [KeyAction; COL] = [
     key!(CapsLock),
     key!(A),
@@ -76,6 +79,7 @@ pub const ROW3: [KeyAction; COL] = [
     act!(No),
 ];
 
+/// Default key actions for matrix row 4 (JIS).
 pub const ROW4: [KeyAction; COL] = [
     key!(LShift),
     act!(No),
@@ -100,6 +104,7 @@ pub const ROW4: [KeyAction; COL] = [
     key!(KpEnter),
 ];
 
+/// Key actions for matrix row 5 on the Mac base layer (JIS).
 pub const MAC_ROW5: [KeyAction; COL] = [
     key!(LCtrl),
     key!(LAlt),
@@ -123,6 +128,7 @@ pub const MAC_ROW5: [KeyAction; COL] = [
     act!(No),
     act!(No),
 ];
+/// Key actions for matrix row 5 on the Windows base layer (JIS).
 pub const WIN_ROW5: [KeyAction; COL] = [
     key!(LCtrl),
     key!(LGui),

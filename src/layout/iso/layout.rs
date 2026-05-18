@@ -4,6 +4,7 @@ use crate::layout::COL;
 pub use crate::layout::shared::layout::{MAC_ROW5, ROW0, ROW1, WIN_ROW5};
 use rmk::{a as act, k as key, types::action::KeyAction};
 
+/// Default key actions for matrix row 2 (ISO).
 pub const ROW2: [KeyAction; COL] = [
     key!(Tab),
     key!(Q),
@@ -27,6 +28,7 @@ pub const ROW2: [KeyAction; COL] = [
     key!(Kp9),
     key!(KpPlus),
 ];
+/// Default key actions for matrix row 3 (ISO).
 pub const ROW3: [KeyAction; COL] = [
     key!(CapsLock),
     key!(A),
@@ -50,6 +52,7 @@ pub const ROW3: [KeyAction; COL] = [
     key!(Kp6),
     act!(No),
 ];
+/// Default key actions for matrix row 4 (ISO).
 pub const ROW4: [KeyAction; COL] = [
     key!(LShift),
     key!(NonusBackslash),
