@@ -34,7 +34,7 @@ embassy-sync = { git = "https://github.com/embassy-rs/embassy.git"}
 embassy-executor = { features = ["platform-cortex-m", "executor-thread", "nightly"], git = "https://github.com/embassy-rs/embassy.git" }
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
 embedded-storage-async = "0"
-rmk = { default-features = false, features = ["async_matrix", "rynk", "bulk_transfer", "storage"], git = "https://github.com/fuchskurt/rmk.git", branch = "protocol" }
+rmk = { default-features = false, features = ["async_matrix", "rynk", "bulk_transfer", "storage"], git = "https://github.com/fuchskurt/rmk.git"}
 static_cell = "2"
 snled27351-driver = { git = "https://github.com/fuchskurt/snled27351_driver.git", features = ["spi"] }
 embedded-hal-async = "1"
