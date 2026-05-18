@@ -80,49 +80,6 @@ const TRAVEL_LUT_LEN: usize = RAW_SPAN.div_ceil(SPARSE_N).saturating_add(1);
 /// branch-free clamp on the interpolation anchors.
 const LAST_IDX: usize = TRAVEL_LUT_LEN.saturating_sub(1);
 
-/// Look up the LUT-equivalent value for ADC reading `raw` via linear
-/// interpolation between the two nearest sparse samples.
-///
-/// Algorithm, all done in safe integer arithmetic:
-///
-/// 1. Compute the raw offset `o = saturating_sub(raw, VALID_RAW_MIN)` and clamp
-///    it to `RAW_SPAN`. Together this maps any `u16` input into `0..=RAW_SPAN`
-///    without branching.
-/// 2. `idx = o.checked_shr(SPARSE_N_LOG2)`, `frac = o.checked_rem(SPARSE_N)`
-///    split the offset into the segment index and the in-segment position. Both
-///    compile to a single shift / AND-mask under LLVM strength reduction
-///    because SPARSE_N is a compile-time power of two.
-/// 3. Read the segment endpoints `lo = TRAVEL_LUT[idx]` and `hi =
-///    TRAVEL_LUT[idx+1]` through `.get(...).copied().unwrap_or(...)`. The clamp
-///    from step 1 guarantees both indices are in range; the fallbacks are
-///    defensive no-ops the optimiser folds away.
-/// 4. The polynomial is monotone-decreasing, so `lo >= hi`. The signed
-///    difference is therefore `lo - hi` (a u16) and the interpolated value is
-///    `lo - (diff * frac + N/2) / N`, computed in u32 to avoid intermediate
-///    overflow. The `+ N/2` rounds to nearest before the shift; without it, the
-///    truncation can add ~half a count of bias.
-///
-/// Saturating behaviour: readings below [`VALID_RAW_MIN`] resolve to
-/// `TRAVEL_LUT[0]` (the deep-press maximum); readings above
-/// [`VALID_RAW_MAX`] resolve to the upper anchor of the final segment
-/// (which equals `poly(VALID_RAW_MAX)` after interpolation thanks to the
-/// endpoint adjustment baked into the table). Hot-path callers always
-/// pre-clamp, so neither saturation arm fires in steady state.
-#[inline(always)]
-#[optimize(speed)]
-pub(crate) const fn lookup(raw: u16) -> u16 {
-    let raw_off = usize::from(raw.saturating_sub(VALID_RAW_MIN)).min(RAW_SPAN);
-    let idx = raw_off.checked_shr(SPARSE_N_LOG2).unwrap_or(0);
-    let frac = raw_off.checked_rem(SPARSE_N).unwrap_or(0);
-    let lo = TRAVEL_LUT.get(idx).copied().unwrap_or(0);
-    let hi = TRAVEL_LUT.get(idx.saturating_add(1)).copied().unwrap_or(lo).min(lo);
-    let diff = u32::from(lo.saturating_sub(hi));
-    let frac_u32 = u32::try_from(frac).unwrap_or(u32::MAX);
-    let contrib = diff.saturating_mul(frac_u32).saturating_add(SPARSE_N_HALF).checked_shr(SPARSE_N_LOG2).unwrap_or(0);
-    let result = u32::from(lo).saturating_sub(contrib);
-    u16::try_from(result).unwrap_or(u16::MAX)
-}
-
 /// Sparse Hall-sensor transfer-function table.
 ///
 /// `TRAVEL_LUT[i] = round(256 * poly(VALID_RAW_MIN + i * SPARSE_N) + 11008)`
@@ -139,26 +96,72 @@ const TRAVEL_LUT: [u16; TRAVEL_LUT_LEN] = [
 /// Compile-time guard: every entry must fit in a `u16`. The static type
 /// already enforces this, but the assert documents the contract and
 /// breaks the build if the regenerator ever emits a different element type.
-const _: () = assert!(TRAVEL_LUT.len() == TRAVEL_LUT_LEN);
+const _: () = assert!(TRAVEL_LUT.len() == TRAVEL_LUT_LEN, "TRAVEL_LUT length must equal TRAVEL_LUT_LEN");
 
 /// Compile-time guard: the first entry must equal `round(256 * poly(MIN) +
 /// 11008)`. Spot-check that the table actually starts where the doc claims it
 /// does; keeps the regenerator and the runtime lookup honest about which row is
 /// row 0.
-const _: () = assert!(matches!(TRAVEL_LUT.first(), Some(&0x848A)));
+const _: () = assert!(matches!(TRAVEL_LUT.first(), Some(&0x848A)), "TRAVEL_LUT must start at the deep-press maximum");
 
 /// Compile-time guard: the LUT length matches the polynomial domain.
 ///
 /// `n_segments = ceil(RAW_SPAN / SPARSE_N)`, plus one upper anchor.
-const _: () = assert!(TRAVEL_LUT_LEN == RAW_SPAN.div_ceil(SPARSE_N).saturating_add(1));
+const _: () = assert!(
+    TRAVEL_LUT_LEN == RAW_SPAN.div_ceil(SPARSE_N).saturating_add(1),
+    "TRAVEL_LUT_LEN must match the polynomial domain"
+);
 
 /// Compile-time guard: `SPARSE_N` must be a power of two so that
 /// `checked_shr(SPARSE_N_LOG2)` and `checked_rem(SPARSE_N)` on the hot
 /// path collapse to a single shift and AND-mask under LLVM strength
 /// reduction.
-const _: () = assert!(SPARSE_N.is_power_of_two());
+const _: () = assert!(SPARSE_N.is_power_of_two(), "SPARSE_N must be a power of two");
 
 /// Compile-time guard: the upper-anchor index must be in bounds. With
 /// `LAST_IDX = TRAVEL_LUT_LEN - 1`, this rules out a one-off mistake in
 /// `TRAVEL_LUT_LEN` that would let the interpolation read past the table.
-const _: () = assert!(LAST_IDX < TRAVEL_LUT_LEN);
+const _: () = assert!(LAST_IDX < TRAVEL_LUT_LEN, "LAST_IDX must be a valid TRAVEL_LUT index");
+
+/// Look up the LUT-equivalent value for ADC reading `raw` via linear
+/// interpolation between the two nearest sparse samples.
+///
+/// Algorithm, all done in safe integer arithmetic:
+///
+/// 1. Compute the raw offset `o = saturating_sub(raw, VALID_RAW_MIN)` and clamp
+///    it to `RAW_SPAN`. Together this maps any `u16` input into `0..=RAW_SPAN`
+///    without branching.
+/// 2. `idx = o.checked_shr(SPARSE_N_LOG2)`, `frac = o.checked_rem(SPARSE_N)`
+///    split the offset into the segment index and the in-segment position. Both
+///    compile to a single shift / AND-mask under LLVM strength reduction
+///    because `SPARSE_N` is a compile-time power of two.
+/// 3. Read the segment endpoints `lo = TRAVEL_LUT[idx]` and `hi =
+///    TRAVEL_LUT[idx+1]` through `.get(...).copied().unwrap_or(...)`. The clamp
+///    from step 1 guarantees both indices are in range; the fallbacks are
+///    defensive no-ops the optimiser folds away.
+/// 4. The polynomial is monotone-decreasing, so `lo >= hi`. The signed
+///    difference is therefore `lo - hi` (a u16) and the interpolated value is
+///    `lo - (diff * frac + N/2) / N`, computed in u32 to avoid intermediate
+///    overflow. The `+ N/2` rounds to nearest before the shift; without it, the
+///    truncation can add ~half a count of bias.
+///
+/// Saturating behaviour: readings below [`VALID_RAW_MIN`] resolve to
+/// `TRAVEL_LUT[0]` (the deep-press maximum); readings above
+/// [`VALID_RAW_MAX`] resolve to the upper anchor of the final segment
+/// (which equals `poly(VALID_RAW_MAX)` after interpolation thanks to the
+/// endpoint adjustment baked into the table). Hot-path callers always
+/// pre-clamp, so neither saturation arm fires in steady state.
+#[inline]
+#[optimize(speed)]
+pub const fn lookup(raw: u16) -> u16 {
+    let raw_off = usize::from(raw.saturating_sub(VALID_RAW_MIN)).min(RAW_SPAN);
+    let idx = raw_off.checked_shr(SPARSE_N_LOG2).unwrap_or(0);
+    let frac = raw_off.checked_rem(SPARSE_N).unwrap_or(0);
+    let lo = TRAVEL_LUT.get(idx).copied().unwrap_or(0);
+    let hi = TRAVEL_LUT.get(idx.saturating_add(1)).copied().unwrap_or(lo).min(lo);
+    let diff = u32::from(lo.saturating_sub(hi));
+    let frac_u32 = u32::try_from(frac).unwrap_or(u32::MAX);
+    let contrib = diff.saturating_mul(frac_u32).saturating_add(SPARSE_N_HALF).checked_shr(SPARSE_N_LOG2).unwrap_or(0);
+    let result = u32::from(lo).saturating_sub(contrib);
+    u16::try_from(result).unwrap_or(u16::MAX)
+}

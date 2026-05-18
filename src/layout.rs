@@ -1,18 +1,23 @@
 //! Default keymap definitions and sizes.
 
+/// Layout-independent shared tables, encoder map, and compile-time guards.
+mod shared;
+
 use cfg_if::cfg_if;
 use rmk::types::action::KeyAction;
 use shared::layout::{ENCODER_VOLUME, EncoderAction};
-mod shared;
 
 cfg_if! {
     if #[cfg(feature = "ansi_layout")] {
+        /// ANSI physical layout tables.
         mod ansi;
         use ansi as selected;
     } else if #[cfg(feature = "iso_layout")] {
+        /// ISO physical layout tables.
         mod iso;
         use iso as selected;
     } else if #[cfg(feature = "jis_layout")] {
+        /// JIS physical layout tables.
         mod jis;
         use jis as selected;
     } else {
@@ -36,9 +41,14 @@ pub const NUM_LAYER: usize = 2;
 /// Number of rotary encoders.
 pub const NUM_ENCODER: usize = 1;
 
+/// Matrix-position-to-LED-index map, row-major `[[Option<u8>; COL]; ROW]`.
+///
+/// `None` marks a matrix position with no backlight LED.
 pub const MATRIX_TO_LED: [[Option<u8>; COL]; ROW] =
     [LED_MAPPING_ROW0, LED_MAPPING_ROW1, LED_MAPPING_ROW2, LED_MAPPING_ROW3, LED_MAPPING_ROW4, LED_MAPPING_ROW5];
 
+/// Per-position hall-effect sensor presence map, row-major
+/// `[[bool; COL]; ROW]`. `true` where a physical sensor exists.
 pub const SENSOR_POSITIONS: [[bool; COL]; ROW] =
     [SENSOR_ROW0, SENSOR_ROW1, SENSOR_ROW2, SENSOR_ROW3, SENSOR_ROW4, SENSOR_ROW5];
 
@@ -49,7 +59,7 @@ pub const SENSOR_POSITIONS: [[bool; COL]; ROW] =
 /// iterating over all `row` values, so the column-major layout makes all six
 /// row lookups for a given column adjacent in flash and friendly to the
 /// STM32F4 ART prefetch.
-pub(crate) const SENSOR_BY_COL: [[bool; ROW]; COL] = {
+pub const SENSOR_BY_COL: [[bool; ROW]; COL] = {
     let mut out = [[false; ROW]; COL];
     let mut col = 0;
     while col < COL {
@@ -68,19 +78,6 @@ pub(crate) const SENSOR_BY_COL: [[bool; ROW]; COL] = {
     }
     out
 };
-
-/// Precomputed list of valid sensor positions for one HC164 column.
-///
-/// Only the first [`ColValidKeys::count`] entries of [`ColValidKeys::keys`]
-/// are populated; the remainder are zeroed placeholders that are never read.
-#[derive(Clone, Copy)]
-pub struct ColValidKeys {
-    /// Sensor positions with physical hall-effect sensors present, in
-    /// ascending row order.
-    pub keys:  [ValidKey; ROW],
-    /// Number of valid entries in [`ColValidKeys::keys`].
-    pub count: usize,
-}
 
 /// Per-column table of valid sensor positions, built at compile time from
 /// [`SENSOR_BY_COL`].
@@ -131,35 +128,6 @@ pub static VALID_ROWS_BY_COL: [ColValidKeys; COL] = {
     result
 };
 
-/// A single valid sensor position within a column, storing both the ADC
-/// buffer index and the key-state matrix index for that sensor.
-///
-/// On this hardware the ADC channel order matches the matrix row order, so
-/// [`ValidKey::buf_row`] and [`ValidKey::key_row`] are always equal. They are
-/// kept separate so the mapping can be adjusted without changing the hot-path
-/// scan logic if the hardware ever diverges.
-#[derive(Clone, Copy)]
-pub struct ValidKey {
-    /// Index into the ADC DMA buffer for this sensor's row channel.
-    pub buf_row: u8,
-    /// Row index into the `[[KeyEntry; ROW]; COL]` key-state array (the
-    /// inner dimension of the column-major matrix).
-    pub key_row: u8,
-}
-
-/// Return the default encoder action map for each layer.
-pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAYER] { [ENCODER_VOLUME, ENCODER_VOLUME] }
-
-/// Return the default keymap for all layers.
-pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
-    [
-        // Layer 0: MAC_BASE
-        [ROW0, ROW1, ROW2, ROW3, ROW4, MAC_ROW5],
-        // Layer 1: WIN_BASE
-        [ROW0, ROW1, ROW2, ROW3, ROW4, WIN_ROW5],
-    ]
-}
-
 /// Compile-time guard: [`LED_LAYOUT`] must fit within the 128-bit bitset.
 const _: () = assert!(LED_LAYOUT.len() <= 128, "LED_LAYOUT exceeds the 128-LED capacity of the calib_leds_done bitset");
 
@@ -188,3 +156,45 @@ const _: () = {
         row_index = row_index.saturating_add(1);
     }
 };
+
+/// Precomputed list of valid sensor positions for one HC164 column.
+///
+/// Only the first [`ColValidKeys::count`] entries of [`ColValidKeys::keys`]
+/// are populated; the remainder are zeroed placeholders that are never read.
+#[derive(Clone, Copy)]
+pub struct ColValidKeys {
+    /// Number of valid entries in [`ColValidKeys::keys`].
+    pub count: usize,
+    /// Sensor positions with physical hall-effect sensors present, in
+    /// ascending row order.
+    pub keys:  [ValidKey; ROW],
+}
+
+/// A single valid sensor position within a column, storing both the ADC
+/// buffer index and the key-state matrix index for that sensor.
+///
+/// On this hardware the ADC channel order matches the matrix row order, so
+/// [`ValidKey::buf_row`] and [`ValidKey::key_row`] are always equal. They are
+/// kept separate so the mapping can be adjusted without changing the hot-path
+/// scan logic if the hardware ever diverges.
+#[derive(Clone, Copy)]
+pub struct ValidKey {
+    /// Index into the ADC DMA buffer for this sensor's row channel.
+    pub buf_row: u8,
+    /// Row index into the `[[KeyEntry; ROW]; COL]` key-state array (the
+    /// inner dimension of the column-major matrix).
+    pub key_row: u8,
+}
+
+/// Return the default encoder action map for each layer.
+pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAYER] { [ENCODER_VOLUME, ENCODER_VOLUME] }
+
+/// Return the default keymap for all layers.
+pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
+    [
+        // Layer 0: MAC_BASE
+        [ROW0, ROW1, ROW2, ROW3, ROW4, MAC_ROW5],
+        // Layer 1: WIN_BASE
+        [ROW0, ROW1, ROW2, ROW3, ROW4, WIN_ROW5],
+    ]
+}
