@@ -184,6 +184,7 @@ use snled27351_driver::{
     },
 };
 
+/// Backlight LED indices for matrix row 0 (JIS); `None` marks a position with no LED.
 pub const LED_MAPPING_ROW0: [Option<u8>; 21] = [
     Some(0),
     Some(1),
@@ -208,6 +209,7 @@ pub const LED_MAPPING_ROW0: [Option<u8>; 21] = [
     Some(19),
 ];
 
+/// Backlight LED indices for matrix row 1 (JIS); `None` marks a position with no LED.
 pub const LED_MAPPING_ROW1: [Option<u8>; 21] = [
     Some(20),
     Some(21),
@@ -232,6 +234,7 @@ pub const LED_MAPPING_ROW1: [Option<u8>; 21] = [
     Some(41),
 ];
 
+/// Backlight LED indices for matrix row 2 (JIS); `None` marks a position with no LED.
 pub const LED_MAPPING_ROW2: [Option<u8>; 21] = [
     Some(42),
     Some(43),
@@ -256,6 +259,7 @@ pub const LED_MAPPING_ROW2: [Option<u8>; 21] = [
     Some(62),
 ];
 
+/// Backlight LED indices for matrix row 3 (JIS); `None` marks a position with no LED.
 pub const LED_MAPPING_ROW3: [Option<u8>; 21] = [
     Some(63),
     Some(64),
@@ -280,6 +284,7 @@ pub const LED_MAPPING_ROW3: [Option<u8>; 21] = [
     None,
 ];
 
+/// Backlight LED indices for matrix row 4 (JIS); `None` marks a position with no LED.
 pub const LED_MAPPING_ROW4: [Option<u8>; 21] = [
     Some(79),
     None,
@@ -304,6 +309,7 @@ pub const LED_MAPPING_ROW4: [Option<u8>; 21] = [
     Some(96),
 ];
 
+/// Backlight LED indices for matrix row 5 (JIS); `None` marks a position with no LED.
 pub const LED_MAPPING_ROW5: [Option<u8>; 21] = [
     Some(97),
     Some(98),

@@ -57,9 +57,9 @@ pub enum CalibPhase {
 
 /// Controller that reacts to indicator events for the LED driver.
 #[processor(subscribe = [LedIndicatorEvent])]
-pub struct LedIndicatorProcessor;
+pub struct LedIndicator;
 
-impl LedIndicatorProcessor {
+impl LedIndicator {
     /// Create a new indicator controller.
     #[must_use]
     pub const fn new() -> Self { Self }

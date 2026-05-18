@@ -5,6 +5,7 @@ use embassy_stm32::{
 };
 use embassy_time::{Duration, Timer};
 use embedded_hal_async::i2c::Operation;
+use q6_core::bytes::be_bytes_u16;
 
 /// 7-bit I²C device address (A0 = A1 = A2 = GND).
 const DEVICE_ADDR: u8 = 0x51;
@@ -31,12 +32,8 @@ pub struct Ft24c64<'peripherals, IM: MasterMode> {
 }
 
 impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
-    /// Create a new driver.
-    pub fn new(i2c: I2c<'peripherals, Async, IM>, mut wp: Flex<'peripherals>) -> Self {
-        // Input pull-up: write-protect asserted via pull resistor.
-        wp.set_as_input(Pull::Up);
-        Self { i2c, wp }
-    }
+    /// Return the write-protect pin to its idle pulled-high state.
+    fn assert_wp(&mut self) { self.wp.set_as_input(Pull::Up); }
 
     /// Drive the write-protect pin low so the device accepts writes.
     ///
@@ -47,8 +44,47 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         self.wp.set_as_output(Speed::Low);
     }
 
-    /// Return the write-protect pin to its idle pulled-high state.
-    fn assert_wp(&mut self) { self.wp.set_as_input(Pull::Up); }
+    /// Erase the entire EEPROM by writing `0xFF` to all [`EEPROM_SIZE`] bytes.
+    ///
+    /// Pages are written sequentially from address `0x0000` to `0x1FFF` (256
+    /// pages × 32 bytes). After each page write the driver polls for
+    /// readiness before continuing with the next page.
+    ///
+    /// Call this before writing new calibration data to guarantee no stale
+    /// data survives in any region of the device.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`Error`] encountered. Any pages written before the
+    /// failure are not rolled back.
+    pub async fn erase(&mut self) -> Result<(), Error> {
+        self.deassert_wp();
+
+        let blank = [0xFF_u8; PAGE_SIZE];
+        let mut offset = 0_usize;
+        let mut result = Ok(());
+        while offset < EEPROM_SIZE {
+            let Ok(addr) = u16::try_from(offset) else {
+                result = Err(Overrun);
+                break;
+            };
+            result = self.write_page_raw(addr, &blank).await;
+            if result.is_err() {
+                break;
+            }
+            offset = offset.saturating_add(PAGE_SIZE);
+        }
+
+        self.assert_wp();
+        result
+    }
+
+    /// Create a new driver.
+    pub fn new(i2c: I2c<'peripherals, Async, IM>, mut wp: Flex<'peripherals>) -> Self {
+        // Input pull-up: write-protect asserted via pull resistor.
+        wp.set_as_input(Pull::Up);
+        Self { i2c, wp }
+    }
 
     /// Poll the device with a zero-length write until it ACKs, indicating
     /// the device is ready to accept commands. Used both after page writes
@@ -86,7 +122,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         if let Err(error) = ready {
             return Err(error);
         }
-        self.i2c.write_read(DEVICE_ADDR, &addr.to_be_bytes(), buf).await
+        self.i2c.write_read(DEVICE_ADDR, &be_bytes_u16(addr), buf).await
     }
 
     /// Write `data` starting at 16-bit word address `start_addr`.
@@ -108,7 +144,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
             // Bytes to write on this page, the smaller of the remaining page
             // space and the remaining data.
             let chunk_len = page_remaining.min(data.len().saturating_sub(offset));
-            let chunk = &data[offset..offset.saturating_add(chunk_len)];
+            let chunk = data.get(offset..offset.saturating_add(chunk_len)).unwrap_or(&[]);
 
             result = self.write_page_raw(addr, chunk).await;
             if result.is_err() {
@@ -128,7 +164,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// Callers must deassert WP before calling and re-assert it afterward.
     /// `chunk` must not cross a page boundary.
     async fn write_page_raw(&mut self, addr: u16, chunk: &[u8]) -> Result<(), Error> {
-        let addr_bytes = addr.to_be_bytes();
+        let addr_bytes = be_bytes_u16(addr);
         let result =
             self.i2c.transaction(DEVICE_ADDR, &mut [Operation::Write(&addr_bytes), Operation::Write(chunk)]).await;
         if result.is_err() {
@@ -137,40 +173,5 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
             return result;
         }
         self.poll_until_ready(READY_POLL_ATTEMPTS).await
-    }
-
-    /// Erase the entire EEPROM by writing `0xFF` to all [`EEPROM_SIZE`] bytes.
-    ///
-    /// Pages are written sequentially from address `0x0000` to `0x1FFF` (256
-    /// pages × 32 bytes). After each page write the driver polls for
-    /// readiness before continuing with the next page.
-    ///
-    /// Call this before writing new calibration data to guarantee no stale
-    /// data survives in any region of the device.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first [`Error`] encountered. Any pages written before the
-    /// failure are not rolled back.
-    pub async fn erase(&mut self) -> Result<(), Error> {
-        self.deassert_wp();
-
-        let blank = [0xFF_u8; PAGE_SIZE];
-        let mut offset = 0_usize;
-        let mut result = Ok(());
-        while offset < EEPROM_SIZE {
-            let Ok(addr) = u16::try_from(offset) else {
-                result = Err(Overrun);
-                break;
-            };
-            result = self.write_page_raw(addr, &blank).await;
-            if result.is_err() {
-                break;
-            }
-            offset = offset.saturating_add(PAGE_SIZE);
-        }
-
-        self.assert_wp();
-        result
     }
 }

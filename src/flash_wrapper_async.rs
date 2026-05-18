@@ -31,21 +31,21 @@ impl<F: ReadNorFlash> ReadNorFlash for Flash16K<F> {
     /// Read granularity for the underlying flash.
     const READ_SIZE: usize = F::READ_SIZE;
 
+    /// Return the total capacity of the flash device.
+    fn capacity(&self) -> usize { self.0.capacity() }
+
     /// Read bytes from the flash at the given offset.
     async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         self.0.read(offset, bytes).await
     }
-
-    /// Return the total capacity of the flash device.
-    fn capacity(&self) -> usize { self.0.capacity() }
 }
 
 #[rustfmt::skip]
 impl<F: NorFlash> NorFlash for Flash16K<F> {
-    /// Write granularity for the underlying flash.
-    const WRITE_SIZE: usize = F::WRITE_SIZE;
     /// Erase size reported as 16 KiB - matches STM32F4 sectors 1 and 2.
     const ERASE_SIZE: usize = 16_usize.saturating_mul(1024);
+    /// Write granularity for the underlying flash.
+    const WRITE_SIZE: usize = F::WRITE_SIZE;
 
     /// Erase the flash range between the given offsets.
     async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> { self.0.erase(from, to).await }

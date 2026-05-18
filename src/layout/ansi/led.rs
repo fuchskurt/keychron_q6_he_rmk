@@ -185,6 +185,7 @@ use snled27351_driver::{
     },
 };
 
+/// Backlight LED indices for matrix row 4 (ANSI); `None` marks a position with no LED.
 pub const LED_MAPPING_ROW4: [Option<u8>; 21] = [
     Some(78),
     None,
@@ -209,6 +210,7 @@ pub const LED_MAPPING_ROW4: [Option<u8>; 21] = [
     Some(94),
 ];
 
+/// Backlight LED indices for matrix row 5 (ANSI); `None` marks a position with no LED.
 pub const LED_MAPPING_ROW5: [Option<u8>; 21] = [
     Some(95),
     Some(96),

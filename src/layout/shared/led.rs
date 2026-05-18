@@ -1,3 +1,4 @@
+/// Backlight LED indices for matrix row 0; `None` marks a position with no LED.
 pub const LED_MAPPING_ROW0: [Option<u8>; 21] = [
     Some(0),
     Some(1),
@@ -21,6 +22,7 @@ pub const LED_MAPPING_ROW0: [Option<u8>; 21] = [
     Some(18),
     Some(19),
 ];
+/// Backlight LED indices for matrix row 1; `None` marks a position with no LED.
 pub const LED_MAPPING_ROW1: [Option<u8>; 21] = [
     Some(20),
     Some(21),
@@ -44,6 +46,7 @@ pub const LED_MAPPING_ROW1: [Option<u8>; 21] = [
     Some(39),
     Some(40),
 ];
+/// Backlight LED indices for matrix row 2; `None` marks a position with no LED.
 pub const LED_MAPPING_ROW2: [Option<u8>; 21] = [
     Some(41),
     Some(42),
@@ -67,6 +70,7 @@ pub const LED_MAPPING_ROW2: [Option<u8>; 21] = [
     Some(60),
     Some(61),
 ];
+/// Backlight LED indices for matrix row 3; `None` marks a position with no LED.
 pub const LED_MAPPING_ROW3: [Option<u8>; 21] = [
     Some(62),
     Some(63),

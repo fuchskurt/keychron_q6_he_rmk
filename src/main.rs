@@ -30,7 +30,7 @@ mod layout;
 mod matrix;
 
 use crate::{
-    backlight::{init::BacklightRunner, processor::LedIndicatorProcessor},
+    backlight::{init::BacklightRunner, processor::LedIndicator},
     eeprom::Ft24c64,
     flash_wrapper_async::Flash16K,
     layout::{COL, ROW},
@@ -141,8 +141,10 @@ fn enable_flash_acceleration() {
 
 /// Entry point for the firmware.
 #[main]
-async fn main(_spawner: Spawner) {
-    // Tasks run inline via run_all!; the executor's spawner is unused.
+async fn main(spawner: Spawner) {
+    // Tasks run inline via run_all!; the executor's spawner is unused by our
+    // code but is part of the signature the `#[main]` macro requires.
+    _ = spawner;
     let mut peripheral = init(stm32_config());
     enable_flash_acceleration();
 
@@ -282,7 +284,7 @@ async fn main(_spawner: Spawner) {
     let cs0 = Output::new(peripheral.PB8, Level::High, Speed::VeryHigh);
     let cs1 = Output::new(peripheral.PB9, Level::High, Speed::VeryHigh);
     let sdb = Output::new(peripheral.PB7, Level::Low, Speed::VeryHigh);
-    let mut led_indicator = LedIndicatorProcessor::new();
+    let mut led_indicator = LedIndicator::new();
     let mut backlight = BacklightRunner::new(spi_backlight, cs0, cs1, sdb);
 
     #[cfg(feature = "bench")]
