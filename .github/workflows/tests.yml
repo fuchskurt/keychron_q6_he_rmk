@@ -1,12 +1,17 @@
 name: Tests
 
-# Runs the q6-core host test suite on every push to any branch, so the
-# logic under `q6-core/src/` is verified before any firmware build
-# happens. Pull-request branches also get the heavier `ci.yml` matrix
-# (clippy + firmware build for all three layouts); this workflow is the
-# fast feedback path that runs on every commit.
+# Runs the q6-core host test suite on every push to any branch and on
+# every pull request, so the logic under `q6-core/src/` is verified
+# before any firmware build happens.
+#
+# To make a green run mandatory for merging, mark the `q6-core host
+# tests` check as required under GitHub's repo Settings → Branches →
+# Branch protection rules for the target branch (e.g. `main`). The
+# check name to require is exactly `q6-core host tests` (the job
+# `name:` below).
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
 permissions:
