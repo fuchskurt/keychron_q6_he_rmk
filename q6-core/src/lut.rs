@@ -36,6 +36,10 @@
 //! lookup single-branch (same divide and multiply for every segment,
 //! including the partial one) while preserving accuracy at the upper
 //! edge.
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "trailing #[cfg(test)] module by convention"
+)]
 
 /// Maximum acceptable raw ADC value (inclusive upper bound of the table).
 pub const VALID_RAW_MAX: u16 = 3500;
@@ -172,6 +176,11 @@ pub const fn lookup(raw: u16) -> u16 {
 }
 
 #[cfg(all(test, not(target_os = "none")))]
+#[expect(
+    clippy::inline_modules,
+    clippy::tests_outside_test_module,
+    reason = "inline #[cfg(test)] module kept next to the code it tests"
+)]
 mod tests {
     use super::{LAST_IDX, SPARSE_N, TRAVEL_LUT, VALID_RAW_MAX, VALID_RAW_MIN, lookup};
 
@@ -188,7 +197,8 @@ mod tests {
         // At every exact multiple of SPARSE_N from the origin, interpolation
         // has zero fractional part so the result is the table entry itself.
         for (i, &entry) in TRAVEL_LUT.iter().enumerate().take(LAST_IDX) {
-            let raw = VALID_RAW_MIN + (i * SPARSE_N) as u16;
+            let offset = u16::try_from(i.saturating_mul(SPARSE_N)).unwrap_or(u16::MAX);
+            let raw = VALID_RAW_MIN.saturating_add(offset);
             assert_eq!(lookup(raw), entry, "sample point {i} (raw={raw})");
         }
     }
@@ -224,12 +234,13 @@ mod tests {
         // A point one count past a sample must lie between that sample and
         // the next (the table is monotone-decreasing).
         for i in 0..LAST_IDX {
-            let base = VALID_RAW_MIN + (i * SPARSE_N) as u16;
+            let offset = u16::try_from(i.saturating_mul(SPARSE_N)).unwrap_or(u16::MAX);
+            let base = VALID_RAW_MIN.saturating_add(offset);
             if base >= VALID_RAW_MAX {
                 break;
             }
             let lo = lookup(base);
-            let mid = lookup(base + 1);
+            let mid = lookup(base.saturating_add(1));
             assert!(mid <= lo);
         }
     }

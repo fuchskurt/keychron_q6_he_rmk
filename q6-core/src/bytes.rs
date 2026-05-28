@@ -4,6 +4,10 @@
 //! [`u16::to_le_bytes`], [`u16::to_be_bytes`], [`u32::to_le_bytes`],
 //! [`u16::from_le_bytes`], and [`u32::from_le_bytes`] family directly at the
 //! call site, so this module only carries the slice-to-array helper.
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "trailing #[cfg(test)] module by convention"
+)]
 
 /// Copy exactly `N` bytes from `buf[start..end]` into a fixed-size array.
 ///
@@ -23,6 +27,11 @@ pub fn read_array<const N: usize>(buf: &[u8], start: usize, end: usize) -> Optio
 }
 
 #[cfg(all(test, not(target_os = "none")))]
+#[expect(
+    clippy::inline_modules,
+    clippy::tests_outside_test_module,
+    reason = "inline #[cfg(test)] module kept next to the code it tests"
+)]
 mod tests {
     use super::read_array;
 

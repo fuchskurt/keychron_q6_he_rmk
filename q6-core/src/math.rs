@@ -1,4 +1,8 @@
 //! Small saturating arithmetic helpers used by calibration.
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "trailing #[cfg(test)] module by convention"
+)]
 
 /// Ceiling division of `num` by `den`, returning 0 instead of panicking
 /// when `den` is zero.
@@ -25,6 +29,11 @@ pub const fn pct_done(done: usize, total: usize) -> u8 {
 }
 
 #[cfg(all(test, not(target_os = "none")))]
+#[expect(
+    clippy::inline_modules,
+    clippy::tests_outside_test_module,
+    reason = "inline #[cfg(test)] module kept next to the code it tests"
+)]
 mod tests {
     use super::{ceil_div_or_zero, pct_done};
 
