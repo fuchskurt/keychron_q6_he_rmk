@@ -5,7 +5,6 @@ use embassy_stm32::{
 };
 use embassy_time::{Duration, Timer};
 use embedded_hal_async::i2c::Operation;
-use q6_core::bytes::be_bytes_u16;
 
 /// 7-bit I²C device address (A0 = A1 = A2 = GND).
 const DEVICE_ADDR: u8 = 0x51;
@@ -122,7 +121,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         if let Err(error) = ready {
             return Err(error);
         }
-        self.i2c.write_read(DEVICE_ADDR, &be_bytes_u16(addr), buf).await
+        self.i2c.write_read(DEVICE_ADDR, &addr.to_be_bytes(), buf).await
     }
 
     /// Write `data` starting at 16-bit word address `start_addr`.
@@ -164,7 +163,7 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
     /// Callers must deassert WP before calling and re-assert it afterward.
     /// `chunk` must not cross a page boundary.
     async fn write_page_raw(&mut self, addr: u16, chunk: &[u8]) -> Result<(), Error> {
-        let addr_bytes = be_bytes_u16(addr);
+        let addr_bytes = addr.to_be_bytes();
         let result =
             self.i2c.transaction(DEVICE_ADDR, &mut [Operation::Write(&addr_bytes), Operation::Write(chunk)]).await;
         if result.is_err() {
