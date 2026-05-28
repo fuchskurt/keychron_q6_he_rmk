@@ -3,61 +3,29 @@
 //! Sets the required linker arguments for the Cortex-M4 target and gates
 //! the firmware build on the q6-core host tests passing.
 //!
-//! Errors propagate as a typed [`BuildError`] returned from `main`, so
-//! cargo prints them to stderr and exits non-zero on its own — no
-//! `panic!` or `expect` involved.
-#![expect(
-    clippy::question_mark_used,
-    clippy::missing_trait_methods,
-    clippy::pattern_type_mismatch,
-    reason = "`?` is the idiomatic alternative to expect/panic the project requires; the deprecated `Error::{description, cause}` and internal `provide`/`type_id` defaults must NOT be overridden; `pattern_type_mismatch` contradicts `ref_patterns` for non-Copy enum variants (cannot satisfy both)"
-)]
+//! Errors propagate as a tag-only [`BuildError`] returned from `main`,
+//! with the underlying detail (env-var error, OS error, failing test
+//! output) emitted via `cargo:warning=` lines beforehand. Rust's
+//! runtime prints the `Debug` tag to stderr and exits non-zero — no
+//! `panic!`, no `expect`, no `Display`/`Error` impls (the latter
+//! would force overriding deprecated `Error` defaults or matching
+//! patterns that conflict with `clippy::ref_patterns`).
 
-use core::error::Error;
-use core::fmt;
-use std::env::{VarError, var, var_os};
-use std::io;
+use std::env::{var, var_os};
 use std::process::Command;
 
-/// Errors the build script surfaces back to cargo.
-///
-/// Variants are listed alphabetically (per `clippy::arbitrary_source_item_ordering`).
+/// Tag returned from `main` to abort the firmware build. The actionable
+/// detail (env var name, underlying `io::Error`, failing test output) is
+/// emitted as `cargo:warning=` lines before the tag is returned, so the
+/// Debug-printed tag on stderr is just a short identifier.
 #[derive(Debug)]
 enum BuildError {
-    /// Cargo did not set an env var it is contractually required to set.
-    MissingCargoEnv {
-        /// Name of the missing env var, e.g. `"CARGO_MANIFEST_DIR"`.
-        name:   &'static str,
-        /// Underlying [`VarError`] (`NotPresent` or `NotUnicode`).
-        source: VarError,
-    },
+    /// A required cargo env var was not set.
+    MissingCargoEnv,
     /// The prerequisite test suite ran to completion but reported failures.
     Q6CoreTestsFailed,
-    /// Spawning `cargo test` failed at the OS level (binary not on `PATH`,
-    /// fork/exec failed, etc.).
-    SpawnCargoTest(io::Error),
-}
-
-impl fmt::Display for BuildError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingCargoEnv { name, .. } => write!(f, "cargo did not set the `{name}` environment variable"),
-            Self::Q6CoreTestsFailed => {
-                write!(f, "q6-core host tests failed; firmware build aborted. Set SKIP_Q6_CORE_TESTS=1 to bypass.")
-            },
-            Self::SpawnCargoTest(err) => write!(f, "failed to spawn `cargo test` for q6-core: {err}"),
-        }
-    }
-}
-
-impl Error for BuildError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::MissingCargoEnv { source, .. } => Some(source),
-            Self::Q6CoreTestsFailed => None,
-            Self::SpawnCargoTest(err) => Some(err),
-        }
-    }
+    /// Spawning `cargo test` failed at the OS level.
+    SpawnCargoTest,
 }
 
 /// Entry point for the build script.
@@ -96,9 +64,20 @@ fn run_q6_core_tests() -> Result<(), BuildError> {
     println!("cargo:rerun-if-changed=q6-core/tests");
     println!("cargo:rerun-if-changed=q6-core/Cargo.toml");
 
-    let manifest_dir = var("CARGO_MANIFEST_DIR")
-        .map_err(|source| BuildError::MissingCargoEnv { name: "CARGO_MANIFEST_DIR", source })?;
-    let host_triple = var("HOST").map_err(|source| BuildError::MissingCargoEnv { name: "HOST", source })?;
+    let manifest_dir = match var("CARGO_MANIFEST_DIR") {
+        Ok(value) => value,
+        Err(error) => {
+            println!("cargo:warning=cargo did not set CARGO_MANIFEST_DIR ({error})");
+            return Err(BuildError::MissingCargoEnv);
+        },
+    };
+    let host_triple = match var("HOST") {
+        Ok(value) => value,
+        Err(error) => {
+            println!("cargo:warning=cargo did not set HOST ({error})");
+            return Err(BuildError::MissingCargoEnv);
+        },
+    };
     let cargo = var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
 
     let q6_core_manifest = format!("{manifest_dir}/q6-core/Cargo.toml");
@@ -106,7 +85,7 @@ fn run_q6_core_tests() -> Result<(), BuildError> {
     // in-flight firmware build's locks.
     let test_target_dir = format!("{manifest_dir}/target/q6-core-host-tests");
 
-    let output = Command::new(&cargo)
+    let spawn_result = Command::new(&cargo)
         .args([
             "test",
             "-Zbuild-std=std",
@@ -128,8 +107,14 @@ fn run_q6_core_tests() -> Result<(), BuildError> {
         // host-target test build.
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_BUILD_TARGET")
-        .output()
-        .map_err(BuildError::SpawnCargoTest)?;
+        .output();
+    let output = match spawn_result {
+        Ok(value) => value,
+        Err(error) => {
+            println!("cargo:warning=failed to spawn `cargo test` for q6-core ({error})");
+            return Err(BuildError::SpawnCargoTest);
+        },
+    };
 
     if output.status.success() {
         return Ok(());
