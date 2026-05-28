@@ -340,6 +340,7 @@ impl KeyEntry {
     /// `act_threshold` re-fires cleanly at the actuation floor without
     /// requiring an extra `sensitivity_press` delta above it.
     #[inline]
+    #[optimize(speed)]
     pub fn step_rapid_trigger(
         &mut self,
         new_travel: u8,
@@ -362,6 +363,7 @@ impl KeyEntry {
     /// Convert a raw ADC reading into a travel value by delegating to
     /// [`q6_core::calib::travel_from`].
     #[inline]
+    #[optimize(speed)]
     pub const fn travel_from(&self, raw: u16) -> Option<u8> {
         calib::travel_from(raw, self.lut_zero, self.inv_scale, self.calib_used)
     }

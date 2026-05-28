@@ -8,7 +8,7 @@ use super::{
     full_from_min,
     travel_from,
 };
-use crate::lut::{VALID_RAW_MAX, VALID_RAW_MIN};
+use crate::lut::{self, VALID_RAW_MAX, VALID_RAW_MIN};
 
 const TYPICAL_FULL_RANGE: u16 = 900;
 
@@ -144,4 +144,55 @@ fn const_evaluable() {
     const CALIB: super::Calib = compute(REF_ZERO_TRAVEL, REF_ZERO_TRAVEL.saturating_sub(TYPICAL_FULL_RANGE));
     const TRAVEL: Option<u8> = travel_from(REF_ZERO_TRAVEL, CALIB.lut_zero, CALIB.inv_scale, CALIB.calib_used);
     assert_eq!(TRAVEL, Some(0));
+}
+
+#[test]
+fn travel_from_round_trips_endpoints_across_range_of_calibrations() {
+    // For any plausible (zero, full) pair, the calibration must round-trip
+    // both endpoints: zero → 0 travel, full → FULL_TRAVEL_UNIT travel.
+    let full_ranges: [u16; 4] = [200, 500, 900, 1500];
+    let zero_offsets: [i16; 5] = [-200, -50, 0, 50, 200];
+    for full_range in full_ranges {
+        for zero_offset in zero_offsets {
+            let zero = REF_ZERO_TRAVEL.saturating_add_signed(zero_offset);
+            let full = zero.saturating_sub(full_range);
+            if full < lut::VALID_RAW_MIN {
+                continue;
+            }
+            let calib = compute(zero, full);
+            if !calib.calib_used {
+                continue;
+            }
+            let at_zero = travel_from(zero, calib.lut_zero, calib.inv_scale, calib.calib_used);
+            let at_full = travel_from(full, calib.lut_zero, calib.inv_scale, calib.calib_used);
+            assert_eq!(at_zero, Some(0), "zero={zero} full={full}");
+            assert_eq!(at_full, Some(FULL_TRAVEL_UNIT), "zero={zero} full={full}");
+        }
+    }
+}
+
+#[test]
+fn travel_from_in_bottom_jitter_band_pins_to_full_travel() {
+    // A reading at observed_min (i.e. `full - BOTTOM_JITTER`) must produce
+    // FULL_TRAVEL_UNIT travel rather than overshooting, since `full_from_min`
+    // lifts the stored floor by exactly that amount.
+    let observed_min = REF_ZERO_TRAVEL.saturating_sub(TYPICAL_FULL_RANGE);
+    let stored_full = full_from_min(REF_ZERO_TRAVEL, observed_min);
+    let calib = compute(REF_ZERO_TRAVEL, stored_full);
+    // The deeper-than-stored reading must still clamp to FULL_TRAVEL_UNIT.
+    let travel = travel_from(observed_min, calib.lut_zero, calib.inv_scale, calib.calib_used);
+    assert_eq!(travel, Some(FULL_TRAVEL_UNIT));
+}
+
+#[test]
+fn full_from_min_with_default_full_range_input_matches_calibrated_full() {
+    // `full_from_min(zero, zero - DEFAULT_FULL_RANGE)` is the fallback used
+    // when a key was never pressed during first-boot calibration. The
+    // computed value plus a fresh zero must yield a calib_used=true entry.
+    const DEFAULT_FULL_RANGE: u16 = 900;
+    let zero = REF_ZERO_TRAVEL;
+    let fallback_full = full_from_min(zero, zero.saturating_sub(DEFAULT_FULL_RANGE));
+    let calib = compute(zero, fallback_full);
+    assert!(calib.calib_used);
+    assert!(calib.inv_scale > 0);
 }

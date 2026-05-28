@@ -145,3 +145,82 @@ fn small_dip_within_release_band_keeps_press_and_preserves_peak() {
     // The peak (50) is the max(50, 48); a small dip does not lower it.
     assert_eq!(extremum, 50);
 }
+
+#[test]
+fn zero_sensitivity_press_fires_at_any_rise_past_actuation() {
+    // With sensitivity_press = 0 the only press constraint is the actuation
+    // threshold; any reading at or above it from a sub-actuation state fires.
+    let (mut pressed, mut extremum) = (false, u8::MAX);
+    step(&mut pressed, &mut extremum, 0, ACT, 0, RELEASE_SENS, TROUGH_FLOOR);
+    let press = step(&mut pressed, &mut extremum, ACT, ACT, 0, RELEASE_SENS, TROUGH_FLOOR);
+    assert_eq!(press, Some(true));
+}
+
+#[test]
+fn zero_sensitivity_release_fires_on_any_drop_below_peak() {
+    // With sensitivity_release = 0, while pressed, any travel strictly
+    // below the peak triggers a release.
+    let (mut pressed, mut extremum) = (false, u8::MAX);
+    run(&mut pressed, &mut extremum, &[0, 30, 50]);
+    let release = step(&mut pressed, &mut extremum, 49, ACT, PRESS_SENS, 0, TROUGH_FLOOR);
+    assert_eq!(release, Some(false));
+}
+
+#[test]
+fn act_threshold_above_full_travel_unit_never_fires_press() {
+    // A keyboard caller sets act_threshold within the quantised travel range
+    // (0..=FULL_TRAVEL_UNIT=40); raising it above the realistic range stops
+    // any press from firing.
+    let (mut pressed, mut extremum) = (false, u8::MAX);
+    for travel in [0_u8, 10, 20, 30, 40] {
+        let result = step(&mut pressed, &mut extremum, travel, 50, PRESS_SENS, RELEASE_SENS, TROUGH_FLOOR);
+        assert_eq!(result, None);
+        assert!(!pressed);
+    }
+}
+
+#[test]
+fn act_threshold_zero_fires_on_first_above_extremum_plus_press_sens() {
+    // act_threshold = 0 disables the actuation floor; only the rapid-trigger
+    // delta (`extremum + sensitivity_press`) gates a press.
+    let (mut pressed, mut extremum) = (false, u8::MAX);
+    // Settle the trough at 5.
+    step(&mut pressed, &mut extremum, 5, 0, PRESS_SENS, RELEASE_SENS, TROUGH_FLOOR);
+    assert_eq!(extremum, 5);
+    // Press fires at trough + sensitivity_press = 10.
+    let press = step(&mut pressed, &mut extremum, 10, 0, PRESS_SENS, RELEASE_SENS, TROUGH_FLOOR);
+    assert_eq!(press, Some(true));
+}
+
+#[test]
+fn full_press_release_cycle_round_trips_state() {
+    // A full press → hold → release cycle ends in the same pressed=false
+    // state it started in, but with extremum reset to the last travel value
+    // seen at the release transition (not back to u8::MAX).
+    let (mut pressed, mut extremum) = (false, u8::MAX);
+    // Settle the trough at the floor so the first crossing fires a press.
+    run(&mut pressed, &mut extremum, &[0]);
+    let press = step(&mut pressed, &mut extremum, 30, ACT, PRESS_SENS, RELEASE_SENS, TROUGH_FLOOR);
+    assert_eq!(press, Some(true));
+    step(&mut pressed, &mut extremum, 40, ACT, PRESS_SENS, RELEASE_SENS, TROUGH_FLOOR);
+    step(&mut pressed, &mut extremum, 38, ACT, PRESS_SENS, RELEASE_SENS, TROUGH_FLOOR);
+    let release = step(&mut pressed, &mut extremum, 0, ACT, PRESS_SENS, RELEASE_SENS, TROUGH_FLOOR);
+    assert_eq!(release, Some(false));
+    assert!(!pressed);
+    // Extremum was reset on the release transition.
+    assert_eq!(extremum, 0);
+}
+
+#[test]
+fn double_tap_emits_two_distinct_press_events() {
+    // The release transition resets `extremum` to the current travel value
+    // (here 0), so the second tap fires from the same baseline as the first.
+    let (mut pressed, mut extremum) = (false, u8::MAX);
+    run(&mut pressed, &mut extremum, &[0]);
+    let first = step(&mut pressed, &mut extremum, 30, ACT, PRESS_SENS, RELEASE_SENS, TROUGH_FLOOR);
+    assert_eq!(first, Some(true));
+    let release = step(&mut pressed, &mut extremum, 0, ACT, PRESS_SENS, RELEASE_SENS, TROUGH_FLOOR);
+    assert_eq!(release, Some(false));
+    let second = step(&mut pressed, &mut extremum, 30, ACT, PRESS_SENS, RELEASE_SENS, TROUGH_FLOOR);
+    assert_eq!(second, Some(true));
+}
