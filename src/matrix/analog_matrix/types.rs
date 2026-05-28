@@ -240,7 +240,7 @@ impl KeyEntry {
     /// readings.
     ///
     /// Updates `inv_scale`, `lut_zero`, `calib_zero`, and `calib_used` in
-    /// place by delegating to [`q6_core::calib::compute_calib`].
+    /// place by delegating to [`q6_core::calib::compute`].
     const fn apply_calib(&mut self, zero: u16, full: u16) {
         let result = calib::compute(zero, full);
         self.inv_scale = result.inv_scale;
