@@ -1,0 +1,105 @@
+cargo-features = ["panic-immediate-abort"]
+
+[package]
+name = "keychron-q6-he-rmk"
+version = "1.0.0"
+description = "Keychron Q6 HE keyboard firmware written in Rust using RMK and Embassy"
+repository = "https://github.com/fuchskurt/keychron_q6_he_rmk"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[features]
+ansi_layout = []
+iso_layout = []
+jis_layout = []
+defmt = [
+    "dep:defmt",
+    "dep:defmt-rtt",
+    "embassy-time/defmt",
+    "embassy-stm32/defmt",
+    "embassy-sync/defmt",
+    "embassy-executor/defmt",
+    "embassy-embedded-hal/defmt",
+    "rmk/defmt",
+]
+adc_debug   = ["defmt"]
+bench = ["defmt"]
+
+[dependencies]
+cortex-m = { version = "0", features = ["critical-section-single-core", "inline-asm", "linker-plugin-lto"] }
+cortex-m-rt = { version = "0", features = ["device", "zero-init-ram"] }
+embassy-time = { features = ["tick-hz-1_000_000"], git = "https://github.com/embassy-rs/embassy.git" }
+embassy-stm32 = { features = ["stm32f401rc", "memory-x", "time-driver-tim5", "time", "low-power", "exti", "unstable-pac", "rt"], git = "https://github.com/embassy-rs/embassy.git" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git"}
+embassy-executor = { features = ["platform-cortex-m", "executor-thread", "nightly"], git = "https://github.com/embassy-rs/embassy.git" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
+embedded-storage-async = "0"
+rmk = { default-features = false, features = ["async_matrix", "rynk", "bulk_transfer", "storage"], git = "https://github.com/fuchskurt/rmk.git", branch = "rynk"}
+static_cell = "2"
+snled27351-driver = { git = "https://github.com/fuchskurt/snled27351_driver.git", features = ["spi"] }
+embedded-hal-async = "1"
+cfg-if = "1"
+q6-core = { path = "q6-core" }
+defmt     = { version = "1", optional = true }
+defmt-rtt = { version = "1", optional = true, features = ["disable-blocking-mode"] }
+
+[patch.crates-io]
+embassy-time = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy.git" }
+
+[workspace]
+members = [".", "q6-core"]
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = 1 }
+pedantic = { level = "deny", priority = 1 }
+restriction = { level = "deny", priority = 1 }
+nursery = { level = "deny", priority = 1 }
+blanket_clippy_restriction_lints = { level = "allow", priority = 2 }
+big_endian_bytes = { level = "allow", priority = 2 }
+future_not_send = { level = "allow", priority = 2 }
+implicit_return = { level = "allow", priority = 2 }
+little_endian_bytes = { level = "allow", priority = 2 }
+separated_literal_suffix = { level = "allow", priority = 2 }
+single_call_fn = { level = "allow", priority = 2 }
+self_named_module_files = { level = "allow", priority = 2 }
+pub_with_shorthand = { level = "allow", priority = 2 }
+pub_use = { level = "allow", priority = 2 }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "keychron-q6-he-rmk"
+test = false
+bench = false
+
+[profile.release]
+codegen-units = 1
+debug = false
+strip = "symbols"
+opt-level = "s"
+overflow-checks = false
+lto = "fat"
+panic = "immediate-abort"
+
+[profile.firmware-debug]
+inherits = "release"
+debug = 2
+strip = "none"
+opt-level = "z"
+lto = "fat"
+
+[profile.release.package."*"]
+codegen-units = 1

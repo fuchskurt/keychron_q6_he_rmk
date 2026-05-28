@@ -1,0 +1,78 @@
+#![expect(clippy::min_ident_chars, reason = "rmk macro names a!/k! are fixed upstream and cannot be renamed")]
+
+use crate::layout::COL;
+pub use crate::layout::shared::layout::{MAC_ROW5, ROW0, ROW1, WIN_ROW5};
+use rmk::{a as act, k as key, types::action::KeyAction};
+
+/// Default key actions for matrix row 2 (ISO).
+pub const ROW2: [KeyAction; COL] = [
+    key!(Tab),
+    key!(Q),
+    key!(W),
+    key!(E),
+    key!(R),
+    key!(T),
+    key!(Y),
+    key!(U),
+    key!(I),
+    key!(O),
+    key!(P),
+    key!(LeftBracket),
+    key!(RightBracket),
+    act!(No),
+    key!(Delete),
+    key!(End),
+    key!(PageDown),
+    key!(Kp7),
+    key!(Kp8),
+    key!(Kp9),
+    key!(KpPlus),
+];
+/// Default key actions for matrix row 3 (ISO).
+pub const ROW3: [KeyAction; COL] = [
+    key!(CapsLock),
+    key!(A),
+    key!(S),
+    key!(D),
+    key!(F),
+    key!(G),
+    key!(H),
+    key!(J),
+    key!(K),
+    key!(L),
+    key!(Semicolon),
+    key!(Quote),
+    key!(NonusHash),
+    key!(Enter),
+    act!(No),
+    act!(No),
+    act!(No),
+    key!(Kp4),
+    key!(Kp5),
+    key!(Kp6),
+    act!(No),
+];
+/// Default key actions for matrix row 4 (ISO).
+pub const ROW4: [KeyAction; COL] = [
+    key!(LShift),
+    key!(NonusBackslash),
+    key!(Z),
+    key!(X),
+    key!(C),
+    key!(V),
+    key!(B),
+    key!(N),
+    key!(M),
+    key!(Comma),
+    key!(Dot),
+    key!(Slash),
+    act!(No),
+    key!(RShift),
+    act!(No),
+    key!(Up),
+    act!(No),
+    key!(Kp1),
+    key!(Kp2),
+    key!(Kp3),
+    key!(KpEnter),
+];
