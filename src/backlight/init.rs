@@ -2,11 +2,11 @@
 
 use crate::{
     backlight::{
-        gamma_correction::gamma_correction,
         processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
     },
     layout::LED_LAYOUT,
 };
+use q6_core::gamma;
 use CalibPhase::{AllAccepted, Done, Full, Zero};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_stm32::{
@@ -382,9 +382,9 @@ async fn brightness_ramp(
 #[inline]
 const fn correct(red: u8, green: u8, blue: u8, brightness_percent: u8) -> (u8, u8, u8) {
     (
-        gamma_correction(scale(red, brightness_percent)),
-        gamma_correction(scale(green, brightness_percent)),
-        gamma_correction(scale(blue, brightness_percent)),
+        gamma::correct(scale(red, brightness_percent)),
+        gamma::correct(scale(green, brightness_percent)),
+        gamma::correct(scale(blue, brightness_percent)),
     )
 }
 

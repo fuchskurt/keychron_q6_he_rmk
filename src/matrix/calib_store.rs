@@ -4,7 +4,7 @@ use crate::{
 };
 use core::mem::size_of;
 use embassy_stm32::crc::Crc;
-use q6_core::bytes::{le_bytes_u16, le_bytes_u32, le_u16, le_u32, read_array};
+use q6_core::bytes::read_array;
 
 /// Pre-computed buffer length for the HE matrix.
 pub const CALIB_BUF_LEN: usize = total_len(ROW, COL);
@@ -30,14 +30,14 @@ fn crc32_of(crc: &mut Crc<'_>, data: &[u8]) -> u32 {
     crc.reset();
     let (chunks, remainder) = data.as_chunks::<4>();
     for &chunk in chunks {
-        crc.feed_word(le_u32(chunk));
+        crc.feed_word(u32::from_le_bytes(chunk));
     }
     if !remainder.is_empty() {
         let mut last = [0_u8; 4];
         if let Some(dst) = last.get_mut(..remainder.len()) {
             dst.copy_from_slice(remainder);
         }
-        crc.feed_word(le_u32(last));
+        crc.feed_word(u32::from_le_bytes(last));
     }
     crc.read()
 }
@@ -57,7 +57,7 @@ pub fn serialize<const ROW: usize, const COL: usize>(
 ) {
     // Write magic number, 4 bytes little-endian.
     if let Some(dst) = buf.get_mut(0..size_of::<u32>()) {
-        dst.copy_from_slice(&le_bytes_u32(MAGIC));
+        dst.copy_from_slice(&MAGIC.to_le_bytes());
     }
     // Write version byte.
     if let Some(version_byte) = buf.get_mut(size_of::<u32>()) {
@@ -68,7 +68,7 @@ pub fn serialize<const ROW: usize, const COL: usize>(
         for key in key_col {
             let end = pos.saturating_add(ENTRY_LEN);
             if let Some(dst) = buf.get_mut(pos..end) {
-                dst.copy_from_slice(&le_bytes_u16(key.entry_full));
+                dst.copy_from_slice(&key.entry_full.to_le_bytes());
             }
             pos = end;
         }
@@ -78,7 +78,7 @@ pub fn serialize<const ROW: usize, const COL: usize>(
     let crc_end = crc_start.saturating_add(CRC_LEN);
     let checksum = buf.get(..crc_start).map_or(0, |data| crc32_of(crc, data));
     if let Some(dst) = buf.get_mut(crc_start..crc_end) {
-        dst.copy_from_slice(&le_bytes_u32(checksum));
+        dst.copy_from_slice(&checksum.to_le_bytes());
     }
 }
 
@@ -100,7 +100,7 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(
     // Validate magic number.
     let magic_end = size_of::<u32>();
     let Some(magic_bytes) = read_array::<4>(buf, 0, magic_end) else { return false };
-    if le_u32(magic_bytes) != MAGIC {
+    if u32::from_le_bytes(magic_bytes) != MAGIC {
         return false;
     }
     // Validate version byte.
@@ -113,7 +113,7 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(
     let data_end = crc_end.saturating_sub(CRC_LEN);
     // None must not be silently replaced with 0 (0 is a valid CRC value).
     let Some(stored_crc_bytes) = read_array::<4>(buf, data_end, crc_end) else { return false };
-    let stored_crc = le_u32(stored_crc_bytes);
+    let stored_crc = u32::from_le_bytes(stored_crc_bytes);
     let computed_crc = buf.get(..data_end).map_or(0, |data| crc32_of(crc, data));
     if computed_crc != stored_crc {
         return false;
@@ -124,7 +124,7 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(
         for key in key_col.iter_mut() {
             let end = pos.saturating_add(ENTRY_LEN);
             let Some(fb) = read_array::<2>(buf, pos, end) else { return false };
-            key.entry_full = le_u16(fb);
+            key.entry_full = u16::from_le_bytes(fb);
             pos = end;
         }
     }

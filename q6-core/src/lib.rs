@@ -12,6 +12,7 @@
     const_index,
     const_option_ops,
     const_result_trait_fn,
+    likely_unlikely,
     optimize_attribute
 )]
 // The test harness needs `std`; the library itself stays `no_std`.
@@ -19,5 +20,8 @@
 extern crate std;
 
 pub mod bytes;
+pub mod calib;
+pub mod gamma;
 pub mod lut;
 pub mod math;
+pub mod rapid_trigger;

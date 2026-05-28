@@ -67,8 +67,10 @@ pedantic = { level = "deny", priority = 1 }
 restriction = { level = "deny", priority = 1 }
 nursery = { level = "deny", priority = 1 }
 blanket_clippy_restriction_lints = { level = "allow", priority = 2 }
+big_endian_bytes = { level = "allow", priority = 2 }
 future_not_send = { level = "allow", priority = 2 }
 implicit_return = { level = "allow", priority = 2 }
+little_endian_bytes = { level = "allow", priority = 2 }
 separated_literal_suffix = { level = "allow", priority = 2 }
 single_call_fn = { level = "allow", priority = 2 }
 self_named_module_files = { level = "allow", priority = 2 }
