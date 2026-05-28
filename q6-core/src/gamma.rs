@@ -1,4 +1,9 @@
+//! Gamma 2.2 correction lookup for 8-bit LED PWM values.
+
 use core::hint::cold_path;
+
+#[cfg(test)]
+mod tests;
 
 /// Gamma 2.2 correction lookup table for 8-bit LED PWM values.
 ///
@@ -21,8 +26,9 @@ const GAMMA_LUT: [u8; 256] = [
 ///
 /// Looks up `value` in [`GAMMA_LUT`], translating a linear intensity into the
 /// PWM value needed to produce a perceptually proportional brightness.
+#[must_use]
 #[inline]
-pub const fn gamma_correction(value: u8) -> u8 {
+pub const fn correct(value: u8) -> u8 {
     if let Some(&temp_value) = GAMMA_LUT.get(usize::from(value)) {
         temp_value
     } else {

@@ -1,8 +1,9 @@
-use core::hint::{cold_path, unlikely};
+use core::hint::cold_path;
 use embassy_stm32::adc::{BasicAdcRegs, BasicInstance};
 use embassy_time::{Duration, Instant};
+pub use q6_core::calib::{CALIB_ZERO_TOLERANCE, MIN_USEFUL_FULL_RANGE, REF_ZERO_TRAVEL, full_from_min};
 pub use q6_core::lut::{VALID_RAW_MAX, VALID_RAW_MIN};
-use q6_core::{lut, math::ceil_div_or_zero};
+use q6_core::{calib, rapid_trigger};
 
 /// Number of confident press/release cycles required before the
 /// auto-calibrator updates the live calibration data for a key.
@@ -61,23 +62,6 @@ pub const AUTO_CALIB_ZERO_JITTER: u16 = 50;
 /// constants and avoiding unnecessary recomputation.
 pub const AUTO_CALIB_ZERO_UPDATE_THRESHOLD: u16 = 10;
 
-/// ADC counts added to the measured full-travel minimum before storing it as
-/// the calibration floor.
-///
-/// Without this offset the calibration floor sits at the true physical bottom.
-/// ADC jitter that lifts the key slightly off the bottom raises the raw ADC
-/// reading by a few counts, which causes `travel_from` to return a value just
-/// below [`FULL_TRAVEL_UNIT`]. With `rt_sensitivity_release` at 1 that dip
-/// satisfies the rapid-trigger release condition, firing a spurious release
-/// while the key is still physically held down.
-///
-/// Raising the stored floor [`BOTTOM_JITTER`] ADC counts above the physical
-/// minimum ensures any reading in that band produces travel
-/// ≥ [`FULL_TRAVEL_UNIT`], which clamps to [`FULL_TRAVEL_UNIT`]. Bottom
-/// jitter therefore leaves travel pinned at the maximum while the key is
-/// bottomed out, preventing phantom RT releases.
-pub const BOTTOM_JITTER: u16 = 80;
-
 /// Duration a key must remain continuously pressed past
 /// [`CALIB_PRESS_THRESHOLD`] before it is accepted as a valid full-travel
 /// sample and its LED turns green.
@@ -96,32 +80,8 @@ pub const CALIB_PRESS_THRESHOLD: u16 = 450;
 /// physical bottom rather than the first crossing of [`CALIB_PRESS_THRESHOLD`].
 pub const CALIB_SETTLE_AFTER_ALL_DONE: Duration = Duration::from_millis(2000);
 
-/// Maximum acceptable distance from [`REF_ZERO_TRAVEL`] for a key to be
-/// considered to have a valid hall-effect sensor at its position.
-pub const CALIB_ZERO_TOLERANCE: u16 = 500;
-
 /// Default full-range calibration delta used when no better value is available.
 pub const DEFAULT_FULL_RANGE: u16 = 900;
-
-/// Precomputed numerator for the Q16.16 `inv_scale` field.
-pub const FULL_TRAVEL_SCALED: u32 = u32::from(FULL_TRAVEL_UNIT).saturating_mul(INV_SCALE_ONE);
-
-/// Expected travel distance in physical units, represents 4.0 mm.
-pub const FULL_TRAVEL_UNIT: u8 = 40;
-
-/// Number of bits in the Q16.16 representation of [`KeyEntry::inv_scale`].
-pub const INV_SCALE_FRAC_BITS: u32 = 16;
-/// The value of `1.0` in the Q16.16 format used by [`KeyEntry::inv_scale`].
-pub const INV_SCALE_ONE: u32 = 1_u32.checked_shl(INV_SCALE_FRAC_BITS).expect("INV_SCALE_FRAC_BITS < u32::BITS");
-
-/// Minimum ADC delta (zero - full) required to treat a full-travel reading as
-/// usable. Guards only against completely flat or absent sensor readings;
-/// intentionally small so any genuine press is accepted.
-pub const MIN_USEFUL_FULL_RANGE: u16 = 100;
-
-/// Reference zero-travel ADC value used for calibration and used-sensor
-/// validation.
-pub const REF_ZERO_TRAVEL: u16 = 3121;
 
 /// ADC counts subtracted from the averaged zero-travel reading before storing
 /// it as the calibration zero point.
@@ -280,17 +240,13 @@ impl KeyEntry {
     /// readings.
     ///
     /// Updates `inv_scale`, `lut_zero`, `calib_zero`, and `calib_used` in
-    /// place. Uses ceiling division so the scaled travel at exactly the
-    /// full-travel LUT delta reaches [`FULL_TRAVEL_UNIT`] after the
-    /// right-shift rather than [`FULL_TRAVEL_UNIT`] - 1.
+    /// place by delegating to [`q6_core::calib::compute_calib`].
     const fn apply_calib(&mut self, zero: u16, full: u16) {
-        let zero_lut = lut::lookup(zero);
-        let full_lut = lut::lookup(full);
-        let delta = u32::from(full_lut.saturating_sub(zero_lut));
-        self.inv_scale = ceil_div_or_zero(FULL_TRAVEL_SCALED, delta);
-        self.lut_zero = zero_lut;
-        self.calib_zero = zero;
-        self.calib_used = zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE;
+        let result = calib::compute(zero, full);
+        self.inv_scale = result.inv_scale;
+        self.lut_zero = result.lut_zero;
+        self.calib_zero = result.calib_zero;
+        self.calib_used = result.calib_used;
     }
 
     /// Recompute calibration from a freshly measured `zero`-travel reading
@@ -384,7 +340,6 @@ impl KeyEntry {
     /// `act_threshold` re-fires cleanly at the actuation floor without
     /// requiring an extra `sensitivity_press` delta above it.
     #[inline]
-    #[optimize(speed)]
     pub fn step_rapid_trigger(
         &mut self,
         new_travel: u8,
@@ -393,56 +348,22 @@ impl KeyEntry {
         sensitivity_release: u8,
         trough_floor: u8,
     ) -> Option<bool> {
-        let below_act = new_travel < act_threshold;
-        let now_pressed = if self.pressed {
-            // Track the peak while held; release when travel drops at least
-            // `sensitivity_release` below it. The actuation floor is a hard
-            // lower bound that forces an immediate release.
-            self.extremum = self.extremum.max(new_travel);
-            if below_act { false } else { new_travel > self.extremum.saturating_sub(sensitivity_release) }
-        } else {
-            // Track the trough while released; re-press when travel climbs at
-            // least `sensitivity_press` above it AND exceeds the actuation
-            // floor. The trough is not required to have dipped below the floor
-            // first, so a finger hovering mid-travel after an RT-release can
-            // re-fire immediately.
-            self.extremum = self.extremum.min(new_travel);
-            if below_act {
-                self.extremum = self.extremum.min(trough_floor);
-                false
-            } else {
-                new_travel >= self.extremum.saturating_add(sensitivity_press)
-            }
-        };
-        let changed = now_pressed != self.pressed;
-        self.pressed = now_pressed;
-        if changed {
-            // Reset extremum so the next direction starts fresh from the
-            // transition point.
-            self.extremum = new_travel;
-        }
-        changed.then_some(now_pressed)
+        rapid_trigger::step(
+            &mut self.pressed,
+            &mut self.extremum,
+            new_travel,
+            act_threshold,
+            sensitivity_press,
+            sensitivity_release,
+            trough_floor,
+        )
     }
 
-    /// Convert a raw ADC reading into a travel value.
-    ///
-    /// Returns `None` if the position is uncalibrated or `inv_scale == 0`.
-    /// Otherwise: lookup the per-reading LUT value, subtract the cached
-    /// `lut_zero`, multiply by the Q16.16 `inv_scale`, and right-shift to
-    /// drop the fractional bits. The final clamp to [`FULL_TRAVEL_UNIT`]
-    /// keeps bottom-of-travel jitter pinned at the maximum (see
-    /// [`BOTTOM_JITTER`]).
+    /// Convert a raw ADC reading into a travel value by delegating to
+    /// [`q6_core::calib::travel_from`].
     #[inline]
-    #[optimize(speed)]
     pub const fn travel_from(&self, raw: u16) -> Option<u8> {
-        if unlikely(!self.calib_used || self.inv_scale == 0) {
-            cold_path();
-            return None;
-        }
-        let delta = lut::lookup(raw).saturating_sub(self.lut_zero);
-        let scaled = u32::from(delta).saturating_mul(self.inv_scale);
-        let travel = scaled.wrapping_shr(INV_SCALE_FRAC_BITS).min(u32::from(FULL_TRAVEL_UNIT));
-        Some(u8::try_from(travel).unwrap_or(FULL_TRAVEL_UNIT))
+        calib::travel_from(raw, self.lut_zero, self.inv_scale, self.calib_used)
     }
 
     /// Update calibration if `new_zero` differs meaningfully from the current
@@ -460,21 +381,3 @@ impl KeyEntry {
     }
 }
 
-/// Compute a calibrated full-travel ADC value from a measured minimum and
-/// zero-travel reading.
-///
-/// Adds [`BOTTOM_JITTER`] to the measured minimum so jitter at the physical
-/// bottom does not produce spurious RT releases, caps the result to at least
-/// [`MIN_USEFUL_FULL_RANGE`] below `zero` so a non-trivial travel range
-/// survives, then enforces a [`VALID_RAW_MIN`] floor. Shared by both the
-/// first-boot calibration (with a [`DEFAULT_FULL_RANGE`] fallback for
-/// never-pressed keys) and the runtime auto-calibrator.
-///
-/// Uses `.min(hi).max(lo)` rather than `.clamp(lo, hi)` because the upper
-/// bound can fall below the lower bound for pathological sensor values
-/// (`zero < VALID_RAW_MIN + MIN_USEFUL_FULL_RANGE`); `clamp` panics in that
-/// case, while this ordering safely degrades to [`VALID_RAW_MIN`].
-#[inline]
-pub const fn full_from_min(zero: u16, observed_min: u16) -> u16 {
-    observed_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE)).max(VALID_RAW_MIN)
-}
