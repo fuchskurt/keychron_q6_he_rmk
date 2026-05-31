@@ -32,35 +32,65 @@ use embassy_stm32::{
 use rmk::core_traits::Runnable;
 pub use types::HallCfg;
 
+/// Supplies the per-row ADC channels for a single sequence read.
+///
+/// The current embassy ADC API exposes channels only as transient
+/// [`BorrowedAdcChannel`] values produced by `AdcChannel::reborrow_adc` on an
+/// *owned* pin. The previously available owned, type-erased channel
+/// (`AnyAdcChannel`, which itself implemented `AdcChannel`) was removed
+/// upstream, so a `BorrowedAdcChannel` can no longer be stored in a struct and
+/// re-borrowed with a shorter lifetime — it borrows its pin for as long as it
+/// lives and has no public way to shorten that borrow.
+///
+/// Implementors therefore own the concrete row pins (which do implement
+/// `AdcChannel`) and re-borrow them fresh on every call. This keeps
+/// [`AnalogHallMatrix`] generic over the board's pin set while matching the
+/// borrow-at-the-call-site contract the new API requires — no `unsafe` or
+/// lifetime transmutation needed.
+pub trait RowChannels<ADC, const ROW: usize>
+where
+    ADC: Instance<Regs = adc::Adc> + BasicInstance,
+{
+    /// Re-borrow every row pin into a fresh [`BorrowedAdcChannel`] for one
+    /// [`ConfiguredSequence`] construction. The returned channels borrow `self`
+    /// only for the duration of the sequence build, after which the pins are
+    /// free to be re-borrowed again.
+    fn reborrow_channels(&mut self) -> [BorrowedAdcChannel<'_, ADC>; ROW];
+}
+
 /// ADC-related peripherals grouped to allow split borrows when constructing
 /// a [`embassy_stm32::adc::ConfiguredSequence`].
-pub struct AdcPart<'peripherals, ADC, D, const ROW: usize>
+pub struct AdcPart<'peripherals, ADC, D, R, const ROW: usize>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
+    R: RowChannels<ADC, ROW>,
     AdcSampleTime<ADC>: Clone,
 {
     /// ADC peripheral used for sampling hall sensors.
     pub adc:         Adc<'peripherals, ADC>,
     /// DMA channel used for non-blocking ADC sequence reads.
     pub dma:         Peri<'peripherals, D>,
-    /// ADC channels corresponding to each matrix row.
-    pub row_adc:     [BorrowedAdcChannel<'peripherals, ADC>; ROW],
+    /// Owned row pins, re-borrowed into ADC channels for each sequence read.
+    pub rows:        R,
     /// ADC sample time applied to every channel in the sequence.
     pub sample_time: AdcSampleTime<ADC>,
 }
 
-impl<'peripherals, ADC, D, const ROW: usize> AdcPart<'peripherals, ADC, D, ROW>
+impl<'peripherals, ADC, D, R, const ROW: usize> AdcPart<'peripherals, ADC, D, R, ROW>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
+    R: RowChannels<ADC, ROW>,
     AdcSampleTime<ADC>: Clone,
 {
     /// Create a [`embassy_stm32::adc::ConfiguredSequence`] over all row
     /// channels.
     ///
     /// Programs the ADC sequence registers once; the returned reader can be
-    /// triggered repeatedly without reprogramming.
+    /// triggered repeatedly without reprogramming. The row pins are re-borrowed
+    /// only while the sequence is being built, so the returned reader borrows
+    /// just the ADC and DMA channel.
     fn configured_sequence<'reader, IRQ2>(&'reader mut self, irq: IRQ2) -> ConfiguredSequence<'reader, adc::Adc>
     where
         IRQ2: Binding<D::Interrupt, InterruptHandler<D>> + 'reader + 'peripherals,
@@ -68,7 +98,7 @@ where
         let st = self.sample_time;
         self.adc.configured_sequence(
             self.dma.reborrow(),
-            self.row_adc.iter_mut().map(|ch| (ch.reborrow_adc(), st)),
+            self.rows.reborrow_channels().into_iter().map(|ch| (ch, st)),
             irq,
         )
     }
@@ -76,11 +106,11 @@ where
     /// Create a new [`AdcPart`] from the given peripherals.
     pub const fn new(
         adc: Adc<'peripherals, ADC>,
-        row_adc: [BorrowedAdcChannel<'peripherals, ADC>; ROW],
+        rows: R,
         dma: Peri<'peripherals, D>,
         sample_time: AdcSampleTime<ADC>,
     ) -> Self {
-        Self { adc, dma, row_adc, sample_time }
+        Self { adc, dma, rows, sample_time }
     }
 }
 
@@ -107,16 +137,17 @@ where
 /// During normal operation the auto-calibrator silently refines both zero and
 /// full-travel values on every press/release cycle, keeping the scanner
 /// accurate as the sensor drifts over time without requiring user interaction.
-pub struct AnalogHallMatrix<'peripherals, ADC, D, IRQ, IM, const ROW: usize, const COL: usize>
+pub struct AnalogHallMatrix<'peripherals, ADC, D, R, IRQ, IM, const ROW: usize, const COL: usize>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
+    R: RowChannels<ADC, ROW>,
     IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
     IM: MasterMode,
     AdcSampleTime<ADC>: Clone,
 {
     /// ADC peripherals and channels grouped for split-borrow compatibility.
-    adc_part: AdcPart<'peripherals, ADC, D, ROW>,
+    adc_part: AdcPart<'peripherals, ADC, D, R, ROW>,
     /// Sensing and scanning configuration.
     cfg:      HallCfg,
     /// Column driver used to select the active column via the HC164.
@@ -135,11 +166,12 @@ where
     keys:     [[KeyEntry; ROW]; COL],
 }
 
-impl<'peripherals, ADC, D, IRQ, IM, const ROW: usize, const COL: usize>
-    AnalogHallMatrix<'peripherals, ADC, D, IRQ, IM, ROW, COL>
+impl<'peripherals, ADC, D, R, IRQ, IM, const ROW: usize, const COL: usize>
+    AnalogHallMatrix<'peripherals, ADC, D, R, IRQ, IM, ROW, COL>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
+    R: RowChannels<ADC, ROW>,
     IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
     IM: MasterMode,
     AdcSampleTime<ADC>: Clone,
@@ -149,7 +181,7 @@ where
     /// Calibration is deferred to [`Runnable::run`], which loads from EEPROM
     /// on subsequent boots or runs a full first-boot calibration pass.
     pub fn new(
-        adc_part: AdcPart<'peripherals, ADC, D, ROW>,
+        adc_part: AdcPart<'peripherals, ADC, D, R, ROW>,
         irq: IRQ,
         cols: Hc164Cols<'peripherals>,
         cfg: HallCfg,
@@ -160,11 +192,12 @@ where
     }
 }
 
-impl<'peripherals, ADC, D, IRQ, IM, const ROW: usize, const COL: usize> Runnable
-    for AnalogHallMatrix<'peripherals, ADC, D, IRQ, IM, ROW, COL>
+impl<'peripherals, ADC, D, R, IRQ, IM, const ROW: usize, const COL: usize> Runnable
+    for AnalogHallMatrix<'peripherals, ADC, D, R, IRQ, IM, ROW, COL>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
+    R: RowChannels<ADC, ROW>,
     IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
     IM: MasterMode,
     AdcSampleTime<ADC>: Clone,

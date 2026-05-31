@@ -31,7 +31,7 @@ use crate::{
     flash_wrapper_async::Flash16K,
     layout::{COL, ROW},
     matrix::{
-        analog_matrix::{AdcPart, AnalogHallMatrix, HallCfg},
+        analog_matrix::{AdcPart, AnalogHallMatrix, HallCfg, RowChannels},
         encoder_switch,
         hc164_cols::Hc164Cols,
         layer_toggle::{LayerToggle, MatrixPos},
@@ -40,6 +40,7 @@ use crate::{
 use embassy_executor::{Spawner, main};
 use embassy_stm32::{
     Config,
+    Peri,
     adc::{Adc, AdcChannel as _, BorrowedAdcChannel, SampleTime},
     bind_interrupts,
     crc::Crc,
@@ -98,6 +99,41 @@ bind_interrupts!(struct Irqs {
     I2C3_ER => i2c::ErrorInterruptHandler<peripherals::I2C3>;
 });
 
+/// Owns the six analog row pins of the Q6 HE matrix.
+///
+/// The current embassy ADC API exposes channels only as transient
+/// [`BorrowedAdcChannel`] borrows of an owned pin (the owned, type-erased
+/// `AnyAdcChannel` was removed upstream), so the matrix scanner cannot store
+/// pre-erased channels. This holder keeps the concrete pins alive and
+/// re-borrows them on demand through [`RowChannels`].
+struct Q6RowPins<'peripherals> {
+    /// Row 4 analog input (`ADC1_IN0`).
+    pa0: Peri<'peripherals, peripherals::PA0>,
+    /// Row 5 analog input (`ADC1_IN1`).
+    pa1: Peri<'peripherals, peripherals::PA1>,
+    /// Row 0 analog input (`ADC1_IN10`).
+    pc0: Peri<'peripherals, peripherals::PC0>,
+    /// Row 1 analog input (`ADC1_IN11`).
+    pc1: Peri<'peripherals, peripherals::PC1>,
+    /// Row 2 analog input (`ADC1_IN12`).
+    pc2: Peri<'peripherals, peripherals::PC2>,
+    /// Row 3 analog input (`ADC1_IN13`).
+    pc3: Peri<'peripherals, peripherals::PC3>,
+}
+
+impl RowChannels<ADC1, ROW> for Q6RowPins<'_> {
+    fn reborrow_channels(&mut self) -> [BorrowedAdcChannel<'_, ADC1>; ROW] {
+        [
+            self.pc0.reborrow_adc(),
+            self.pc1.reborrow_adc(),
+            self.pc2.reborrow_adc(),
+            self.pc3.reborrow_adc(),
+            self.pa0.reborrow_adc(),
+            self.pa1.reborrow_adc(),
+        ]
+    }
+}
+
 /// Build the STM32F401 clock and bus configuration used at boot.
 ///
 /// HSE 16 MHz → PLL (÷8 ×168 → 336 MHz VCO) → SYSCLK 84 MHz via /P=4 and
@@ -139,7 +175,7 @@ async fn main(spawner: Spawner) {
     // Tasks run inline via run_all!; the executor's spawner is unused by our
     // code but is part of the signature the `#[main]` macro requires.
     _ = spawner;
-    let mut peripheral = init(stm32_config());
+    let peripheral = init(stm32_config());
     enable_flash_acceleration();
 
     // Usb config
@@ -199,14 +235,17 @@ async fn main(spawner: Spawner) {
     // Apply STM32 AN4073 Option 2 workaround to reduce ADC noise coupling from USB
     // activity on STM32F401.
     SYSCFG.pmc().modify(|w| w.set_adc1dc2(true));
-    let row_channels: [BorrowedAdcChannel<'_, ADC1>; ROW] = [
-        peripheral.PC0.reborrow_adc(),
-        peripheral.PC1.reborrow_adc(),
-        peripheral.PC2.reborrow_adc(),
-        peripheral.PC3.reborrow_adc(),
-        peripheral.PA0.reborrow_adc(),
-        peripheral.PA1.reborrow_adc(),
-    ];
+    // Own the row pins so they can be re-borrowed into fresh ADC channels for
+    // each sequence read. The new embassy ADC API no longer provides an owned,
+    // type-erased channel; channels are transient borrows of their pins.
+    let row_pins = Q6RowPins {
+        pc0: peripheral.PC0,
+        pc1: peripheral.PC1,
+        pc2: peripheral.PC2,
+        pc3: peripheral.PC3,
+        pa0: peripheral.PA0,
+        pa1: peripheral.PA1,
+    };
 
     let i2c_config = {
         let mut cfg = i2c::Config::default();
@@ -228,9 +267,9 @@ async fn main(spawner: Spawner) {
     // Hardware CRC peripheral for EEPROM calibration block checksums.
     let crc = Crc::new(peripheral.CRC);
 
-    let adc_part = AdcPart::new(adc, row_channels, peripheral.DMA2_CH0, SampleTime::Cycles56);
+    let adc_part = AdcPart::new(adc, row_pins, peripheral.DMA2_CH0, SampleTime::Cycles56);
     let mut matrix =
-        AnalogHallMatrix::<_, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom, crc);
+        AnalogHallMatrix::<_, _, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom, crc);
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
     let pin_b = ExtiInput::new(peripheral.PB15, peripheral.EXTI15, Pull::None, Irqs);
