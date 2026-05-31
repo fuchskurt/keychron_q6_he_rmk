@@ -47,11 +47,11 @@ pub const MATRIX_TO_LED: [[Option<u8>; COL]; ROW] =
 
 /// Per-position hall-effect sensor presence map, row-major
 /// `[[bool; COL]; ROW]`. `true` where a physical sensor exists.
-pub const SENSOR_POSITIONS: [[bool; COL]; ROW] =
+const SENSOR_POSITIONS: [[bool; COL]; ROW] =
     [SENSOR_ROW0, SENSOR_ROW1, SENSOR_ROW2, SENSOR_ROW3, SENSOR_ROW4, SENSOR_ROW5];
 
 /// Per-column table of valid sensor positions, built at compile time from
-/// [`SENSOR_POSITIONS`].
+/// `SENSOR_POSITIONS`.
 ///
 /// Only positions where a physical hall-effect sensor is present are stored;
 /// the scan loop iterates exactly these positions and skips all others without
