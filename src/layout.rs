@@ -62,8 +62,7 @@ pub const SENSOR_POSITIONS: [[bool; COL]; ROW] =
 /// then keeps repeated accesses cheap across scan iterations rather than
 /// re-fetching the table from inlined copies at every call site.
 pub static VALID_ROWS_BY_COL: [ColValidKeys; COL] = {
-    const EMPTY_KEY: ValidKey = ValidKey { buf_row: 0, key_row: 0 };
-    const EMPTY_COL: ColValidKeys = ColValidKeys { keys: [EMPTY_KEY; ROW], count: 0 };
+    const EMPTY_COL: ColValidKeys = ColValidKeys { count: 0, rows: [0; ROW] };
 
     let mut result = [EMPTY_COL; COL];
     let mut col = 0_usize;
@@ -83,10 +82,9 @@ pub static VALID_ROWS_BY_COL: [ColValidKeys; COL] = {
 
             if has_sensor {
                 if let Some(col_entry) = result.get_mut(col)
-                    && let Some(slot) = col_entry.keys.get_mut(count)
+                    && let Some(slot) = col_entry.rows.get_mut(count)
                 {
-                    let row_u8 = u8::try_from(row).unwrap_or(u8::MAX);
-                    *slot = ValidKey { buf_row: row_u8, key_row: row_u8 };
+                    *slot = u8::try_from(row).unwrap_or(u8::MAX);
                 }
                 count = count.saturating_add(1);
             }
@@ -100,33 +98,19 @@ pub static VALID_ROWS_BY_COL: [ColValidKeys; COL] = {
     result
 };
 
-/// Precomputed list of valid sensor positions for one HC164 column.
+/// Precomputed list of valid sensor rows for one HC164 column.
 ///
-/// Only the first [`ColValidKeys::count`] entries of [`ColValidKeys::keys`]
+/// Only the first [`ColValidKeys::count`] entries of [`ColValidKeys::rows`]
 /// are populated; the remainder are zeroed placeholders that are never read.
+/// Each row value indexes both the ADC DMA buffer and the key-state matrix:
+/// the ADC channel order matches the matrix row order on this hardware.
 #[derive(Clone, Copy)]
 pub struct ColValidKeys {
-    /// Number of valid entries in [`ColValidKeys::keys`].
+    /// Number of valid entries in [`ColValidKeys::rows`].
     pub count: usize,
-    /// Sensor positions with physical hall-effect sensors present, in
-    /// ascending row order.
-    pub keys:  [ValidKey; ROW],
-}
-
-/// A single valid sensor position within a column, storing both the ADC
-/// buffer index and the key-state matrix index for that sensor.
-///
-/// On this hardware the ADC channel order matches the matrix row order, so
-/// [`ValidKey::buf_row`] and [`ValidKey::key_row`] are always equal. They are
-/// kept separate so the mapping can be adjusted without changing the hot-path
-/// scan logic if the hardware ever diverges.
-#[derive(Clone, Copy)]
-pub struct ValidKey {
-    /// Index into the ADC DMA buffer for this sensor's row channel.
-    pub buf_row: u8,
-    /// Row index into the `[[KeyEntry; ROW]; COL]` key-state array (the
-    /// inner dimension of the column-major matrix).
-    pub key_row: u8,
+    /// Matrix rows with a physical hall-effect sensor present, in ascending
+    /// order.
+    pub rows:  [u8; ROW],
 }
 
 /// Return the default encoder action map for each layer.

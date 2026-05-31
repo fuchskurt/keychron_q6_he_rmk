@@ -4,36 +4,6 @@ use core::hint::{cold_path, unlikely};
 use embassy_stm32::adc::{BasicAdcRegs, BasicInstance};
 use embassy_time::{Duration, Instant};
 
-/// Maximum acceptable distance from [`REF_ZERO_TRAVEL`] for a key to be
-/// considered to have a valid hall-effect sensor at its position.
-pub const CALIB_ZERO_TOLERANCE: u16 = 500;
-
-/// Expected travel distance in physical units; represents 4.0 mm.
-pub const FULL_TRAVEL_UNIT: u8 = 40;
-
-/// Number of fractional bits in the Q16.16 `inv_scale`.
-pub const INV_SCALE_FRAC_BITS: u32 = 16;
-
-/// The value of `1.0` in the Q16.16 format used by `inv_scale`.
-pub const INV_SCALE_ONE: u32 = 1_u32.checked_shl(INV_SCALE_FRAC_BITS).expect("INV_SCALE_FRAC_BITS < u32::BITS");
-
-/// Precomputed numerator for the Q16.16 `inv_scale` field
-/// (`FULL_TRAVEL_UNIT * INV_SCALE_ONE`).
-pub const FULL_TRAVEL_SCALED: u32 = u32::from(FULL_TRAVEL_UNIT).saturating_mul(INV_SCALE_ONE);
-
-/// Reference zero-travel ADC value used for calibration and used-sensor
-/// validation.
-pub const REF_ZERO_TRAVEL: u16 = 3121;
-
-/// ADC counts added to the measured full-travel minimum before storing it as
-/// the calibration floor; see [`full_from_min`].
-pub const BOTTOM_JITTER: u16 = 80;
-
-/// Minimum ADC delta (zero - full) required to treat a full-travel reading as
-/// usable. Guards only against completely flat or absent sensor readings;
-/// intentionally small so any genuine press is accepted.
-pub const MIN_USEFUL_FULL_RANGE: u16 = 100;
-
 /// Number of confident press/release cycles required before the
 /// auto-calibrator updates the live calibration data for a key.
 ///
@@ -91,6 +61,10 @@ pub const AUTO_CALIB_ZERO_JITTER: u16 = 50;
 /// constants and avoiding unnecessary recomputation.
 pub const AUTO_CALIB_ZERO_UPDATE_THRESHOLD: u16 = 10;
 
+/// ADC counts added to the measured full-travel minimum before storing it as
+/// the calibration floor; see [`full_from_min`].
+pub const BOTTOM_JITTER: u16 = 80;
+
 /// Duration a key must remain continuously pressed past
 /// [`CALIB_PRESS_THRESHOLD`] before it is accepted as a valid full-travel
 /// sample and its LED turns green.
@@ -109,8 +83,34 @@ pub const CALIB_PRESS_THRESHOLD: u16 = 450;
 /// physical bottom rather than the first crossing of [`CALIB_PRESS_THRESHOLD`].
 pub const CALIB_SETTLE_AFTER_ALL_DONE: Duration = Duration::from_millis(2000);
 
+/// Maximum acceptable distance from [`REF_ZERO_TRAVEL`] for a key to be
+/// considered to have a valid hall-effect sensor at its position.
+pub const CALIB_ZERO_TOLERANCE: u16 = 500;
+
 /// Default full-range calibration delta used when no better value is available.
 pub const DEFAULT_FULL_RANGE: u16 = 900;
+
+/// Precomputed numerator for the Q16.16 `inv_scale` field
+/// (`FULL_TRAVEL_UNIT * INV_SCALE_ONE`).
+pub const FULL_TRAVEL_SCALED: u32 = u32::from(FULL_TRAVEL_UNIT).saturating_mul(INV_SCALE_ONE);
+
+/// Expected travel distance in physical units; represents 4.0 mm.
+pub const FULL_TRAVEL_UNIT: u8 = 40;
+
+/// Number of fractional bits in the Q16.16 `inv_scale`.
+pub const INV_SCALE_FRAC_BITS: u32 = 16;
+
+/// The value of `1.0` in the Q16.16 format used by `inv_scale`.
+pub const INV_SCALE_ONE: u32 = 1_u32.checked_shl(INV_SCALE_FRAC_BITS).expect("INV_SCALE_FRAC_BITS < u32::BITS");
+
+/// Minimum ADC delta (zero - full) required to treat a full-travel reading as
+/// usable. Guards only against completely flat or absent sensor readings;
+/// intentionally small so any genuine press is accepted.
+pub const MIN_USEFUL_FULL_RANGE: u16 = 100;
+
+/// Reference zero-travel ADC value used for calibration and used-sensor
+/// validation.
+pub const REF_ZERO_TRAVEL: u16 = 3121;
 
 /// ADC counts subtracted from the averaged zero-travel reading before storing
 /// it as the calibration zero point.

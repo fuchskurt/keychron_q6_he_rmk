@@ -8,7 +8,7 @@
 //! proportional to the linear distance between the two raw readings.
 //!
 //! The transfer function is a cubic Hall-sensor polynomial sampled offline
-//! every [`SPARSE_N`] raw counts and stored as
+//! every `SPARSE_N` raw counts and stored as
 //! `round(256 * poly(raw) + 11008)`. The runtime never evaluates the
 //! polynomial; the table plus linear interpolation between samples is the
 //! firmware's only ground truth.
@@ -27,9 +27,9 @@
 //! measurable speedup over the sparse layout, so the sparse table is the
 //! only implementation in tree.
 //!
-//! Endpoint handling: the raw range (length [`RAW_SPAN`]) is not an exact
-//! multiple of [`SPARSE_N`], so the final segment is shorter than
-//! [`SPARSE_N`] raw counts. The last entry in [`TRAVEL_LUT`] is *not* the
+//! Endpoint handling: the raw range (length `RAW_SPAN`) is not an exact
+//! multiple of `SPARSE_N`, so the final segment is shorter than
+//! `SPARSE_N` raw counts. The last entry in `TRAVEL_LUT` is *not* the
 //! polynomial evaluated at the next sample point; it is the value that
 //! makes the regular linear-interpolation formula at `raw = VALID_RAW_MAX`
 //! match `poly(VALID_RAW_MAX)` exactly. That extrapolation keeps the

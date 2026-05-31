@@ -111,9 +111,9 @@ pub(super) fn count_real_sensors<const ROW: usize, const COL: usize>(zero_raw: &
     let mut total: usize = 0;
     for (col_idx, valid) in VALID_ROWS_BY_COL.iter().enumerate() {
         for i in 0..valid.count {
-            let Some(key) = valid.keys.get(i) else { continue };
+            let Some(&row_u8) = valid.rows.get(i) else { continue };
             let in_range = zero_raw
-                .get(usize::from(key.key_row))
+                .get(usize::from(row_u8))
                 .and_then(|row_slice| row_slice.get(col_idx))
                 .copied()
                 .is_some_and(|zero| zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE);
@@ -231,9 +231,9 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
             // entirely without touching the calibration state machine.
             let Some(valid) = VALID_ROWS_BY_COL.get(col) else { continue };
             for i in 0..valid.count {
-                let Some(key) = valid.keys.get(i) else { continue };
-                let key_row = usize::from(key.key_row);
-                let raw = buf.get(usize::from(key.buf_row)).copied().unwrap_or(0);
+                let Some(&row_u8) = valid.rows.get(i) else { continue };
+                let key_row = usize::from(row_u8);
+                let raw = buf.get(key_row).copied().unwrap_or(0);
 
                 // Always track the deepest reading seen, regardless of
                 // whether the key has been accepted yet.
@@ -357,9 +357,10 @@ pub(super) async fn settle_min_raw<const ROW: usize, const COL: usize>(
             cols.advance();
             let Some(valid) = VALID_ROWS_BY_COL.get(col) else { continue };
             for i in 0..valid.count {
-                let Some(key) = valid.keys.get(i) else { continue };
-                let raw = buf.get(usize::from(key.buf_row)).copied().unwrap_or(0);
-                min_into(min_raw, usize::from(key.key_row), col, raw);
+                let Some(&row_u8) = valid.rows.get(i) else { continue };
+                let row = usize::from(row_u8);
+                let raw = buf.get(row).copied().unwrap_or(0);
+                min_into(min_raw, row, col, raw);
             }
         }
     }

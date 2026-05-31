@@ -53,18 +53,17 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
             // Slice to exactly the populated entries (one check instead of
             // one per key), and hoist keys[col] out of the inner loop.
             if let Some(valid) = VALID_ROWS_BY_COL.get(col)
-                && let Some(valid_keys) = valid.keys.get(..valid.count)
+                && let Some(valid_rows) = valid.rows.get(..valid.count)
                 && let Some(key_col) = keys.get_mut(col)
             {
-                for key in valid_keys {
-                    let buf_row = usize::from(key.buf_row);
-                    let key_row = usize::from(key.key_row);
+                for &row_u8 in valid_rows {
+                    let row = usize::from(row_u8);
 
                     // Clamp raw ADC value to valid range to prevent out-of-bounds
                     // LUT access and ensure valid calibration updates.
-                    let raw = buf.get(buf_row).copied().unwrap_or(0).clamp(VALID_RAW_MIN, VALID_RAW_MAX);
+                    let raw = buf.get(row).copied().unwrap_or(0).clamp(VALID_RAW_MIN, VALID_RAW_MAX);
 
-                    let Some(entry) = key_col.get_mut(key_row) else { continue };
+                    let Some(entry) = key_col.get_mut(row) else { continue };
 
                     // Skip if the reading has not changed beyond the noise gate.
                     if likely(entry.last_raw.abs_diff(raw) < noise_gate) {
@@ -101,7 +100,7 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
                     ) {
                         cold_path();
                         publish_event_async(KeyboardEvent::key(
-                            key.key_row,
+                            row_u8,
                             // The matrix has 21 columns, so `col` always fits
                             // in a u8; u8::MAX is a sentinel that makes any
                             // future overflow obviously wrong.
