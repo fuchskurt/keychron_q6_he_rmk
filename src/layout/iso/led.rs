@@ -235,8 +235,7 @@ pub const LED_MAPPING_ROW5: [Option<u8>; 21] = [
     None,
 ];
 
-/// Maps matrix position `[row][col]` to a LED index into
-/// [`crate::layout::LED_LAYOUT`].
+/// Maps matrix position `[row][col]` to a LED index into [`LED_LAYOUT`].
 ///
 /// Derived directly from the physical key layout and the sequential LED
 /// indices assigned in `LED_LAYOUT`. `None` for dead matrix cells (`a!(No)`
