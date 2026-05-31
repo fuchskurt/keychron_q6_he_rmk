@@ -2,8 +2,6 @@
 
 use core::hint::cold_path;
 
-#[cfg(test)] mod tests;
-
 /// Gamma 2.2 correction lookup table for 8-bit LED PWM values.
 ///
 /// Maps a linear 8-bit intensity value (0-255) to a perceptually linearised

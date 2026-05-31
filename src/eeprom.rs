@@ -103,8 +103,6 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
             }
             attempts = attempts.saturating_add(1);
             if attempts >= max_attempts {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("EEPROM poll_until_ready exhausted {} attempts", max_attempts);
                 return result;
             }
             Timer::after(READY_POLL_INTERVAL).await;
@@ -167,8 +165,6 @@ impl<'peripherals, IM: MasterMode> Ft24c64<'peripherals, IM> {
         let result =
             self.i2c.transaction(DEVICE_ADDR, &mut [Operation::Write(&addr_bytes), Operation::Write(chunk)]).await;
         if result.is_err() {
-            #[cfg(feature = "defmt")]
-            defmt::warn!("EEPROM page write failed at addr={:#06X}", addr);
             return result;
         }
         self.poll_until_ready(READY_POLL_ATTEMPTS).await

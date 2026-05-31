@@ -12,18 +12,6 @@ license = "MIT OR Apache-2.0"
 ansi_layout = []
 iso_layout = []
 jis_layout = []
-defmt = [
-    "dep:defmt",
-    "dep:defmt-rtt",
-    "embassy-time/defmt",
-    "embassy-stm32/defmt",
-    "embassy-sync/defmt",
-    "embassy-executor/defmt",
-    "embassy-embedded-hal/defmt",
-    "rmk/defmt",
-]
-adc_debug   = ["defmt"]
-bench = ["defmt"]
 
 [dependencies]
 cortex-m = { version = "0", features = ["critical-section-single-core", "inline-asm", "linker-plugin-lto"] }
@@ -39,9 +27,6 @@ static_cell = "2"
 snled27351-driver = { git = "https://github.com/fuchskurt/snled27351_driver.git", features = ["spi"] }
 embedded-hal-async = "1"
 cfg-if = "1"
-q6-core = { path = "q6-core" }
-defmt     = { version = "1", optional = true }
-defmt-rtt = { version = "1", optional = true, features = ["disable-blocking-mode"] }
 
 [patch.crates-io]
 embassy-time = { git = "https://github.com/embassy-rs/embassy.git" }
@@ -56,7 +41,6 @@ embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy.git" }
 
 [workspace]
-members = [".", "q6-core"]
 
 [workspace.lints.rust]
 warnings = "deny"
@@ -93,13 +77,6 @@ opt-level = "s"
 overflow-checks = false
 lto = "fat"
 panic = "immediate-abort"
-
-[profile.firmware-debug]
-inherits = "release"
-debug = 2
-strip = "none"
-opt-level = "z"
-lto = "fat"
 
 [profile.release.package."*"]
 codegen-units = 1

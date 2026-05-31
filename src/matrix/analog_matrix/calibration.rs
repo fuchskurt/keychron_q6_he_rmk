@@ -34,7 +34,6 @@ use crate::{
 use core::hint::{likely, unlikely};
 use embassy_stm32::{adc::ConfiguredSequence, crc::Crc, i2c::mode::MasterMode, pac::adc};
 use embassy_time::{Duration, Instant};
-use q6_core::math::pct_done;
 use rmk::embassy_futures::yield_now;
 
 /// Recompute [`KeyEntry::calib_used`] and the hot-path calibration fields
@@ -112,9 +111,9 @@ pub(super) fn count_real_sensors<const ROW: usize, const COL: usize>(zero_raw: &
     let mut total: usize = 0;
     for (col_idx, valid) in VALID_ROWS_BY_COL.iter().enumerate() {
         for i in 0..valid.count {
-            let Some(key) = valid.keys.get(i) else { continue };
+            let Some(&row_u8) = valid.rows.get(i) else { continue };
             let in_range = zero_raw
-                .get(usize::from(key.key_row))
+                .get(usize::from(row_u8))
                 .and_then(|row_slice| row_slice.get(col_idx))
                 .copied()
                 .is_some_and(|zero| zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE);
@@ -188,15 +187,11 @@ pub(super) async fn run_first_boot_calib<IM, const ROW: usize, const COL: usize>
         && try_deserialize::<ROW, COL>(&eeprom_buf, keys, crc);
 
     if !verified {
-        #[cfg(feature = "defmt")]
-        defmt::warn!("EEPROM write-back verification failed, will recalibrate on next boot");
         // Signal amber so the user knows calibration will repeat on the
         // next boot.
         BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Zero)).await;
         return;
     }
-    #[cfg(feature = "defmt")]
-    defmt::info!("calibration verified and persisted to EEPROM");
     BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Done)).await;
 }
 
@@ -236,9 +231,9 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
             // entirely without touching the calibration state machine.
             let Some(valid) = VALID_ROWS_BY_COL.get(col) else { continue };
             for i in 0..valid.count {
-                let Some(key) = valid.keys.get(i) else { continue };
-                let key_row = usize::from(key.key_row);
-                let raw = buf.get(usize::from(key.buf_row)).copied().unwrap_or(0);
+                let Some(&row_u8) = valid.rows.get(i) else { continue };
+                let key_row = usize::from(row_u8);
+                let raw = buf.get(key_row).copied().unwrap_or(0);
 
                 // Always track the deepest reading seen, regardless of
                 // whether the key has been accepted yet.
@@ -271,8 +266,6 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
                         // Hold duration satisfied; accept this key.
                         *key_state = KeyCalibState::Accepted;
                         calibrated_count = calibrated_count.saturating_add(1);
-                        #[cfg(feature = "defmt")]
-                        defmt::debug!("key accepted row={} col={} raw={}", key_row, col, raw);
 
                         if let Some(led_row) = MATRIX_TO_LED.get(key_row)
                             && let Some(&Some(led_idx)) = led_row.get(col)
@@ -280,7 +273,13 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
                             BACKLIGHT_CH.sender().send(BacklightCmd::CalibKeyDone(led_idx)).await;
                         }
 
-                        let pct = pct_done(calibrated_count, total_keys);
+                        // Progress percentage in 0..=100; saturating at every
+                        // step so a zero or overflowing total yields 0 rather
+                        // than panicking.
+                        let pct =
+                            u8::try_from(calibrated_count.saturating_mul(100).checked_div(total_keys).unwrap_or(0))
+                                .unwrap_or(100)
+                                .min(100);
                         if pct != last_pct {
                             last_pct = pct;
                             BACKLIGHT_CH.sender().send(BacklightCmd::CalibProgress(pct)).await;
@@ -358,9 +357,10 @@ pub(super) async fn settle_min_raw<const ROW: usize, const COL: usize>(
             cols.advance();
             let Some(valid) = VALID_ROWS_BY_COL.get(col) else { continue };
             for i in 0..valid.count {
-                let Some(key) = valid.keys.get(i) else { continue };
-                let raw = buf.get(usize::from(key.buf_row)).copied().unwrap_or(0);
-                min_into(min_raw, usize::from(key.key_row), col, raw);
+                let Some(&row_u8) = valid.rows.get(i) else { continue };
+                let row = usize::from(row_u8);
+                let raw = buf.get(row).copied().unwrap_or(0);
+                min_into(min_raw, row, col, raw);
             }
         }
     }
