@@ -1,0 +1,64 @@
+name: CI
+
+# Merge gate: runs on every pull request (and pushes to main) so clippy
+# drift and logic regressions surface in review instead of silently rotting.
+# The project tracks the latest nightly, so this is the safety net for that
+# choice. Mark the jobs below as required in branch protection to block
+# merges on failure.
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clippy:
+    name: Clippy (${{ matrix.layout }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        layout: [ansi_layout, iso_layout, jis_layout]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy, rust-src
+          targets: thumbv7em-none-eabihf
+
+      - name: Clippy
+        run: cargo clippy --release --features ${{ matrix.layout }}
+
+  build:
+    name: Build (${{ matrix.layout }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        layout: [ansi_layout, iso_layout, jis_layout]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: thumbv7em-none-eabihf
+
+      - name: Install flip-link
+        run: cargo install flip-link
+
+      - name: Build firmware
+        run: cargo build --release --features ${{ matrix.layout }}

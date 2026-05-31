@@ -1,0 +1,15 @@
+[unstable]
+cargo-lints = true
+checksum-freshness = true
+fine-grain-locking = true
+gc = true
+build-std = ["alloc", "core", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-rs run --chip stm32f401rc"
+# Use flip-link overflow check: https://github.com/knurling-rs/flip-link
+linker = "flip-link"
+
+[build]
+target = "thumbv7em-none-eabihf" # Cortex-M4F and Cortex-M7F (with FPU)
