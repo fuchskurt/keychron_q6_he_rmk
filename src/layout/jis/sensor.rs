@@ -1,14 +1,8 @@
 use crate::layout::COL;
-pub use crate::layout::shared::sensor::SENSOR_ROW1;
+pub use crate::layout::shared::sensor::{SENSOR_ROW1, SENSOR_ROW2};
 
 /// Hall-effect sensor presence for matrix row 0 (JIS).
 pub const SENSOR_ROW0: [bool; COL] = [
-    true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-    true, true,
-];
-
-/// Hall-effect sensor presence for matrix row 2 (JIS).
-pub const SENSOR_ROW2: [bool; COL] = [
     true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true,
     true, true,
 ];
