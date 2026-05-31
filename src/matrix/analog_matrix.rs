@@ -22,7 +22,7 @@ use crate::{
 use core::array::from_fn;
 use embassy_stm32::{
     Peri,
-    adc::{Adc, AnyAdcChannel, BasicInstance, ConfiguredSequence, Instance, RxDma},
+    adc::{Adc, BasicInstance, BorrowedAdcChannel, ConfiguredSequence, Instance, RxDma},
     crc::Crc,
     dma::InterruptHandler,
     i2c::mode::MasterMode,
@@ -45,7 +45,7 @@ where
     /// DMA channel used for non-blocking ADC sequence reads.
     pub dma:         Peri<'peripherals, D>,
     /// ADC channels corresponding to each matrix row.
-    pub row_adc:     [AnyAdcChannel<'peripherals, ADC>; ROW],
+    pub row_adc:     [BorrowedAdcChannel<'peripherals, ADC>; ROW],
     /// ADC sample time applied to every channel in the sequence.
     pub sample_time: AdcSampleTime<ADC>,
 }
@@ -66,13 +66,17 @@ where
         IRQ2: Binding<D::Interrupt, InterruptHandler<D>> + 'reader + 'peripherals,
     {
         let st = self.sample_time;
-        self.adc.configured_sequence(self.dma.reborrow(), self.row_adc.iter_mut().map(|ch| (ch, st)), irq)
+        self.adc.configured_sequence(
+            self.dma.reborrow(),
+            self.row_adc.iter_mut().map(|ch| (ch.reborrow_adc(), st)),
+            irq,
+        )
     }
 
     /// Create a new [`AdcPart`] from the given peripherals.
     pub const fn new(
         adc: Adc<'peripherals, ADC>,
-        row_adc: [AnyAdcChannel<'peripherals, ADC>; ROW],
+        row_adc: [BorrowedAdcChannel<'peripherals, ADC>; ROW],
         dma: Peri<'peripherals, D>,
         sample_time: AdcSampleTime<ADC>,
     ) -> Self {

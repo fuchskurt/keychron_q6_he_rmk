@@ -40,16 +40,14 @@ use crate::{
 use embassy_executor::{Spawner, main};
 use embassy_stm32::{
     Config,
-    adc::{Adc, AdcChannel as _, AnyAdcChannel, SampleTime},
+    adc::{Adc, AdcChannel as _, BorrowedAdcChannel, SampleTime},
     bind_interrupts,
     crc::Crc,
     dma,
     exti::{self, ExtiInput},
-    flash,
-    flash::Flash,
+    flash::{self, Flash},
     gpio::{Flex, Input, Level, Output, Pull, Speed},
-    i2c,
-    i2c::I2c,
+    i2c::{self, I2c},
     init,
     interrupt::typelevel,
     pac,
@@ -201,13 +199,13 @@ async fn main(spawner: Spawner) {
     // Apply STM32 AN4073 Option 2 workaround to reduce ADC noise coupling from USB
     // activity on STM32F401.
     SYSCFG.pmc().modify(|w| w.set_adc1dc2(true));
-    let row_channels: [AnyAdcChannel<'_, ADC1>; ROW] = [
-        peripheral.PC0.degrade_adc(),
-        peripheral.PC1.degrade_adc(),
-        peripheral.PC2.degrade_adc(),
-        peripheral.PC3.degrade_adc(),
-        peripheral.PA0.degrade_adc(),
-        peripheral.PA1.degrade_adc(),
+    let row_channels: [BorrowedAdcChannel<'_, ADC1>; ROW] = [
+        peripheral.PC0.reborrow_adc(),
+        peripheral.PC1.reborrow_adc(),
+        peripheral.PC2.reborrow_adc(),
+        peripheral.PC3.reborrow_adc(),
+        peripheral.PA0.reborrow_adc(),
+        peripheral.PA1.reborrow_adc(),
     ];
 
     let i2c_config = {
