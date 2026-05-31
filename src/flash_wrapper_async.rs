@@ -40,7 +40,6 @@ impl<F: ReadNorFlash> ReadNorFlash for Flash16K<F> {
     }
 }
 
-#[rustfmt::skip]
 impl<F: NorFlash> NorFlash for Flash16K<F> {
     /// Erase size reported as 16 KiB - matches STM32F4 sectors 1 and 2.
     const ERASE_SIZE: usize = 16_usize.saturating_mul(1024);
