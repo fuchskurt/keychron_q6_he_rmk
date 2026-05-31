@@ -34,7 +34,6 @@ use crate::{
 use core::hint::{likely, unlikely};
 use embassy_stm32::{adc::ConfiguredSequence, crc::Crc, i2c::mode::MasterMode, pac::adc};
 use embassy_time::{Duration, Instant};
-use q6_core::math::pct_done;
 use rmk::embassy_futures::yield_now;
 
 /// Recompute [`KeyEntry::calib_used`] and the hot-path calibration fields
@@ -188,15 +187,11 @@ pub(super) async fn run_first_boot_calib<IM, const ROW: usize, const COL: usize>
         && try_deserialize::<ROW, COL>(&eeprom_buf, keys, crc);
 
     if !verified {
-        #[cfg(feature = "defmt")]
-        defmt::warn!("EEPROM write-back verification failed, will recalibrate on next boot");
         // Signal amber so the user knows calibration will repeat on the
         // next boot.
         BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Zero)).await;
         return;
     }
-    #[cfg(feature = "defmt")]
-    defmt::info!("calibration verified and persisted to EEPROM");
     BACKLIGHT_CH.sender().send(BacklightCmd::CalibPhase(CalibPhase::Done)).await;
 }
 
@@ -271,8 +266,6 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
                         // Hold duration satisfied; accept this key.
                         *key_state = KeyCalibState::Accepted;
                         calibrated_count = calibrated_count.saturating_add(1);
-                        #[cfg(feature = "defmt")]
-                        defmt::debug!("key accepted row={} col={} raw={}", key_row, col, raw);
 
                         if let Some(led_row) = MATRIX_TO_LED.get(key_row)
                             && let Some(&Some(led_idx)) = led_row.get(col)
@@ -280,7 +273,13 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
                             BACKLIGHT_CH.sender().send(BacklightCmd::CalibKeyDone(led_idx)).await;
                         }
 
-                        let pct = pct_done(calibrated_count, total_keys);
+                        // Progress percentage in 0..=100; saturating at every
+                        // step so a zero or overflowing total yields 0 rather
+                        // than panicking.
+                        let pct =
+                            u8::try_from(calibrated_count.saturating_mul(100).checked_div(total_keys).unwrap_or(0))
+                                .unwrap_or(100)
+                                .min(100);
                         if pct != last_pct {
                             last_pct = pct;
                             BACKLIGHT_CH.sender().send(BacklightCmd::CalibProgress(pct)).await;

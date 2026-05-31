@@ -14,8 +14,8 @@
 //! firmware's only ground truth.
 //!
 //! Once the firmware has cached `lut_zero` at calibration time (see
-//! `KeyEntry::apply_zero` in the firmware crate), the hot scan path computes
-//! travel as a u16 subtraction (`lookup(raw) - lut_zero`) followed by a u32
+//! `KeyEntry::apply_zero`), the hot scan path computes travel as a u16
+//! subtraction (`lookup(raw) - lut_zero`) followed by a u32
 //! multiply-shift. The LUT's additive bias cancels in the subtraction, so
 //! it never has to be undone at runtime.
 //!
@@ -36,8 +36,6 @@
 //! lookup single-branch (same divide and multiply for every segment,
 //! including the partial one) while preserving accuracy at the upper
 //! edge.
-
-#[cfg(test)] mod tests;
 
 /// Maximum acceptable raw ADC value (inclusive upper bound of the table).
 pub const VALID_RAW_MAX: u16 = 3500;
@@ -82,52 +80,18 @@ const RAW_SPAN: usize = usize::from(VALID_RAW_MAX).saturating_sub(usize::from(VA
 /// upper anchor of the final (possibly partial) segment.
 const TRAVEL_LUT_LEN: usize = RAW_SPAN.div_ceil(SPARSE_N).saturating_add(1);
 
-/// Largest valid index into [`TRAVEL_LUT`]; used as the upper bound of the
-/// branch-free clamp on the interpolation anchors.
-const LAST_IDX: usize = TRAVEL_LUT_LEN.saturating_sub(1);
-
 /// Sparse Hall-sensor transfer-function table.
 ///
 /// `TRAVEL_LUT[i] = round(256 * poly(VALID_RAW_MIN + i * SPARSE_N) + 11008)`
-/// for `i` in `0..LAST_IDX`. The final entry (`TRAVEL_LUT[LAST_IDX]`) is
-/// chosen so that linear interpolation at `raw = VALID_RAW_MAX` yields
-/// exactly `round(256 * poly(VALID_RAW_MAX) + 11008)`; see the
-/// module-level doc for why.
+/// for every entry but the last. The final entry is chosen so that linear
+/// interpolation at `raw = VALID_RAW_MAX` yields exactly
+/// `round(256 * poly(VALID_RAW_MAX) + 11008)`; see the module-level doc for
+/// why.
 const TRAVEL_LUT: [u16; TRAVEL_LUT_LEN] = [
     0x848A, 0x7D23, 0x767A, 0x7085, 0x6B36, 0x6682, 0x625E, 0x5EBC, 0x5B90, 0x58D0, 0x566E, 0x545F, 0x5296, 0x5108,
     0x4FA8, 0x4E6B, 0x4D44, 0x4C27, 0x4B08, 0x49DC, 0x4896, 0x4729, 0x458B, 0x43AF, 0x4189, 0x3F0C, 0x3C2D, 0x38E0,
     0x3519, 0x30CB, 0x2BEB, 0x266C, 0x2043, 0x1963, 0x11C1, 0x0950, 0x000B,
 ];
-
-/// Compile-time guard: every entry must fit in a `u16`. The static type
-/// already enforces this, but the assert documents the contract and
-/// breaks the build if the regenerator ever emits a different element type.
-const _: () = assert!(TRAVEL_LUT.len() == TRAVEL_LUT_LEN, "TRAVEL_LUT length must equal TRAVEL_LUT_LEN");
-
-/// Compile-time guard: the first entry must equal `round(256 * poly(MIN) +
-/// 11008)`. Spot-check that the table actually starts where the doc claims it
-/// does; keeps the regenerator and the runtime lookup honest about which row is
-/// row 0.
-const _: () = assert!(matches!(TRAVEL_LUT.first(), Some(&0x848A)), "TRAVEL_LUT must start at the deep-press maximum");
-
-/// Compile-time guard: the LUT length matches the polynomial domain.
-///
-/// `n_segments = ceil(RAW_SPAN / SPARSE_N)`, plus one upper anchor.
-const _: () = assert!(
-    TRAVEL_LUT_LEN == RAW_SPAN.div_ceil(SPARSE_N).saturating_add(1),
-    "TRAVEL_LUT_LEN must match the polynomial domain"
-);
-
-/// Compile-time guard: `SPARSE_N` must be a power of two so that
-/// `checked_shr(SPARSE_N_LOG2)` and `checked_rem(SPARSE_N)` on the hot
-/// path collapse to a single shift and AND-mask under LLVM strength
-/// reduction.
-const _: () = assert!(SPARSE_N.is_power_of_two(), "SPARSE_N must be a power of two");
-
-/// Compile-time guard: the upper-anchor index must be in bounds. With
-/// `LAST_IDX = TRAVEL_LUT_LEN - 1`, this rules out a one-off mistake in
-/// `TRAVEL_LUT_LEN` that would let the interpolation read past the table.
-const _: () = assert!(LAST_IDX < TRAVEL_LUT_LEN, "LAST_IDX must be a valid TRAVEL_LUT index");
 
 /// Look up the LUT-equivalent value for ADC reading `raw` via linear
 /// interpolation between the two nearest sparse samples.

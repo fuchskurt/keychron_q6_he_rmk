@@ -4,7 +4,6 @@ use crate::{
 };
 use core::mem::size_of;
 use embassy_stm32::crc::Crc;
-use q6_core::bytes::read_array;
 
 /// Pre-computed buffer length for the HE matrix.
 pub const CALIB_BUF_LEN: usize = total_len(ROW, COL);
@@ -21,6 +20,23 @@ const HEADER_LEN: usize = size_of::<u32>().saturating_add(size_of::<u8>());
 const VERSION: u8 = 1;
 /// Magic number identifying a valid Q6 HE calibration block.
 const MAGIC: u32 = 0x5136_4845;
+
+/// Copy exactly `N` bytes from `buf[start..end]` into a fixed-size array.
+///
+/// Returns `None` if the range is out of bounds or its length is not `N`.
+/// A `None` here is a hard validation error (corrupt EEPROM data) and must
+/// not be substituted with a default, because zero is a valid output for
+/// checksums and serialized values.
+#[must_use]
+#[inline]
+fn read_array<const N: usize>(buf: &[u8], start: usize, end: usize) -> Option<[u8; N]> {
+    if let Some(src) = buf.get(start..end)
+        && let Ok(fixed) = <[u8; N]>::try_from(src)
+    {
+        return Some(fixed);
+    }
+    None
+}
 
 /// Compute CRC-32 over `data` using the STM32 hardware CRC peripheral.
 ///

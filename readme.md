@@ -6,11 +6,13 @@
 
 ![Keychron Q6 HE](https://cdn.shopify.com/s/files/1/0059/0630/1017/files/Keychron-Q6-HE-Wireless-QMK-Custom-Magnetic-Switch-Keyboard-White.jpg)
 
-Open-source replacement firmware in `RUST` based on [RMK](https://github.com/HaoboGu/rmk) for
-the [Keychron Q6 HE](https://www.keychron.com/products/keychron-q6-he-qmk-wireless-custom-keyboard).
-Compatible with [Vial](https://get.vial.today) for live keymap editing without reflashing.
+Open-source replacement firmware written in Rust, based on [RMK](https://github.com/HaoboGu/rmk),
+for the [Keychron Q6 HE](https://www.keychron.com/products/keychron-q6-he-qmk-wireless-custom-keyboard).
+Keys can be remapped live, without reflashing, over the experimental
+[rynk protocol](https://github.com/HaoboGu/rmk/tree/feat/rynk_protocol) — RMK's native remapping
+protocol.
 
-Supports **ANSI**, **ISO**, and **JIS** layouts, select the right build for your board variant.
+Supports **ANSI**, **ISO**, and **JIS** layouts; pick the build that matches your board variant.
 
 ---
 
@@ -19,10 +21,10 @@ Supports **ANSI**, **ISO**, and **JIS** layouts, select the right build for your
 - **Analog actuation point**: Keys actuate at 1.0 mm by default and Rapid Trigger sensitivity starts at 0.3 mm, both
   adjustable in 0.1 mm increments, with no fixed reset point.
 - **Two hardware layers**: Mac and Windows base layers, switchable via the physical toggle on the side of the keyboard.
-- **Vial keymap editing**: Remap any key, encoder action, or layer live from [Vial](https://get.vial.today)
-  or [vial.rocks](https://vial.rocks) without reflashing.
+- **Live keymap editing**: Remap any key, encoder action, or layer on the fly over the
+  [rynk protocol](https://github.com/HaoboGu/rmk/tree/feat/rynk_protocol) (RMK), without reflashing.
 - **RGB backlight**: Full per-key RGB. Caps Lock lights red when active; Num Lock lights white when active.
-- **Rotary encoder**: Volume up/down by default; remappable via Vial.
+- **Rotary encoder**: Volume up/down by default; remappable over rynk.
 - **Automatic calibration**: Guided first-boot calibration with backlight feedback. On subsequent boots the keyboard
   re-measures key resting positions automatically and refines calibration silently in the background, so drift is
   corrected without any user action.
@@ -39,8 +41,7 @@ Supports **ANSI**, **ISO**, and **JIS** layouts, select the right build for your
 | ISO    | `iso_layout`  | `--features iso_layout`            |
 | JIS    | `jis_layout`  | `--features jis_layout`            |
 
-Exactly one layout feature must be enabled at a time. Each layout ships its own `vial.json`, LED mapping, and sensor
-presence map.
+Exactly one layout feature must be enabled at a time. Each layout ships its own LED mapping and sensor presence map.
 
 ---
 
@@ -114,17 +115,19 @@ then starts normally.
 
 ## Keymap editing
 
-Connect the keyboard and open [Vial](https://get.vial.today) (desktop app or [vial.rocks](https://vial.rocks) in a
-browser). Select the keyboard, then remap keys, layers, or encoder actions. Changes take effect immediately without
-reflashing.
+Keys, layers, and encoder actions are remapped live over the experimental
+[rynk protocol](https://github.com/HaoboGu/rmk/tree/feat/rynk_protocol), RMK's native remapping
+protocol. Connect the keyboard to a rynk-compatible client and edit; changes take effect
+immediately without reflashing.
 
 ---
 
 ## Scan loop performance
 
-Benchmarked on STM32F401RC at 84 MHz, 21 columns × 6 rows, measured with the DWT cycle counter
-(`cargo make bench`, `firmware-debug` profile: `lto = "fat"`, `codegen-units = 1` applied to all crates). Cycle counts cover the synchronous per-column processing
-window: noise gate, auto-calibration, travel computation, and rapid-trigger logic. ADC DMA
+Benchmarked during development on STM32F401RC at 84 MHz, 21 columns × 6 rows, measured with the
+DWT cycle counter (`lto = "fat"`, `codegen-units = 1`). Cycle counts cover the synchronous
+per-column processing window: noise gate, auto-calibration, travel computation, and
+rapid-trigger logic. ADC DMA
 (~9.8 µs/col) and `yield_now` (~1 µs/col) are outside the measurement window but included in
 the end-to-end figures.
 
@@ -132,7 +135,7 @@ the end-to-end figures.
 
 | Configuration                        | Cycles/col | Notes                            |
 | ------------------------------------ | :--------: | -------------------------------- |
-| LUT in flash, `lto = false`          |  299-301   | `firmware-debug` baseline        |
+| LUT in flash, `lto = false`          |  299-301   | non-LTO baseline                 |
 | Polynomial approximation (2nd order) |  310-312   | slower than LUT - not used       |
 | LUT in flash, `lto = "fat"`          |  291-293   | ✓ production configuration       |
 | LUT in RAM (`.data` section)         |  290-292   | no measurable benefit - reverted |
@@ -149,7 +152,7 @@ the end-to-end figures.
 
 ### Findings
 
-- **Fat LTO** saves ~8 cycles/col (~2 µs/pass) over a non-LTO build through cross-crate
+- **Fat LTO** saves ~8 cycles/col (~2 µs/pass) over a non-LTO build through aggressive
   inlining of the hot path. This same production configuration is also used for flashing.
 
 - **Polynomial approximation is slower** than the LUT by ~19 cycles/col. The STM32F401's

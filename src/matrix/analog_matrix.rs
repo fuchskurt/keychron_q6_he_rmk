@@ -3,9 +3,12 @@
 
 /// First-boot guided calibration and EEPROM persistence.
 mod calibration;
+/// Sparse hall-sensor transfer-function table with linear interpolation.
+mod lut;
 /// Hot-path matrix scan loop.
 mod scan;
-/// Calibration types, constants, and per-key runtime state.
+/// Calibration types, constants, per-key runtime state, and the calibration
+/// arithmetic that operates on it.
 pub mod types;
 
 use crate::{
@@ -170,15 +173,11 @@ where
         let mut buf = [0_u16; ROW];
         let mut seq = self.adc_part.configured_sequence(self.irq);
         if loaded {
-            #[cfg(feature = "defmt")]
-            defmt::info!("calibration loaded from EEPROM");
             // Re-measure zero travel on every boot to compensate for
             // temperature drift; full-travel data comes from EEPROM.
             let zero_raw = calibration::calibrate_zero_raw(&mut self.cols, &mut seq, &mut buf, self.cfg).await;
             calibration::apply_calib(&mut self.keys, &zero_raw);
         } else {
-            #[cfg(feature = "defmt")]
-            defmt::info!("no valid EEPROM calibration, running first-boot calibration");
             calibration::run_first_boot_calib(
                 &mut self.cols,
                 &mut seq,

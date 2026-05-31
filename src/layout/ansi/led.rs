@@ -237,15 +237,14 @@ pub const LED_MAPPING_ROW5: [Option<u8>; 21] = [
 
 /// Maps matrix position `[row][col]` to a LED index into [`LED_LAYOUT`].
 ///
-/// Derived directly from `vial.json` layout and the sequential LED indices
-/// assigned in `LED_LAYOUT`. `None` for dead matrix cells (`a!(No)` in the
-/// keymap), the layer-toggle columns (5,7 and 5,8), and physical gaps where
-/// no key or LED exists.
+/// Derived directly from the physical key layout and the sequential LED
+/// indices assigned in `LED_LAYOUT`. `None` for dead matrix cells (`a!(No)`
+/// in the keymap), the layer-toggle columns (5,7 and 5,8), and physical gaps
+/// where no key or LED exists.
 ///
-/// To re-verify: for each `"row,col"` entry in `vial.json`s keymap array,
-/// assign the next sequential LED index in reading order (left-to-right,
-/// top-to-bottom), skipping entries that have only position modifiers
-/// (`x`, `y`, `w`, `h`) and no matrix coordinate.
+/// To re-verify: walk the key positions in reading order (left-to-right,
+/// top-to-bottom) and assign each one the next sequential LED index,
+/// skipping positions that have no backlight LED.
 pub const LED_LAYOUT: &[Led] = &[
     Led::new(0, CB7_CA16, CB9_CA16, CB8_CA16),
     Led::new(0, CB7_CA15, CB9_CA15, CB8_CA15),

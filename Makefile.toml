@@ -47,21 +47,3 @@ args = ["objcopy", "--release", "--features", "ansi_layout", "--", "-O", "binary
 description = "Build and flash firmware via DFU (STM32 bootloader)"
 command = "cargo"
 args = ["dfu", "--vid", "0x483", "--pid", "0xdf11", "--release", "--features", "ansi_layout"]
-
-[tasks.bench]
-description = "Build and flash with performance tracing enabled"
-command = "cargo"
-args = ["run", "--profile", "firmware-debug", "--features", "ansi_layout,bench"]
-env = { DEFMT_LOG = "off,keychron_q6_he_rmk=trace" }
-
-[tasks.debug]
-description = "Build and flash with debug logging enabled"
-command = "cargo"
-args = ["run", "--profile", "firmware-debug", "--features", "ansi_layout,defmt"]
-env = { DEFMT_LOG = "off,keychron_q6_he_rmk=debug" }
-
-[tasks.adc-debug]
-description = "Build and flash with raw ADC value logging enabled"
-command = "cargo"
-args = ["run", "--profile", "firmware-debug", "--features", "ansi_layout,adc_debug"]
-env = { DEFMT_LOG = "off,keychron_q6_he_rmk=debug" }

@@ -1,5 +1,6 @@
 //! Backlight task initialization and runtime loop.
 
+use super::gamma;
 use crate::{
     backlight::processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
     layout::LED_LAYOUT,
@@ -15,7 +16,6 @@ use embassy_stm32::{
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Ticker, Timer};
 use embedded_hal_async::spi::ErrorType;
-use q6_core::gamma;
 use rmk::{
     core_traits::Runnable,
     embassy_futures::select::{Either3, select3},

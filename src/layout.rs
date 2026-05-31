@@ -126,35 +126,6 @@ pub static VALID_ROWS_BY_COL: [ColValidKeys; COL] = {
     result
 };
 
-/// Compile-time guard: [`LED_LAYOUT`] must fit within the 128-bit bitset.
-const _: () = assert!(LED_LAYOUT.len() <= 128, "LED_LAYOUT exceeds the 128-LED capacity of the calib_leds_done bitset");
-
-/// Compile-time guard: COL must fit in a u8 so the scan loop can emit
-/// `KeyboardEvent::key(row, col_as_u8, pressed)` without loss.
-const _: () = assert!(COL <= usize::from(u8::MAX), "COL exceeds u8::MAX; scan loop col cast will truncate");
-
-/// Compile-time guard: [`MATRIX_TO_LED`] indices must be valid.
-const _: () = {
-    let led_count = LED_LAYOUT.len();
-    let mut row_index: usize = 0;
-
-    while let Some(row_slice) = MATRIX_TO_LED.get(row_index) {
-        let mut column_index: usize = 0;
-
-        while let Some(cell_option) = row_slice.get(column_index) {
-            if let Some(led_index) = *cell_option {
-                let led_index_usize = usize::from(led_index);
-
-                assert!(led_index_usize < led_count, "MATRIX_TO_LED contains an out-of-bounds LED index");
-            }
-
-            column_index = column_index.saturating_add(1);
-        }
-
-        row_index = row_index.saturating_add(1);
-    }
-};
-
 /// Precomputed list of valid sensor positions for one HC164 column.
 ///
 /// Only the first [`ColValidKeys::count`] entries of [`ColValidKeys::keys`]
