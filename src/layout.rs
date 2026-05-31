@@ -50,40 +50,12 @@ pub const MATRIX_TO_LED: [[Option<u8>; COL]; ROW] =
 pub const SENSOR_POSITIONS: [[bool; COL]; ROW] =
     [SENSOR_ROW0, SENSOR_ROW1, SENSOR_ROW2, SENSOR_ROW3, SENSOR_ROW4, SENSOR_ROW5];
 
-/// Column-major transpose of [`SENSOR_POSITIONS`].
-///
-/// `SENSOR_BY_COL[col][row]` is `true` when position `(row, col)` has a
-/// physical hall-effect sensor. The inner scan loop holds `col` fixed while
-/// iterating over all `row` values, so the column-major layout makes all six
-/// row lookups for a given column adjacent in flash and friendly to the
-/// STM32F4 ART prefetch.
-pub const SENSOR_BY_COL: [[bool; ROW]; COL] = {
-    let mut out = [[false; ROW]; COL];
-    let mut col = 0;
-    while col < COL {
-        let mut row = 0;
-        while row < ROW {
-            if let Some(sensor_row) = SENSOR_POSITIONS.get(row)
-                && let Some(&val) = sensor_row.get(col)
-                && let Some(out_row) = out.get_mut(col)
-                && let Some(cell) = out_row.get_mut(row)
-            {
-                *cell = val;
-            }
-            row = row.saturating_add(1);
-        }
-        col = col.saturating_add(1);
-    }
-    out
-};
-
 /// Per-column table of valid sensor positions, built at compile time from
-/// [`SENSOR_BY_COL`].
+/// [`SENSOR_POSITIONS`].
 ///
-/// Replaces the per-iteration `SENSOR_BY_COL` Option-chain lookup in the hot
-/// scan path. Only positions where a physical hall-effect sensor is present
-/// are stored; the scan loop iterates exactly these positions and skips all
-/// others without a branch or a runtime sensor check.
+/// Only positions where a physical hall-effect sensor is present are stored;
+/// the scan loop iterates exactly these positions and skips all others without
+/// a branch or a runtime sensor check.
 ///
 /// Stored as a `static` rather than `const` so the linker places exactly one
 /// copy in `.rodata` at a fixed address; the STM32F4 ART prefetch buffer
@@ -99,8 +71,10 @@ pub static VALID_ROWS_BY_COL: [ColValidKeys; COL] = {
         let mut count = 0_usize;
         let mut row = 0_usize;
         while row < ROW {
-            let has_sensor = if let Some(col_sensors) = SENSOR_BY_COL.get(col)
-                && let Some(&val) = col_sensors.get(row)
+            // SENSOR_POSITIONS is row-major, so transpose the indices here to
+            // walk it column-major without a separate intermediate table.
+            let has_sensor = if let Some(sensor_row) = SENSOR_POSITIONS.get(row)
+                && let Some(&val) = sensor_row.get(col)
             {
                 val
             } else {

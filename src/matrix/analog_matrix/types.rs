@@ -188,14 +188,9 @@ pub enum KeyCalibState {
 
 /// All per-key data accessed on every scan iteration, in a single flat struct.
 ///
-/// Fields are ordered hot-to-cold: the values touched on a noise-gated scan
-/// pass (`last_raw`, `lut_zero`, `inv_scale`, `travel`, `extremum`,
-/// `pressed`, `calib_used`) come first and the auto-calibration / EEPROM
-/// state last. The STM32F401's Cortex-M4 has no data cache and no
-/// tightly-coupled memory, so this ordering provides no cache-line benefit;
-/// `repr(C)` simply pins the declared order so the hot fields stay at small,
-/// fixed struct offsets that the Thumb-2 load/store instructions can reach
-/// with the shortest immediate offsets.
+/// Fields are listed alphabetically. The STM32F401's Cortex-M4 has no data
+/// cache and no tightly-coupled memory, so field order has no cache-line
+/// effect and the exact layout is left to the compiler.
 ///
 /// The matrix stores entries column-major as `[[KeyEntry; ROW]; COL]` so all
 /// row entries for one HC164 column are contiguous in SRAM; the column scan
@@ -203,34 +198,19 @@ pub enum KeyCalibState {
 ///
 /// Initialise via [`Default`]; call [`KeyEntry::apply_zero`] with the measured
 /// resting ADC after loading EEPROM or completing first-boot calibration.
-#[repr(C)]
 #[derive(Default)]
 pub struct KeyEntry {
-    /// Raw ADC from the previous scan cycle (noise gate filter).
-    /// `u16::MAX` on first boot so the first real reading always passes.
-    pub last_raw:      u16 = u16::MAX,
-    /// LUT value at zero travel, precomputed for fast travel arithmetic.
-    pub lut_zero:      u16,
-    /// Q16.16 reciprocal of the calibrated travel range.
-    pub inv_scale:     u32,
-    /// Quantised travel value from the previous scan cycle.
-    pub travel:        u8,
-    /// Local extremum for rapid-trigger (peak while pressed, trough while
-    /// released). Reset to `new_travel` on every press↔release transition.
-    pub extremum:      u8 = u8::MAX,
-    /// Whether the key is currently considered pressed.
-    pub pressed:       bool,
-    /// Whether this matrix position has a valid hall-effect sensor.
-    pub calib_used:    bool,
-    /// Candidate zero-travel ADC peak tracked during the releasing phase.
-    pub ac_zero_cand:  u16,
+    /// Confidence counter; incremented per scored cycle, reset after an update.
+    pub ac_confidence: u8,
     /// Candidate full-travel ADC minimum tracked during the pressing phase.
     /// Initialised to `u16::MAX` so the first genuine press overwrites it.
     pub ac_full_cand:  u16 = u16::MAX,
     /// Current phase of the auto-calibration state machine.
     pub ac_phase:      AutoCalibPhase,
-    /// Confidence counter; incremented per scored cycle, reset after an update.
-    pub ac_confidence: u8,
+    /// Candidate zero-travel ADC peak tracked during the releasing phase.
+    pub ac_zero_cand:  u16,
+    /// Whether this matrix position has a valid hall-effect sensor.
+    pub calib_used:    bool,
     /// Raw ADC at zero travel; stored for drift detection in
     /// [`KeyEntry::update_calib_if_drifted`].
     pub calib_zero:    u16 = REF_ZERO_TRAVEL,
@@ -238,6 +218,20 @@ pub struct KeyEntry {
     /// Combined with a freshly measured zero reading on each boot to derive
     /// the hot-path fields via [`KeyEntry::apply_zero`].
     pub entry_full:    u16 = REF_ZERO_TRAVEL.saturating_sub(DEFAULT_FULL_RANGE),
+    /// Local extremum for rapid-trigger (peak while pressed, trough while
+    /// released). Reset to `new_travel` on every press↔release transition.
+    pub extremum:      u8 = u8::MAX,
+    /// Q16.16 reciprocal of the calibrated travel range.
+    pub inv_scale:     u32,
+    /// Raw ADC from the previous scan cycle (noise gate filter).
+    /// `u16::MAX` on first boot so the first real reading always passes.
+    pub last_raw:      u16 = u16::MAX,
+    /// LUT value at zero travel, precomputed for fast travel arithmetic.
+    pub lut_zero:      u16,
+    /// Whether the key is currently considered pressed.
+    pub pressed:       bool,
+    /// Quantised travel value from the previous scan cycle.
+    pub travel:        u8,
 }
 
 impl KeyEntry {

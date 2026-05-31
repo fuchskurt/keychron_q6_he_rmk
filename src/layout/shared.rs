@@ -6,11 +6,3 @@ pub mod layout;
 pub mod led;
 /// Hall-effect sensor presence map.
 pub mod sensor;
-
-use crate::layout::{COL, ROW};
-
-/// Compile-time guards: if `ROW` or `COL` in `keymap.rs` ever change, the
-/// hardcoded dimensions of [`crate::layout::ansi::SENSOR_POSITIONS`]
-/// must be updated to match.
-const _: [(); ROW] = [(); 6];
-const _: [(); COL] = [(); 21];
