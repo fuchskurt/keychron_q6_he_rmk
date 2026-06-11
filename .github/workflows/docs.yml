@@ -37,8 +37,13 @@ jobs:
           targets: thumbv7em-none-eabihf
           components: rust-src
 
+      # Caches the cargo registry, the embassy/rmk git checkouts, and the
+      # build-std artifacts in target/, which dominate cold-build time.
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
+
       - name: Build docs
-        run: cargo doc --release --no-deps --document-private-items --features ansi_layout
+        run: cargo doc --release --locked --no-deps --document-private-items --features ansi_layout
         env:
           RUSTDOCFLAGS: "--default-theme dark"
 

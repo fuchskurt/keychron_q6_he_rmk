@@ -269,10 +269,15 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
                         *key_state = KeyCalibState::Accepted;
                         calibrated_count = calibrated_count.saturating_add(1);
 
+                        // Best-effort: dropped when the channel is full (the
+                        // backlight task drains it only after USB
+                        // enumeration). A blocking send here would stall the
+                        // calibration state machine behind the backlight; a
+                        // dropped message only loses one green key repaint.
                         if let Some(led_row) = MATRIX_TO_LED.get(key_row)
                             && let Some(&Some(led_idx)) = led_row.get(col)
                         {
-                            BACKLIGHT_CH.sender().send(BacklightCmd::CalibKeyDone(led_idx)).await;
+                            _ = BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibKeyDone(led_idx));
                         }
 
                         // Progress percentage in 0..=100; saturating at every
@@ -282,9 +287,11 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
                             u8::try_from(calibrated_count.saturating_mul(100).checked_div(total_keys).unwrap_or(0))
                                 .unwrap_or(100)
                                 .min(100);
+                        // Best-effort like CalibKeyDone above; the next
+                        // progress update repaints the gradient anyway.
                         if pct != last_pct {
                             last_pct = pct;
-                            BACKLIGHT_CH.sender().send(BacklightCmd::CalibProgress(pct)).await;
+                            _ = BACKLIGHT_CH.sender().try_send(BacklightCmd::CalibProgress(pct));
                         }
                     },
                     // Holding while still pressed but under the hold

@@ -26,9 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The experimental pipelined_scan feature swaps in a different scan
-        # loop, so one matrix entry keeps it compiling and lint-clean.
-        features: [ansi_layout, iso_layout, jis_layout, "ansi_layout,pipelined_scan"]
+        features: [ansi_layout, iso_layout, jis_layout]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -46,8 +44,10 @@ jobs:
         with:
           key: ${{ matrix.features }}
 
+      # --locked: fail loudly if Cargo.lock is out of sync instead of
+      # silently floating the git dependencies to new upstream commits.
       - name: Clippy
-        run: cargo clippy --release --features ${{ matrix.features }}
+        run: cargo clippy --release --locked --features ${{ matrix.features }}
 
   build:
     name: Build (${{ matrix.features }})
@@ -55,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        features: [ansi_layout, iso_layout, jis_layout, "ansi_layout,pipelined_scan"]
+        features: [ansi_layout, iso_layout, jis_layout]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -77,4 +77,4 @@ jobs:
         run: cargo install flip-link
 
       - name: Build firmware
-        run: cargo build --release --features ${{ matrix.features }}
+        run: cargo build --release --locked --features ${{ matrix.features }}

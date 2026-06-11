@@ -44,6 +44,16 @@ command = "cargo"
 args = ["objcopy", "--release", "--features", "ansi_layout", "--", "-O", "binary", "rmk.bin"]
 
 [tasks.flash]
-description = "Build and flash firmware via DFU (STM32 bootloader)"
+description = "Build and flash the ANSI firmware via DFU (STM32 bootloader)"
 command = "cargo"
 args = ["dfu", "--vid", "0x483", "--pid", "0xdf11", "--release", "--features", "ansi_layout"]
+
+[tasks.flash-iso]
+description = "Build and flash the ISO firmware via DFU (STM32 bootloader)"
+command = "cargo"
+args = ["dfu", "--vid", "0x483", "--pid", "0xdf11", "--release", "--features", "iso_layout"]
+
+[tasks.flash-jis]
+description = "Build and flash the JIS firmware via DFU (STM32 bootloader)"
+command = "cargo"
+args = ["dfu", "--vid", "0x483", "--pid", "0xdf11", "--release", "--features", "jis_layout"]

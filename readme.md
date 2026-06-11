@@ -71,11 +71,11 @@ cargo make install
 
    The keyboard reboots automatically when flashing completes.
 
-> `cargo make flash` defaults to the ANSI layout. To flash a different layout, pass the feature flag directly:
+> `cargo make flash` builds the ANSI layout. For the other layouts use:
 >
 > ```sh
-> cargo dfu --vid 0x483 --pid 0xdf11 --release --features iso_layout
-> cargo dfu --vid 0x483 --pid 0xdf11 --release --features jis_layout
+> cargo make flash-iso
+> cargo make flash-jis
 > ```
 
 ### Pre-built binaries
@@ -171,33 +171,22 @@ the end-to-end figures.
 - **USB HID poll rate** (1,000 Hz, 1 ms) is the practical latency floor for the host.
   The 3,336 Hz scan rate means the keyboard scans more than 3× per USB frame.
 
+- **Pipelined scan loop**: the scan loop is double-buffered — the first poll of the
+  sequence read arms the DMA and starts the ADC, then the previous column's readings are
+  processed on the CPU while the conversion proceeds in hardware. Based on the budget
+  above (~9.8 µs DMA + ~3.5 µs processing per column) this hides the entire processing
+  window, for a theoretical pass time of ~230 µs and a scan rate around 4.3 kHz (+30%
+  over the sequential figures in the tables, which predate the pipelining). Note that the
+  CPU now executes during ADC conversions, which can couple digital switching noise into
+  the hall-sensor readings (the same coupling class as the AN4073 workaround applied for
+  USB). The noise gate (±10 counts) is the first line of defense; if a unit shows
+  resting-position jitter, compare against a build with the pipelining reverted.
+
 - **Binary size flags**: the nightly `-Zfmt-debug=none` and `-Zlocation-detail=none`
   rustflags were measured to save exactly 0 bytes — `panic = "immediate-abort"` plus fat
   LTO already eliminates all formatting and panic-location machinery, and the stripped
   binary embeds no source paths (so `trim-paths` would be a no-op as well). None of them
   are enabled.
-
----
-
-## Experimental: pipelined scan loop
-
-The `pipelined_scan` feature (off by default) swaps the scan loop for a double-buffered
-variant that overlaps per-column key processing with the next column's ADC DMA
-conversion: the first poll of the sequence read arms the DMA and starts the ADC, then the
-previous column's readings are processed on the CPU while the conversion proceeds in
-hardware. Based on the benchmarked budget above (~9.8 µs DMA + ~3.5 µs processing per
-column) this hides the entire processing window, for a theoretical pass time of ~230 µs
-and a scan rate around 4.3 kHz (+30%).
-
-```sh
-cargo dfu --vid 0x483 --pid 0xdf11 --release --features ansi_layout,pipelined_scan
-```
-
-It is opt-in because the CPU now executes during ADC conversions, which can couple
-digital switching noise into the hall-sensor readings (the same coupling class as the
-AN4073 workaround already applied for USB). Before adopting it as the default, verify on
-hardware that the resting-position noise stays comfortably inside the noise gate
-(±10 counts) and that first-boot calibration and rapid-trigger behaviour are unchanged.
 
 ---
 

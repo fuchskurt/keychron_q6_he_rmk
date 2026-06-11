@@ -4,15 +4,10 @@
 //! `self`) so the scanner type keeps a single inherent impl while this code
 //! lives in its own module.
 //!
-//! Two loop strategies share the same per-column processing in
-//! [`process_column`]:
-//!
-//! - **Sequential** (default): sample a column, then process it while the next
-//!   column's select line settles.
-//! - **Pipelined** (`pipelined_scan` feature): double-buffered; the previous
-//!   column is processed *while* the ADC converts the current one, hiding the
-//!   processing window behind the DMA transfer. Opt-in until the ADC noise
-//!   floor with concurrent CPU activity has been validated on hardware.
+//! The loop is double-buffered (pipelined): while the ADC+DMA converts the
+//! currently selected column, the CPU processes the previous column's
+//! readings in `process_column`, hiding the per-column processing window
+//! behind the DMA transfer that dominates the per-column budget.
 
 use crate::{
     layout::VALID_ROWS_BY_COL,
@@ -21,14 +16,13 @@ use crate::{
         hc164_cols::Hc164Cols,
     },
 };
-use core::hint::{cold_path, likely};
-#[cfg(feature = "pipelined_scan")]
-use core::mem::swap;
+use core::{
+    hint::{cold_path, likely},
+    mem::swap,
+};
 use embassy_stm32::{adc::ConfiguredSequence, pac::adc};
-#[cfg(feature = "pipelined_scan")]
-use rmk::embassy_futures::join::join;
 use rmk::{
-    embassy_futures::yield_now,
+    embassy_futures::{join::join, yield_now},
     event::{KeyboardEvent, publish_event_async},
 };
 
@@ -146,8 +140,8 @@ async fn process_column<const ROW: usize, const COL: usize>(
     }
 }
 
-/// Hot-path matrix scan loop. Runs forever, publishing key state changes
-/// directly via [`publish_event_async`] as they are detected.
+/// Pipelined hot-path matrix scan loop. Runs forever, publishing key state
+/// changes directly via [`publish_event_async`] as they are detected.
 ///
 /// The [`ConfiguredSequence`] is programmed once before entry and reused
 /// across all columns and passes. Both the column settle delay and the DMA
@@ -155,29 +149,6 @@ async fn process_column<const ROW: usize, const COL: usize>(
 /// the auto-calibrator is updated before the travel and rapid-trigger
 /// logic runs, so any calibration refinement takes effect within the same
 /// scan pass.
-#[cfg(not(feature = "pipelined_scan"))]
-#[optimize(speed)]
-pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
-    cols: &mut Hc164Cols<'_>,
-    keys: &mut [[KeyEntry; ROW]; COL],
-    seq: &mut ConfiguredSequence<'_, adc::Adc>,
-    buf: &mut [u16; ROW],
-    cfg: HallCfg,
-) -> ! {
-    let tuning = RtTuning::from_cfg(cfg);
-    loop {
-        cols.reset();
-        for col in 0..COL {
-            yield_now().await;
-            seq.read(buf).await;
-            cols.advance();
-            process_column(keys, buf, col, tuning).await;
-        }
-    }
-}
-
-/// Pipelined hot-path matrix scan loop. Runs forever, publishing key state
-/// changes directly via [`publish_event_async`] as they are detected.
 ///
 /// Double-buffered: the first poll of [`ConfiguredSequence::read`] inside
 /// [`join`] arms the DMA transfer and starts the ADC sequence, then the
@@ -188,7 +159,6 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
 ///
 /// The last column of a pass is processed during the first conversion of the
 /// next pass, so the pipeline never needs a separate drain step.
-#[cfg(feature = "pipelined_scan")]
 #[optimize(speed)]
 pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,

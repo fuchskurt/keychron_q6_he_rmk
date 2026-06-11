@@ -28,15 +28,18 @@ jobs:
 
       - name: Build ANSI firmware
         run: |
-          cargo objcopy --release --features ansi_layout -- -O binary keychron-q6-he-rmk-ansi-${{ github.ref_name }}.bin
+          cargo objcopy --release --locked --features ansi_layout -- -O binary keychron-q6-he-rmk-ansi-${{ github.ref_name }}.bin
 
       - name: Build ISO firmware
         run: |
-          cargo objcopy --release --features iso_layout -- -O binary keychron-q6-he-rmk-iso-${{ github.ref_name }}.bin
+          cargo objcopy --release --locked --features iso_layout -- -O binary keychron-q6-he-rmk-iso-${{ github.ref_name }}.bin
 
       - name: Build JIS firmware
         run: |
-          cargo objcopy --release --features jis_layout -- -O binary keychron-q6-he-rmk-jis-${{ github.ref_name }}.bin
+          cargo objcopy --release --locked --features jis_layout -- -O binary keychron-q6-he-rmk-jis-${{ github.ref_name }}.bin
+
+      - name: Generate checksums
+        run: sha256sum keychron-q6-he-rmk-*-${{ github.ref_name }}.bin > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -53,6 +56,7 @@ jobs:
             | `keychron-q6-he-rmk-jis-${{ github.ref_name }}.bin`  | JIS    |
 
             Download the `.bin` file matching your layout from the assets below.
+            Verify downloads with `sha256sum -c SHA256SUMS`.
 
             ---
 
@@ -80,5 +84,6 @@ jobs:
             keychron-q6-he-rmk-ansi-${{ github.ref_name }}.bin
             keychron-q6-he-rmk-iso-${{ github.ref_name }}.bin
             keychron-q6-he-rmk-jis-${{ github.ref_name }}.bin
+            SHA256SUMS
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
