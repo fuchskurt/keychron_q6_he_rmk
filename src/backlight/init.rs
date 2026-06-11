@@ -255,8 +255,8 @@ impl BacklightRunner {
     ///
     /// On disconnect the backlight is ramped down and the driver chips are
     /// shut down; on reconnect the chips are woken back up and the backlight
-    /// is ramped to [`FULL_BRIGHTNESS`]. No-op while the connection state is
-    /// unchanged.
+    /// is ramped to the current global brightness (which reflects any active
+    /// thermal throttle). No-op while the connection state is unchanged.
     ///
     /// While a first-boot calibration owns the display, the connect path
     /// repaints the active calibration frame instead of running the white
@@ -272,7 +272,10 @@ impl BacklightRunner {
         if connected {
             _ = self.driver.wake().await;
             if state.calib_display == CalibDisplay::None {
-                _ = brightness_ramp(&mut self.driver, INDICATOR_WHITE, FULL_BRIGHTNESS, true, *state).await;
+                // Ramp to the state-tracked brightness rather than a fixed
+                // 100% so an active thermal throttle survives the reconnect;
+                // the thermal ticker restores full brightness once cool.
+                _ = brightness_ramp(&mut self.driver, INDICATOR_WHITE, state.brightness, true, *state).await;
             } else {
                 _ = self.render_current(*state).await;
             }
