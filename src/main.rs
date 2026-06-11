@@ -320,7 +320,15 @@ async fn main(spawner: Spawner) {
     let mut led_indicator = LedIndicator::new();
     let mut backlight = BacklightRunner::new(spi_backlight, cs0, cs1, sdb);
 
-    // Start
+    // Start.
+    //
+    // All tasks intentionally share this single thread-mode executor: RMK
+    // selects ThreadModeRawMutex for its internal event/report channels on
+    // cortex-m targets, so every publisher and consumer - including the
+    // matrix scanner's publish_event_async - must stay in thread mode.
+    // Moving the scanner to a higher-priority InterruptExecutor would lock
+    // those mutexes from handler mode, which is unsound; that optimisation
+    // is blocked until RMK uses CriticalSectionRawMutex on this target.
     run_all!(keyboard, usb_transport, matrix, encoder, enc_switch, layer_toggle, storage, led_indicator, backlight)
         .await;
 }
