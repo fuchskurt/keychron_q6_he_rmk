@@ -8,6 +8,11 @@ use rmk::{
 ///
 /// Sized to absorb one message per variant type arriving in quick succession
 /// without blocking the matrix scanner.
+///
+/// The backlight task drains the channel only after USB enumeration, so the
+/// matrix side uses blocking sends solely for the calibration phase
+/// transitions (at most four per calibration, which always fit) and
+/// best-effort `try_send` for the high-volume per-key and progress updates.
 const BACKLIGHT_CH_CAPACITY: usize = 8;
 
 /// Channel used to send backlight indicator commands.
