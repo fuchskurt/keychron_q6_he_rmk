@@ -21,12 +21,14 @@ concurrency:
 
 jobs:
   clippy:
-    name: Clippy (${{ matrix.layout }})
+    name: Clippy (${{ matrix.features }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        layout: [ansi_layout, iso_layout, jis_layout]
+        # The experimental pipelined_scan feature swaps in a different scan
+        # loop, so one matrix entry keeps it compiling and lint-clean.
+        features: [ansi_layout, iso_layout, jis_layout, "ansi_layout,pipelined_scan"]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -37,16 +39,23 @@ jobs:
           components: clippy, rust-src
           targets: thumbv7em-none-eabihf
 
+      # Caches the cargo registry, the embassy/rmk git checkouts, and the
+      # build-std artifacts in target/, which dominate cold-build time.
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.features }}
+
       - name: Clippy
-        run: cargo clippy --release --features ${{ matrix.layout }}
+        run: cargo clippy --release --features ${{ matrix.features }}
 
   build:
-    name: Build (${{ matrix.layout }})
+    name: Build (${{ matrix.features }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        layout: [ansi_layout, iso_layout, jis_layout]
+        features: [ansi_layout, iso_layout, jis_layout, "ansi_layout,pipelined_scan"]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -57,8 +66,15 @@ jobs:
           components: rust-src
           targets: thumbv7em-none-eabihf
 
+      # Also restores ~/.cargo/bin, so flip-link installs from cache on
+      # subsequent runs.
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.features }}
+
       - name: Install flip-link
         run: cargo install flip-link
 
       - name: Build firmware
-        run: cargo build --release --features ${{ matrix.layout }}
+        run: cargo build --release --features ${{ matrix.features }}
