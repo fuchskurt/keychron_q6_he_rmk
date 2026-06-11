@@ -1,4 +1,8 @@
 [toolchain]
 channel = "nightly"
 targets = ["thumbv7em-none-eabihf"]
-components = ["clippy", "rustfmt"]
+# rust-src is required by the `build-std` setting in .cargo/config.toml;
+# llvm-tools is required by cargo-binutils (`cargo objcopy`/`cargo size`).
+# Listing them here lets rustup install everything on the first build instead
+# of requiring manual `rustup component add` steps.
+components = ["clippy", "rustfmt", "rust-src", "llvm-tools"]

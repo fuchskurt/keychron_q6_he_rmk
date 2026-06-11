@@ -91,12 +91,12 @@ where
     /// triggered repeatedly without reprogramming. The row pins are re-borrowed
     /// only while the sequence is being built, so the returned reader borrows
     /// just the ADC and DMA channel.
-    fn configured_sequence<'reader, IRQ2>(&'reader mut self, irq: IRQ2) -> ConfiguredSequence<'reader, adc::Adc>
+    fn configure_sequence<'reader, IRQ2>(&'reader mut self, irq: IRQ2) -> ConfiguredSequence<'reader, adc::Adc>
     where
         IRQ2: Binding<D::Interrupt, InterruptHandler<D>> + 'reader + 'peripherals,
     {
         let st = self.sample_time;
-        self.adc.configured_sequence(
+        self.adc.configure_sequence(
             self.dma.reborrow(),
             self.rows.reborrow_channels().into_iter().map(|ch| (ch, st)),
             irq,
@@ -208,7 +208,7 @@ where
         let loaded = self.eeprom.read(EEPROM_BASE_ADDR, &mut eeprom_buf).await.is_ok()
             && try_deserialize::<ROW, COL>(&eeprom_buf, &mut self.keys, &mut self.crc);
         let mut buf = [0_u16; ROW];
-        let mut seq = self.adc_part.configured_sequence(self.irq);
+        let mut seq = self.adc_part.configure_sequence(self.irq);
         if loaded {
             // Re-measure zero travel on every boot to compensate for
             // temperature drift; full-travel data comes from EEPROM.

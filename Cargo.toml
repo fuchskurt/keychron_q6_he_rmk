@@ -12,6 +12,12 @@ license = "MIT OR Apache-2.0"
 ansi_layout = []
 iso_layout = []
 jis_layout = []
+# Experimental: overlap per-column key processing with the next column's ADC
+# DMA conversion (double-buffered scan loop). Hides the processing window
+# behind the DMA transfer for a higher scan rate, but runs the CPU during
+# conversions; keep off until the ADC noise floor has been validated on
+# hardware with this enabled.
+pipelined_scan = []
 
 [dependencies]
 cortex-m = { version = "0", features = ["critical-section-single-core", "inline-asm", "linker-plugin-lto"] }

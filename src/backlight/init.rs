@@ -97,10 +97,8 @@ impl BacklightFlags {
     const CAPS_LOCK: u8 = 0b0001;
     /// The USB host is currently connected and enumerated.
     const HOST_CONNECTED: u8 = 0b0010;
-    /// A first-boot calibration pass is currently in progress.
-    const IN_CALIB: u8 = 0b0100;
     /// Num Lock is currently active.
-    const NUM_LOCK: u8 = 0b1000;
+    const NUM_LOCK: u8 = 0b0100;
 
     /// Read the flag selected by `mask`.
     const fn get(self, mask: u8) -> bool { self.bits & mask != 0 }
@@ -115,12 +113,38 @@ impl BacklightFlags {
     }
 }
 
+/// Which guided-calibration frame currently owns the display.
+///
+/// Tracked in [`BacklightState`] so any asynchronous repaint (thermal
+/// throttle, USB connect/resume transitions) can redraw the frame the
+/// calibration flow expects instead of clobbering it with the normal white
+/// background. `Full` and `Zero` both mean a first-boot calibration is in
+/// progress.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum CalibDisplay {
+    /// Full-travel pass; red→blue gradient plus per-key green overlays.
+    Full,
+    /// No calibration in progress; normal white background.
+    #[default]
+    None,
+    /// Zero-travel pass (or EEPROM-write-failure signal); solid amber.
+    Zero,
+}
+
 /// Full backlight state, kept in one place so any path can do a consistent
 /// redraw without losing information.
 #[derive(Clone, Copy, Default)]
 struct BacklightState {
     /// Global brightness percentage (0-100); reduced under thermal throttle.
     brightness:      u8 = FULL_BRIGHTNESS,
+    /// The calibration frame (if any) that currently owns the display.
+    ///
+    /// Set to [`CalibDisplay::Zero`] when the zero-travel pass starts,
+    /// [`CalibDisplay::Full`] for the full-travel pass, and back to
+    /// [`CalibDisplay::None`] once [`Done`] completes and the keyboard
+    /// returns to normal white operation. Consulted by every asynchronous
+    /// repaint path via [`BacklightRunner::render_current`].
+    calib_display:   CalibDisplay,
     /// Bitset of LED indices confirmed calibrated during the full-travel pass.
     ///
     /// Bit `i` set means LED `i` should be painted solid green by
@@ -133,14 +157,11 @@ struct BacklightState {
     /// Cleared to zero alongside [`BacklightState::calib_leds_done`] on
     /// calibration completion.
     calib_pct:       u8,
-    /// Packed lock / host-connection / calibration-in-progress flags.
+    /// Packed lock / host-connection flags.
     ///
     /// `host_connected` is tracked across [`CONNECTION_POLL`] ticks to detect
     /// connect and disconnect transitions. On disconnect all LEDs are turned
-    /// off; on reconnect the backlight is restored. `in_calib` is `true` from
-    /// [`Zero`] until [`Done`] completes and is used by the thermal-throttle
-    /// path to call [`render_calib`] instead of [`render_all`] so a thermal
-    /// event never clobbers the calibration display.
+    /// off; on reconnect the backlight is restored.
     flags:           BacklightFlags,
 }
 
@@ -163,12 +184,13 @@ impl BacklightRunner {
         match phase {
             Zero => {
                 // Amber: zero-travel pass, all keys should be fully released.
-                state.flags.set(BacklightFlags::IN_CALIB, true);
+                state.calib_display = CalibDisplay::Zero;
                 _ = fill_all_leds(&mut self.driver, CALIB_AMBER, state.brightness).await;
             },
             Full => {
                 // Reset calib tracking and render the initial red frame via
                 // render_calib so the full-travel phase starts consistently.
+                state.calib_display = CalibDisplay::Full;
                 state.calib_leds_done = 0;
                 state.calib_pct = 0;
                 _ = render_calib(&mut self.driver, *state).await;
@@ -193,7 +215,7 @@ impl BacklightRunner {
                 Timer::after_millis(CALIB_DONE_HOLD_MS).await;
                 // Clear all calibration state before returning to normal white
                 // so stale bits cannot bleed into the next render.
-                state.flags.set(BacklightFlags::IN_CALIB, false);
+                state.calib_display = CalibDisplay::None;
                 state.calib_leds_done = 0;
                 state.calib_pct = 0;
                 _ = render_all(&mut self.driver, *state).await;
@@ -235,6 +257,12 @@ impl BacklightRunner {
     /// shut down; on reconnect the chips are woken back up and the backlight
     /// is ramped to [`FULL_BRIGHTNESS`]. No-op while the connection state is
     /// unchanged.
+    ///
+    /// While a first-boot calibration owns the display, the connect path
+    /// repaints the active calibration frame instead of running the white
+    /// ramp. Without this, the first connection tick after boot (or a USB
+    /// resume mid-calibration) would clobber the guided amber/gradient
+    /// display with a one-second ramp to solid white.
     async fn handle_connection_tick(&mut self, state: &mut BacklightState) {
         let connected = usb_is_active();
         if connected == state.flags.get(BacklightFlags::HOST_CONNECTED) {
@@ -243,7 +271,11 @@ impl BacklightRunner {
         state.flags.set(BacklightFlags::HOST_CONNECTED, connected);
         if connected {
             _ = self.driver.wake().await;
-            _ = brightness_ramp(&mut self.driver, INDICATOR_WHITE, FULL_BRIGHTNESS, true, *state).await;
+            if state.calib_display == CalibDisplay::None {
+                _ = brightness_ramp(&mut self.driver, INDICATOR_WHITE, FULL_BRIGHTNESS, true, *state).await;
+            } else {
+                _ = self.render_current(*state).await;
+            }
         } else {
             // Host disconnected: turn off all LEDs until the next connect
             // event restores the backlight.
@@ -257,9 +289,9 @@ impl BacklightRunner {
     /// If either chip reports a temperature at or above 70 °C, brightness
     /// drops to [`THERMAL_THROTTLE_BRIGHTNESS`]; once both chips cool down,
     /// brightness is restored to [`FULL_BRIGHTNESS`]. Re-renders via
-    /// [`render_calib`] during a calibration pass so the gradient and per-key
-    /// green state survive the brightness change, otherwise via
-    /// [`render_all`].
+    /// [`BacklightRunner::render_current`] so a thermal event during a
+    /// calibration pass repaints the active calibration frame (amber or
+    /// gradient) rather than clobbering it with the normal white display.
     async fn handle_thermal_tick(&mut self, state: &mut BacklightState) {
         let hot = self.driver.check_thermal_flag_set(0).await || self.driver.check_thermal_flag_set(1).await;
         let new_brightness = if hot { THERMAL_THROTTLE_BRIGHTNESS } else { FULL_BRIGHTNESS };
@@ -267,11 +299,7 @@ impl BacklightRunner {
             return;
         }
         state.brightness = new_brightness;
-        if state.flags.get(BacklightFlags::IN_CALIB) {
-            _ = render_calib(&mut self.driver, *state).await;
-        } else {
-            _ = render_all(&mut self.driver, *state).await;
-        }
+        _ = self.render_current(*state).await;
     }
 
     /// Construct and take ownership of the SPI bus and all chip-select pins.
@@ -291,6 +319,26 @@ impl BacklightRunner {
         let transport = Controller::new([device0, device1], sdb);
         let driver = BacklightDriver::new(transport, LED_LAYOUT);
         Self { driver }
+    }
+
+    /// Repaint whichever frame currently owns the display: the active
+    /// guided-calibration frame, or the normal white background with the
+    /// indicator overlays.
+    ///
+    /// Used by every asynchronous repaint path (thermal throttle, USB
+    /// connect/resume) so an unrelated event can never replace the
+    /// calibration display with the wrong frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if any bus transaction fails. See
+    /// [`BacklightDriver::flush`].
+    async fn render_current(&mut self, state: BacklightState) -> Result<(), BusError> {
+        match state.calib_display {
+            CalibDisplay::None => render_all(&mut self.driver, state).await,
+            CalibDisplay::Zero => fill_all_leds(&mut self.driver, CALIB_AMBER, state.brightness).await,
+            CalibDisplay::Full => render_calib(&mut self.driver, state).await,
+        }
     }
 }
 
