@@ -11,10 +11,15 @@ on:
   pull_request:
     branches: ["main"]
 
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     name: Analyze (rust)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       security-events: write
       packages: read
@@ -31,8 +36,11 @@ jobs:
           components: rust-src
           targets: thumbv7em-none-eabihf
 
+      # Prebuilt binary where available; falls back to cargo install.
       - name: Install flip-link
-        run: cargo install flip-link
+        uses: taiki-e/install-action@v2
+        with:
+          tool: flip-link
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

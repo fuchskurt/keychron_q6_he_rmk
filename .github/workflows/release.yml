@@ -12,6 +12,7 @@ jobs:
   build:
     name: Build Firmware
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -23,8 +24,16 @@ jobs:
           targets: thumbv7em-none-eabihf
           components: rust-src, llvm-tools
 
+      # Prebuilt binaries where available; falls back to cargo install.
       - name: Install flip-link and cargo-binutils
-        run: cargo install flip-link cargo-binutils
+        uses: taiki-e/install-action@v2
+        with:
+          tool: flip-link,cargo-binutils
+
+      # Restores the registry, git checkouts, and build-std artifacts from
+      # the CI caches built on main, so tag builds do not start cold.
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
 
       - name: Build ANSI firmware
         run: |

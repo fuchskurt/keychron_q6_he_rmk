@@ -12,14 +12,16 @@ built on [RMK](https://github.com/HaoboGu/rmk). Builds are available for the ANS
 
 ## Features
 
-- **Adjustable analog keys**: Keys actuate at 1.0 mm by default, adjustable in 0.1 mm steps. Rapid Trigger is enabled
-  with a starting sensitivity of 0.3 mm and no fixed reset point.
+- **Analog keys with Rapid Trigger**: Keys actuate at 1.0 mm of travel. A held key releases after rising just 0.3 mm
+  and re-fires after 0.5 mm of downward travel, wherever in the stroke that happens, with no fixed reset point. All
+  three distances are firmware settings in 0.1 mm steps.
 - **Live keymap editing**: Remap any key, layer, or encoder action on the fly through
   [rynk](https://github.com/HaoboGu/rmk/tree/feat/rynk_protocol), RMK's experimental remapping protocol. No reflashing
   needed.
 - **Mac and Windows layers**: Two base layers, switched with the physical toggle on the side of the keyboard.
-- **Per-key RGB backlight**: Caps Lock lights up red while active, Num Lock lights up white.
-- **Rotary encoder**: Volume up and down out of the box, remappable like any key.
+- **White backlight with status colors**: The backlight glows white during normal use. Caps Lock turns red while
+  active and Num Lock lights up while active. The per-key RGB hardware also guides you through calibration.
+- **Rotary encoder**: Volume up and down out of the box, press the knob to mute. Remappable like any key.
 - **Automatic calibration**: A guided one-time calibration on first boot, with the backlight walking you through it.
   After that the keyboard re-checks itself on every boot and quietly keeps its calibration fresh while you type, so
   sensor drift never becomes your problem.
@@ -28,13 +30,14 @@ built on [RMK](https://github.com/HaoboGu/rmk). Builds are available for the ANS
 
 ## Layouts
 
-| Layout | Feature flag                  |
-| ------ | ----------------------------- |
-| ANSI   | `ansi_layout` (default build) |
-| ISO    | `iso_layout`                  |
-| JIS    | `jis_layout`                  |
+| Layout | Feature flag  |
+| ------ | ------------- |
+| ANSI   | `ansi_layout` |
+| ISO    | `iso_layout`  |
+| JIS    | `jis_layout`  |
 
-Exactly one layout can be enabled per build. Pick the one that matches your board.
+Exactly one layout must be chosen per build; there is no default. The `cargo make` flash tasks below pick the right
+flag for you.
 
 ## Flashing
 
@@ -88,6 +91,9 @@ you through a short setup. Just follow the backlight:
 | **Red to blue gradient** | Press every key all the way down and hold it for a second. Each accepted key turns green, and the background shifts from red toward blue as you make progress. |
 | **Three green blinks**   | Every key has been recorded, you can let go now                                                                                                             |
 | **Solid green for 2 s**  | Calibration saved, the keyboard is ready                                                                                                                    |
+
+The press-every-key step ends once all keys are in, or after 3 minutes. Any key you did not get to still works with a
+sensible default range and fine-tunes itself automatically as you type.
 
 If the backlight goes back to amber after the green blinks, saving the calibration failed. Unplug the keyboard, plug it
 back in, and run the calibration again.
