@@ -61,7 +61,7 @@ jobs:
             ---
 
             ### Flashing (Prebuilt)
-            1. Put your keyboard into DFU mode (hold BOOT while plugging in, or use the reset button).
+            1. Put your keyboard into DFU mode: hold the reset button on the underside of the keyboard while plugging in the cable.
             2. Find your MCU's serial number:
             ```sh
             dfu-util -l
@@ -77,8 +77,9 @@ jobs:
 
             ### Building & Flashing from Source
             ```sh
-            cargo make install   # install required tools (first time only)
-            cargo make flash     # build and flash via DFU
+            cargo install cargo-make   # first time only
+            cargo make install         # install required tools (first time only)
+            cargo make flash           # build and flash via DFU
             ```
           files: |
             keychron-q6-he-rmk-ansi-${{ github.ref_name }}.bin
