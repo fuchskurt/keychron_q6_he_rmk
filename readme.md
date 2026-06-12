@@ -73,9 +73,9 @@ rustup installs the pinned nightly toolchain and its components automatically on
 To build and flash, put the keyboard into DFU mode the same way as described above, then run the task for your layout:
 
 ```sh
-cargo make flash       # ANSI
-cargo make flash-iso   # ISO
-cargo make flash-jis   # JIS
+cargo make flash-ansi   # ANSI
+cargo make flash-iso    # ISO
+cargo make flash-jis    # JIS
 ```
 
 The keyboard reboots on its own once flashing finishes.

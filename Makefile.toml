@@ -39,11 +39,19 @@ args = ["install", "cargo-dfu"]
 command = "cargo"
 args = ["install", "cargo-make"]
 
-[tasks.objcopy]
+[tasks.objcopy-ansi]
 command = "cargo"
-args = ["objcopy", "--release", "--features", "ansi_layout", "--", "-O", "binary", "rmk.bin"]
+args = ["objcopy", "--release", "--features", "ansi_layout", "--", "-O", "binary", "rmk-ansi.bin"]
 
-[tasks.flash]
+[tasks.objcopy-iso]
+command = "cargo"
+args = ["objcopy", "--release", "--features", "iso_layout", "--", "-O", "binary", "rmk-iso.bin"]
+
+[tasks.objcopy-jis]
+command = "cargo"
+args = ["objcopy", "--release", "--features", "jis_layout", "--", "-O", "binary", "rmk-jis.bin"]
+
+[tasks.flash-ansi]
 description = "Build and flash the ANSI firmware via DFU (STM32 bootloader)"
 command = "cargo"
 args = ["dfu", "--vid", "0x483", "--pid", "0xdf11", "--release", "--features", "ansi_layout"]
