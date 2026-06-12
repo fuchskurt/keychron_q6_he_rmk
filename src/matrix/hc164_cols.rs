@@ -1,6 +1,19 @@
 use embassy_stm32::gpio::Output;
 
 /// Column selector driven by an HC164 shift register.
+///
+/// The register holds a walking-one: exactly one column line is high at a
+/// time. Every scan pass must follow the same protocol, which both the
+/// calibration passes and the hot scan loop rely on:
+///
+/// 1. [`Hc164Cols::reset`] once before the pass, leaving column 0 selected.
+/// 2. Read the rows for the selected column (after a settle delay).
+/// 3. [`Hc164Cols::advance`] once after each read to select the next column.
+///
+/// After `COL - 1` advances the walking-one has moved past the last column;
+/// the next pass starts with a fresh [`Hc164Cols::reset`]. Reordering reads
+/// and advances desynchronises the selected column from the loop index for
+/// the remainder of the pass.
 pub struct Hc164Cols<'peripherals> {
     /// Clock input (`CP`) for shifting data into the register.
     cp: Output<'peripherals>,

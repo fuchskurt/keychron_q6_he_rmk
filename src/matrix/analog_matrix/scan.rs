@@ -77,13 +77,12 @@ async fn process_column<const ROW: usize, const COL: usize>(
     col: usize,
     tuning: RtTuning,
 ) {
-    // Slice to exactly the populated entries (one check instead of
-    // one per key), and hoist keys[col] out of the inner loop.
+    // valid_rows() slices to exactly the populated entries (one check
+    // instead of one per key); hoist keys[col] out of the inner loop.
     if let Some(valid) = VALID_ROWS_BY_COL.get(col)
-        && let Some(valid_rows) = valid.rows.get(..valid.count)
         && let Some(key_col) = keys.get_mut(col)
     {
-        for &row_u8 in valid_rows {
+        for &row_u8 in valid.valid_rows() {
             let row = usize::from(row_u8);
 
             // Clamp raw ADC value to valid range to prevent out-of-bounds

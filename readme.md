@@ -67,8 +67,7 @@ cargo make install
 
 rustup installs the pinned nightly toolchain and its components automatically on the first build.
 
-To build and flash, put the keyboard into DFU mode (the reset button underneath the space bar keycap, held while
-plugging in) and run the task for your layout:
+To build and flash, put the keyboard into DFU mode the same way as described above, then run the task for your layout:
 
 ```sh
 cargo make flash       # ANSI

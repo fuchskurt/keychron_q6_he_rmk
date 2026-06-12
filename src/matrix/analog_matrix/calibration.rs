@@ -107,8 +107,7 @@ pub(super) async fn calibrate_zero_raw<const ROW: usize, const COL: usize>(
 pub(super) fn count_real_sensors<const ROW: usize, const COL: usize>(zero_raw: &[[u16; COL]; ROW]) -> usize {
     let mut total: usize = 0;
     for (col_idx, valid) in VALID_ROWS_BY_COL.iter().enumerate() {
-        let Some(valid_rows) = valid.rows.get(..valid.count) else { continue };
-        for &row_u8 in valid_rows {
+        for &row_u8 in valid.valid_rows() {
             let in_range = zero_raw
                 .get(usize::from(row_u8))
                 .and_then(|row_slice| row_slice.get(col_idx))
@@ -220,12 +219,10 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
         scan_pass(cols, seq, buf, COL, |col, readings| {
             // Only valid sensor positions are stored in VALID_ROWS_BY_COL;
             // columns with no sensors produce an empty list and are skipped
-            // entirely without touching the calibration state machine.
-            // Slice to exactly the populated entries, matching the hot-path
-            // iteration pattern in `scan`.
+            // entirely without touching the calibration state machine,
+            // matching the hot-path iteration pattern in `scan`.
             let Some(valid) = VALID_ROWS_BY_COL.get(col) else { return };
-            let Some(valid_rows) = valid.rows.get(..valid.count) else { return };
-            for &row_u8 in valid_rows {
+            for &row_u8 in valid.valid_rows() {
                 let key_row = usize::from(row_u8);
                 let raw = readings.get(key_row).copied().unwrap_or(0);
 
@@ -354,8 +351,7 @@ pub(super) async fn settle_min_raw<const ROW: usize, const COL: usize>(
     while Instant::now() < deadline {
         scan_pass(cols, seq, buf, COL, |col, readings| {
             let Some(valid) = VALID_ROWS_BY_COL.get(col) else { return };
-            let Some(valid_rows) = valid.rows.get(..valid.count) else { return };
-            for &row_u8 in valid_rows {
+            for &row_u8 in valid.valid_rows() {
                 let row = usize::from(row_u8);
                 let raw = readings.get(row).copied().unwrap_or(0);
                 min_into(min_raw, row, col, raw);
