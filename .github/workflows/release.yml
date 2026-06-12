@@ -61,7 +61,7 @@ jobs:
             ---
 
             ### Flashing (Prebuilt)
-            1. Put your keyboard into DFU mode: hold the reset button on the underside of the keyboard while plugging in the cable.
+            1. Put your keyboard into DFU mode: pop off the space bar keycap and hold the reset button underneath it while plugging in the cable.
             2. Find your MCU's serial number:
             ```sh
             dfu-util -l

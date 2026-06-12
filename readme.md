@@ -43,7 +43,8 @@ Exactly one layout can be enabled per build. Pick the one that matches your boar
 Download the `.bin` matching your layout from the
 [Releases](https://github.com/fuchskurt/keychron_q6_he_rmk/releases) page, then:
 
-1. Put the keyboard into DFU mode: hold the reset button on the underside of the keyboard while plugging in the cable.
+1. Put the keyboard into DFU mode: pop off the space bar keycap and hold the reset button underneath it while
+   plugging in the cable.
 2. Find the keyboard's serial number with `dfu-util -l`.
 3. Flash:
 
@@ -66,8 +67,8 @@ cargo make install
 
 rustup installs the pinned nightly toolchain and its components automatically on the first build.
 
-To build and flash, put the keyboard into DFU mode (reset button on the underside while plugging in) and run the task
-for your layout:
+To build and flash, put the keyboard into DFU mode (the reset button underneath the space bar keycap, held while
+plugging in) and run the task for your layout:
 
 ```sh
 cargo make flash       # ANSI
@@ -103,8 +104,8 @@ keyboard to a rynk-compatible client, edit your layout, and the changes apply im
 
 ## Scan rate
 
-The firmware scans the whole key matrix around 3,300 times per second, more than three full passes per USB poll (the
-host polls at 1,000 Hz). The average key latency added by scanning is roughly 150 microseconds.
+The firmware scans the whole key matrix at about 3,300 Hz, more than three full passes per USB poll (the host polls at
+1,000 Hz). The average key latency added by scanning is roughly 150 microseconds.
 
 ## License
 
