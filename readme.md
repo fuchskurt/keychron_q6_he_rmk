@@ -99,7 +99,8 @@ If the backlight goes back to amber after the green blinks, saving the calibrati
 back in, and run the calibration again.
 
 On every later boot the keyboard briefly re-measures each key's resting position to account for temperature changes,
-then starts up normally.
+then starts up normally. A key held down while the keyboard powers on keeps working and recalibrates itself
+automatically after a few presses.
 
 ## Keymap editing
 

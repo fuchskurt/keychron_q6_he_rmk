@@ -299,9 +299,20 @@ impl KeyEntry {
 
     /// Recompute calibration from a freshly measured `zero`-travel reading
     /// paired with the full-travel stored in [`KeyEntry::entry_full`].
+    ///
+    /// A reading more than [`CALIB_ZERO_TOLERANCE`] *below*
+    /// [`REF_ZERO_TRAVEL`] means the key was almost certainly held down while
+    /// the boot zero pass sampled it, so instead of letting
+    /// [`KeyEntry::apply_calib`] disable the position, fall back to
+    /// [`REF_ZERO_TRAVEL`]: the key registers as pressed until released and
+    /// the auto-calibrator replaces the approximate zero after the first few
+    /// genuine press/release cycles. Readings far *above* the reference still
+    /// disable the position; that side indicates a missing or faulty sensor
+    /// rather than a held key.
     pub const fn apply_zero(&mut self, zero: u16) {
+        let resting = if zero.saturating_add(CALIB_ZERO_TOLERANCE) < REF_ZERO_TRAVEL { REF_ZERO_TRAVEL } else { zero };
         let full = self.entry_full;
-        self.apply_calib(zero, full);
+        self.apply_calib(resting, full);
     }
 
     /// Advance the auto-calibration state machine with a new ADC reading.
