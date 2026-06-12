@@ -12,7 +12,7 @@
 use crate::{
     layout::VALID_ROWS_BY_COL,
     matrix::{
-        analog_matrix::types::{HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN},
+        analog_matrix::types::{HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
         hc164_cols::Hc164Cols,
     },
 };
@@ -46,6 +46,9 @@ async fn process_column<const ROW: usize, const COL: usize>(
     if let Some(valid) = VALID_ROWS_BY_COL.get(col)
         && let Some(key_col) = keys.get_mut(col)
     {
+        // One timestamp per column is plenty for the auto-calibrator's
+        // ~1 s release-time bound; the whole column processes in microseconds.
+        let now = coarse_ms_now();
         for &row_u8 in valid.valid_rows() {
             let row = usize::from(row_u8);
 
@@ -67,7 +70,7 @@ async fn process_column<const ROW: usize, const COL: usize>(
 
             // Update the auto-calibrator with this reading before the
             // travel computation so any refined calibration is used immediately.
-            entry.auto_calib_step(raw);
+            entry.auto_calib_step(raw, now);
 
             let Some(new_travel) = entry.travel_from(raw) else { continue };
 

@@ -4,13 +4,15 @@ use core::hint::{cold_path, unlikely};
 use embassy_stm32::adc::{BasicAdcRegs, BasicInstance};
 use embassy_time::{Duration, Instant};
 
-/// Number of confident press/release cycles required before the
-/// auto-calibrator updates the live calibration data for a key.
+/// Confidence score required before the auto-calibrator updates the live
+/// calibration data for a key.
 ///
-/// Low values react quickly to genuine sensor drift but risk committing a
-/// noisy or partial-press cycle; higher values are more conservative. Three
-/// cycles gives a good balance between responsiveness and stability.
-pub const AUTO_CALIB_CONFIDENCE_THRESHOLD: u8 = 3;
+/// Cycles are scored with graded weights (see the `AUTO_CALIB_WEIGHT_*`
+/// constants, mirroring the stock firmware's scheme): one unambiguous
+/// deep cycle reaches the threshold on its own, while marginal cycles need
+/// four confirmations. This converges after a single clean press when the
+/// evidence is strong without giving noisy or shallow cycles more trust.
+pub const AUTO_CALIB_CONFIDENCE_THRESHOLD: u8 = 12;
 
 /// Bottom-of-travel ADC jitter tolerance subtracted from [`DEFAULT_FULL_RANGE`]
 /// when computing [`AUTO_CALIB_RELEASE_THRESHOLD`].
@@ -37,6 +39,16 @@ pub const AUTO_CALIB_FULL_TRAVEL_THRESHOLD: u16 =
 /// are discarded without incrementing the confidence counter.
 pub const AUTO_CALIB_MIN_RANGE: u16 = 900;
 
+/// ADC range (zero - full) from which a press/release cycle is scored with
+/// [`AUTO_CALIB_WEIGHT_GOOD`]: deeper than a marginal cycle but short of an
+/// unambiguous full-depth press.
+pub const AUTO_CALIB_RANGE_GOOD: u16 = 1000;
+
+/// ADC range (zero - full) from which a press/release cycle is scored with
+/// [`AUTO_CALIB_WEIGHT_STRONG`]: an unambiguous full-depth press whose
+/// evidence is trusted enough to commit a calibration update on its own.
+pub const AUTO_CALIB_RANGE_STRONG: u16 = 1100;
+
 /// Minimum ADC rise from the full-travel minimum required to transition from
 /// the pressing phase to the releasing phase during auto-calibration.
 ///
@@ -44,6 +56,27 @@ pub const AUTO_CALIB_MIN_RANGE: u16 = 900;
 /// have risen most of the way back toward zero before release tracking begins,
 /// preventing partial lifts from being counted.
 pub const AUTO_CALIB_RELEASE_THRESHOLD: u16 = DEFAULT_FULL_RANGE.saturating_sub(AUTO_CALIB_FULL_JITTER);
+
+/// Maximum time between leaving the physical bottom and settling at zero
+/// travel for a press/release cycle to be scored, in [`coarse_ms_now`]
+/// units (~1.024 ms each, so roughly one second).
+///
+/// A genuine release flight takes tens of milliseconds. Cycles slower than
+/// this window are long holds (the resting position may have drifted while
+/// the key sat at the bottom) or slow drifts masquerading as cycles, and
+/// must not feed the calibration. The bound matters most with graded
+/// confidence weights, where a single deep cycle can commit an update.
+pub const AUTO_CALIB_VALID_RELEASE_WINDOW: u32 = 1000;
+
+/// Confidence points for a cycle with range >= [`AUTO_CALIB_RANGE_GOOD`].
+pub const AUTO_CALIB_WEIGHT_GOOD: u8 = 4;
+
+/// Confidence points for a cycle with range >= [`AUTO_CALIB_MIN_RANGE`].
+pub const AUTO_CALIB_WEIGHT_MIN: u8 = 3;
+
+/// Confidence points for a cycle with range >= [`AUTO_CALIB_RANGE_STRONG`].
+/// Equal to [`AUTO_CALIB_CONFIDENCE_THRESHOLD`], so one such cycle commits.
+pub const AUTO_CALIB_WEIGHT_STRONG: u8 = 12;
 
 /// Maximum ADC drop from the current zero-travel peak that is treated as
 /// resting-position jitter during the releasing phase of auto-calibration.
@@ -90,11 +123,16 @@ pub const CALIB_ZERO_TOLERANCE: u16 = 500;
 /// Default full-range calibration delta used when no better value is available.
 pub const DEFAULT_FULL_RANGE: u16 = 900;
 
-/// Precomputed numerator for the Q16.16 `inv_scale` field
-/// (`FULL_TRAVEL_UNIT * INV_SCALE_ONE`).
-pub const FULL_TRAVEL_SCALED: u32 = u32::from(FULL_TRAVEL_UNIT).saturating_mul(INV_SCALE_ONE);
+/// Expected travel distance in fine travel units
+/// ([`FULL_TRAVEL_UNIT`] × [`TRAVEL_SCALE`]); represents 4.0 mm.
+pub const FULL_TRAVEL_FINE: u8 = FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE);
 
-/// Expected travel distance in physical units; represents 4.0 mm.
+/// Precomputed numerator for the Q16.16 `inv_scale` field
+/// (`FULL_TRAVEL_FINE * INV_SCALE_ONE`).
+pub const FULL_TRAVEL_SCALED: u32 = u32::from(FULL_TRAVEL_FINE).saturating_mul(INV_SCALE_ONE);
+
+/// Expected travel distance in configuration units (mm/10); represents
+/// 4.0 mm.
 pub const FULL_TRAVEL_UNIT: u8 = 40;
 
 /// Number of fractional bits in the Q16.16 `inv_scale`.
@@ -111,6 +149,15 @@ pub const MIN_USEFUL_FULL_RANGE: u16 = 100;
 /// Reference zero-travel ADC value used for calibration and used-sensor
 /// validation.
 pub const REF_ZERO_TRAVEL: u16 = 3121;
+
+/// Fine travel quanta per 0.1 mm configuration unit.
+///
+/// Travel is tracked internally at 1/6 of the 0.1 mm configuration step
+/// (the same `TRAVEL_SCALE` the stock firmware uses), so rapid-trigger
+/// comparisons are exact instead of carrying up to ±0.05 mm of
+/// quantisation slop. [`HallCfg`] stays in 0.1 mm units;
+/// [`RtTuning::from_cfg`] converts to fine units once at startup.
+pub const TRAVEL_SCALE: u8 = 6;
 
 /// ADC counts subtracted from the averaged zero-travel reading before storing
 /// it as the calibration zero point.
@@ -168,16 +215,20 @@ pub struct HallCfg {
 
 /// Rapid-trigger tuning values derived once from [`HallCfg`] before the scan
 /// loop starts, so the hot path reads pre-clamped constants instead of
-/// re-deriving them on every pass.
+/// re-deriving them on every pass. All travel values are in fine travel
+/// units ([`TRAVEL_SCALE`] quanta per 0.1 mm).
 #[derive(Clone, Copy)]
 pub struct RtTuning {
-    /// Minimum travel threshold before a key is considered actuated.
+    /// Minimum travel threshold before a key is considered actuated, in
+    /// fine travel units.
     pub act_threshold:       u8,
     /// Raw ADC delta below which readings are treated as noise.
     pub noise_gate:          u16,
-    /// Minimum upward travel from the trough required to register a press.
+    /// Minimum upward travel from the trough required to register a press,
+    /// in fine travel units.
     pub sensitivity_press:   u8,
-    /// Minimum downward travel from the peak required to register a release.
+    /// Minimum downward travel from the peak required to register a
+    /// release, in fine travel units.
     pub sensitivity_release: u8,
     /// Lower clamp applied to the released-side extremum so a key driven
     /// below the actuation point re-fires cleanly at the actuation floor.
@@ -185,19 +236,20 @@ pub struct RtTuning {
 }
 
 impl RtTuning {
-    /// Derive the tuning values from `cfg`.
+    /// Derive the tuning values from `cfg`, converting the 0.1 mm
+    /// configuration units into fine travel units.
     ///
     /// Both sensitivities are clamped to 1 so a zero config value never
     /// disables the dead-band.
     #[must_use]
     pub const fn from_cfg(cfg: HallCfg) -> Self {
-        let act_threshold = cfg.actuation_pt;
-        let sensitivity_press = cfg.rt_sensitivity_press.max(1);
+        let act_threshold = cfg.actuation_pt.saturating_mul(TRAVEL_SCALE);
+        let sensitivity_press = cfg.rt_sensitivity_press.max(1).saturating_mul(TRAVEL_SCALE);
         Self {
             act_threshold,
             noise_gate: cfg.noise_gate,
             sensitivity_press,
-            sensitivity_release: cfg.rt_sensitivity_release.max(1),
+            sensitivity_release: cfg.rt_sensitivity_release.max(1).saturating_mul(TRAVEL_SCALE),
             trough_floor: act_threshold.saturating_sub(sensitivity_press),
         }
     }
@@ -237,8 +289,12 @@ pub enum KeyCalibState {
 /// resting ADC after loading EEPROM or completing first-boot calibration.
 #[derive(Default)]
 pub struct KeyEntry {
-    /// Confidence counter; incremented per scored cycle, reset after an update.
+    /// Confidence score; raised per scored cycle by the graded
+    /// `AUTO_CALIB_WEIGHT_*` values, reset after an update.
     pub ac_confidence: u8,
+    /// Timestamp ([`coarse_ms_now`] units) of the last reading at the
+    /// physical bottom, used by the release-time bound.
+    pub ac_full_at:    u32,
     /// Candidate full-travel ADC minimum tracked during the pressing phase.
     /// Initialised to `u16::MAX` so the first genuine press overwrites it.
     pub ac_full_cand:  u16 = u16::MAX,
@@ -255,8 +311,9 @@ pub struct KeyEntry {
     /// Combined with a freshly measured zero reading on each boot to derive
     /// the hot-path fields via [`KeyEntry::apply_zero`].
     pub entry_full:    u16 = REF_ZERO_TRAVEL.saturating_sub(DEFAULT_FULL_RANGE),
-    /// Local extremum for rapid-trigger (peak while pressed, trough while
-    /// released). Reset to `new_travel` on every press↔release transition.
+    /// Local extremum for rapid-trigger in fine travel units (peak while
+    /// pressed, trough while released). Reset to `new_travel` on every
+    /// press↔release transition.
     pub extremum:      u8 = u8::MAX,
     /// Q16.16 reciprocal of the calibrated travel range.
     pub inv_scale:     u32,
@@ -267,7 +324,8 @@ pub struct KeyEntry {
     pub lut_zero:      u16,
     /// Whether the key is currently considered pressed.
     pub pressed:       bool,
-    /// Quantised travel value from the previous scan cycle.
+    /// Quantised travel value from the previous scan cycle, in fine travel
+    /// units ([`TRAVEL_SCALE`] quanta per 0.1 mm).
     pub travel:        u8,
 }
 
@@ -277,8 +335,8 @@ impl KeyEntry {
     ///
     /// Updates `inv_scale`, `lut_zero`, `calib_zero`, and `calib_used` in
     /// place. Uses ceiling division on the inverse scale so the scaled travel
-    /// at exactly the full-travel LUT delta reaches [`FULL_TRAVEL_UNIT`] after
-    /// the right-shift rather than [`FULL_TRAVEL_UNIT`] - 1. `calib_used` is
+    /// at exactly the full-travel LUT delta reaches [`FULL_TRAVEL_FINE`] after
+    /// the right-shift rather than [`FULL_TRAVEL_FINE`] - 1. `calib_used` is
     /// set when the resting reading is within [`CALIB_ZERO_TOLERANCE`] of
     /// [`REF_ZERO_TRAVEL`]; positions outside that band are treated as missing
     /// sensors and excluded from scanning.
@@ -318,23 +376,29 @@ impl KeyEntry {
     /// Advance the auto-calibration state machine with a new ADC reading.
     ///
     /// Called on every scan reading that passes the noise gate, before the
-    /// travel computation and rapid-trigger logic. Watches complete
-    /// press/release cycles and refines the live calibration once
-    /// [`AUTO_CALIB_CONFIDENCE_THRESHOLD`] confident cycles have accumulated,
-    /// compensating for temperature and mechanical drift without requiring a
-    /// manual re-calibration.
+    /// travel computation and rapid-trigger logic; `now` is the current
+    /// [`coarse_ms_now`] timestamp. Watches complete press/release cycles
+    /// and refines the live calibration once the graded confidence score
+    /// reaches [`AUTO_CALIB_CONFIDENCE_THRESHOLD`], compensating for
+    /// temperature and mechanical drift without requiring a manual
+    /// re-calibration.
     ///
     /// A cycle is scored only when the ADC range (zero - full) meets
-    /// [`AUTO_CALIB_MIN_RANGE`]; partial presses or noisy readings are
-    /// discarded. Updated calibration takes effect immediately on the next
-    /// travel computation within the same scan pass.
+    /// [`AUTO_CALIB_MIN_RANGE`] *and* the release settled within
+    /// [`AUTO_CALIB_VALID_RELEASE_WINDOW`] of last touching the physical
+    /// bottom; partial presses, noisy readings, and drawn-out releases are
+    /// discarded. Deeper cycles score more (`AUTO_CALIB_WEIGHT_*`), so one
+    /// unambiguous full-depth press is enough to commit. Updated calibration
+    /// takes effect immediately on the next travel computation within the
+    /// same scan pass.
     #[inline]
     #[optimize(speed)]
-    pub const fn auto_calib_step(&mut self, raw: u16) {
+    pub const fn auto_calib_step(&mut self, raw: u16, now: u32) {
         match self.ac_phase {
             AutoCalibPhase::Idle => {
                 if raw < AUTO_CALIB_FULL_TRAVEL_THRESHOLD {
                     self.ac_full_cand = raw;
+                    self.ac_full_at = now;
                     self.ac_phase = AutoCalibPhase::Pressing;
                 }
             },
@@ -342,15 +406,22 @@ impl KeyEntry {
                 if raw < self.ac_full_cand {
                     // Key is pressing deeper; track the running minimum.
                     self.ac_full_cand = raw;
+                    self.ac_full_at = now;
                 } else if raw.saturating_sub(self.ac_full_cand) >= AUTO_CALIB_RELEASE_THRESHOLD {
                     // Reading has risen decisively above the tracked minimum;
                     // bottom-of-travel jitter or a partial early lift stays in
                     // Pressing rather than advancing.
                     self.ac_zero_cand = raw;
                     self.ac_phase = AutoCalibPhase::Releasing;
+                } else if raw.saturating_sub(self.ac_full_cand) <= AUTO_CALIB_FULL_JITTER {
+                    // Still at the physical bottom (within jitter of the
+                    // tracked minimum). Refresh the bottom timestamp so the
+                    // release-time bound measures the release flight, not
+                    // how long the key was held down.
+                    self.ac_full_at = now;
                 } else {
-                    // Within jitter band of the current minimum; stay in
-                    // Pressing.
+                    // Partial lift between the jitter band and the release
+                    // threshold; stay in Pressing.
                 }
             },
             AutoCalibPhase::Releasing => {
@@ -363,8 +434,20 @@ impl KeyEntry {
                     // Both cases return to Idle; only the settled case also scores.
                     if self.ac_zero_cand.saturating_sub(raw) <= AUTO_CALIB_ZERO_JITTER {
                         let range = self.ac_zero_cand.saturating_sub(self.ac_full_cand);
-                        if range >= AUTO_CALIB_MIN_RANGE {
-                            self.ac_confidence = self.ac_confidence.saturating_add(1);
+                        // Score the cycle only if the release was quick
+                        // (wrapping_sub handles timestamp wraparound), with
+                        // deeper cycles earning more confidence.
+                        if now.wrapping_sub(self.ac_full_at) < AUTO_CALIB_VALID_RELEASE_WINDOW {
+                            let weight = if range >= AUTO_CALIB_RANGE_STRONG {
+                                AUTO_CALIB_WEIGHT_STRONG
+                            } else if range >= AUTO_CALIB_RANGE_GOOD {
+                                AUTO_CALIB_WEIGHT_GOOD
+                            } else if range >= AUTO_CALIB_MIN_RANGE {
+                                AUTO_CALIB_WEIGHT_MIN
+                            } else {
+                                0
+                            };
+                            self.ac_confidence = self.ac_confidence.saturating_add(weight);
                         }
 
                         if self.ac_confidence >= AUTO_CALIB_CONFIDENCE_THRESHOLD {
@@ -437,8 +520,9 @@ impl KeyEntry {
     /// Returns `None` if the position is uncalibrated or `inv_scale == 0`.
     /// Otherwise: look up the per-reading LUT value, subtract `lut_zero`,
     /// multiply by the Q16.16 `inv_scale`, and right-shift to drop the
-    /// fractional bits. The final clamp to [`FULL_TRAVEL_UNIT`] keeps
-    /// bottom-of-travel jitter pinned at the maximum.
+    /// fractional bits. The result is in fine travel units; the final clamp
+    /// to [`FULL_TRAVEL_FINE`] keeps bottom-of-travel jitter pinned at the
+    /// maximum.
     #[inline]
     #[optimize(speed)]
     pub const fn travel_from(&self, raw: u16) -> Option<u8> {
@@ -448,8 +532,8 @@ impl KeyEntry {
         }
         let delta = lut::lookup(raw).saturating_sub(self.lut_zero);
         let scaled = u32::from(delta).saturating_mul(self.inv_scale);
-        let travel = scaled.wrapping_shr(INV_SCALE_FRAC_BITS).min(u32::from(FULL_TRAVEL_UNIT));
-        Some(u8::try_from(travel).unwrap_or(FULL_TRAVEL_UNIT))
+        let travel = scaled.wrapping_shr(INV_SCALE_FRAC_BITS).min(u32::from(FULL_TRAVEL_FINE));
+        Some(u8::try_from(travel).unwrap_or(FULL_TRAVEL_FINE))
     }
 
     /// Update calibration if `new_zero` differs meaningfully from the current
@@ -463,6 +547,20 @@ impl KeyEntry {
             self.apply_calib(new_zero, new_full);
         }
     }
+}
+
+/// Coarse millisecond-scale timestamp for the auto-calibrator's
+/// release-time bound.
+///
+/// Derived from the 1 MHz embassy tick counter by a right-shift (one unit
+/// = 1.024 ms) so the scan hot path never pays for a 64-bit division. The
+/// low 32 bits wrap roughly every 50 days; elapsed times are computed with
+/// wrapping subtraction, so a wrap mid-cycle merely mis-scores a single
+/// auto-calibration cycle.
+#[must_use]
+#[inline]
+pub fn coarse_ms_now() -> u32 {
+    u32::try_from(Instant::now().as_ticks().wrapping_shr(10) & u64::from(u32::MAX)).unwrap_or(0)
 }
 
 /// Compute a calibrated full-travel ADC value from a measured minimum and
