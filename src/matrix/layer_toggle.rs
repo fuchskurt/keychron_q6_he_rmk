@@ -1,3 +1,4 @@
+use crate::matrix::INPUT_DEBOUNCE;
 use embassy_stm32::{exti::ExtiInput, mode::Async};
 use embassy_time::{Duration, Timer};
 use rmk::{event::KeyboardEvent, macros::input_device};
@@ -29,9 +30,6 @@ pub struct LayerToggle<'peripherals> {
 }
 
 impl<'peripherals> LayerToggle<'peripherals> {
-    /// Default debounce window in milliseconds.
-    const DEFAULT_DEBOUNCE_MS: u64 = 15;
-
     /// Emit an event if the level has changed.
     fn maybe_emit_for_level(&mut self, new_level: bool) -> Option<KeyboardEvent> {
         if self.last_level == Some(new_level) {
@@ -59,7 +57,7 @@ impl<'peripherals> LayerToggle<'peripherals> {
         high_pos: MatrixPos,
         low_pos: MatrixPos,
     ) -> Self {
-        Self::new(pin, high_pos, low_pos, Duration::from_millis(Self::DEFAULT_DEBOUNCE_MS))
+        Self::new(pin, high_pos, low_pos, INPUT_DEBOUNCE)
     }
 
     /// Select the matrix position for the provided level.

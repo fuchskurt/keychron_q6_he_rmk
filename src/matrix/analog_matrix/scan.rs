@@ -12,7 +12,7 @@
 use crate::{
     layout::VALID_ROWS_BY_COL,
     matrix::{
-        analog_matrix::types::{HallCfg, KeyEntry, VALID_RAW_MAX, VALID_RAW_MIN},
+        analog_matrix::types::{HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN},
         hc164_cols::Hc164Cols,
     },
 };
@@ -25,42 +25,6 @@ use rmk::{
     embassy_futures::{join::join, yield_now},
     event::{KeyboardEvent, publish_event_async},
 };
-
-/// Rapid-trigger tuning values derived once from [`HallCfg`] before the scan
-/// loop starts, so the hot path reads pre-clamped constants instead of
-/// re-deriving them on every pass.
-#[derive(Clone, Copy)]
-struct RtTuning {
-    /// Minimum travel threshold before a key is considered actuated.
-    act_threshold:       u8,
-    /// Raw ADC delta below which readings are treated as noise.
-    noise_gate:          u16,
-    /// Minimum upward travel from the trough required to register a press.
-    sensitivity_press:   u8,
-    /// Minimum downward travel from the peak required to register a release.
-    sensitivity_release: u8,
-    /// Lower clamp applied to the released-side extremum so a key driven
-    /// below the actuation point re-fires cleanly at the actuation floor.
-    trough_floor:        u8,
-}
-
-impl RtTuning {
-    /// Derive the tuning values from `cfg`.
-    ///
-    /// Both sensitivities are clamped to 1 so a zero config value never
-    /// disables the dead-band.
-    const fn from_cfg(cfg: HallCfg) -> Self {
-        let act_threshold = cfg.actuation_pt;
-        let sensitivity_press = cfg.rt_sensitivity_press.max(1);
-        Self {
-            act_threshold,
-            noise_gate: cfg.noise_gate,
-            sensitivity_press,
-            sensitivity_release: cfg.rt_sensitivity_release.max(1),
-            trough_floor: act_threshold.saturating_sub(sensitivity_press),
-        }
-    }
-}
 
 /// Process one column's ADC readings: noise-gate each populated row, advance
 /// the auto-calibrator, recompute travel, run the rapid-trigger state
@@ -117,13 +81,7 @@ async fn process_column<const ROW: usize, const COL: usize>(
             // Dynamic Rapid Trigger; only the transition path needs
             // to publish, so the common no-transition case stays in
             // the `None` arm.
-            if let Some(now_pressed) = entry.step_rapid_trigger(
-                new_travel,
-                tuning.act_threshold,
-                tuning.sensitivity_press,
-                tuning.sensitivity_release,
-                tuning.trough_floor,
-            ) {
+            if let Some(now_pressed) = entry.step_rapid_trigger(new_travel, tuning) {
                 cold_path();
                 publish_event_async(KeyboardEvent::key(
                     row_u8,

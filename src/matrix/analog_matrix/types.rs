@@ -166,6 +166,43 @@ pub struct HallCfg {
     pub rt_sensitivity_release: u8           = 3,
 }
 
+/// Rapid-trigger tuning values derived once from [`HallCfg`] before the scan
+/// loop starts, so the hot path reads pre-clamped constants instead of
+/// re-deriving them on every pass.
+#[derive(Clone, Copy)]
+pub struct RtTuning {
+    /// Minimum travel threshold before a key is considered actuated.
+    pub act_threshold:       u8,
+    /// Raw ADC delta below which readings are treated as noise.
+    pub noise_gate:          u16,
+    /// Minimum upward travel from the trough required to register a press.
+    pub sensitivity_press:   u8,
+    /// Minimum downward travel from the peak required to register a release.
+    pub sensitivity_release: u8,
+    /// Lower clamp applied to the released-side extremum so a key driven
+    /// below the actuation point re-fires cleanly at the actuation floor.
+    pub trough_floor:        u8,
+}
+
+impl RtTuning {
+    /// Derive the tuning values from `cfg`.
+    ///
+    /// Both sensitivities are clamped to 1 so a zero config value never
+    /// disables the dead-band.
+    #[must_use]
+    pub const fn from_cfg(cfg: HallCfg) -> Self {
+        let act_threshold = cfg.actuation_pt;
+        let sensitivity_press = cfg.rt_sensitivity_press.max(1);
+        Self {
+            act_threshold,
+            noise_gate: cfg.noise_gate,
+            sensitivity_press,
+            sensitivity_release: cfg.rt_sensitivity_release.max(1),
+            trough_floor: act_threshold.saturating_sub(sensitivity_press),
+        }
+    }
+}
+
 /// Hold-detection state for a single key during the full-travel calibration
 /// pass.
 ///
@@ -347,26 +384,19 @@ impl KeyEntry {
     /// or release transition so the next direction starts fresh from the
     /// transition point.
     ///
-    /// `trough_floor` clamps the released-side extremum so a key driven below
-    /// `act_threshold` re-fires cleanly at the actuation floor without
-    /// requiring an extra `sensitivity_press` delta above it.
+    /// [`RtTuning::trough_floor`] clamps the released-side extremum so a key
+    /// driven below the actuation threshold re-fires cleanly at the actuation
+    /// floor without requiring an extra `sensitivity_press` delta above it.
     #[inline]
     #[optimize(speed)]
-    pub fn step_rapid_trigger(
-        &mut self,
-        new_travel: u8,
-        act_threshold: u8,
-        sensitivity_press: u8,
-        sensitivity_release: u8,
-        trough_floor: u8,
-    ) -> Option<bool> {
-        let below_act = new_travel < act_threshold;
+    pub fn step_rapid_trigger(&mut self, new_travel: u8, tuning: RtTuning) -> Option<bool> {
+        let below_act = new_travel < tuning.act_threshold;
         let now_pressed = if self.pressed {
             // Track the peak while held; release when travel drops at least
             // `sensitivity_release` below it. The actuation floor is a hard
             // lower bound that forces an immediate release.
             self.extremum = self.extremum.max(new_travel);
-            if below_act { false } else { new_travel > self.extremum.saturating_sub(sensitivity_release) }
+            if below_act { false } else { new_travel > self.extremum.saturating_sub(tuning.sensitivity_release) }
         } else {
             // Track the trough while released; re-press when travel climbs at
             // least `sensitivity_press` above it AND exceeds the actuation
@@ -375,10 +405,10 @@ impl KeyEntry {
             // re-fire immediately.
             self.extremum = self.extremum.min(new_travel);
             if below_act {
-                self.extremum = self.extremum.min(trough_floor);
+                self.extremum = self.extremum.min(tuning.trough_floor);
                 false
             } else {
-                new_travel >= self.extremum.saturating_add(sensitivity_press)
+                new_travel >= self.extremum.saturating_add(tuning.sensitivity_press)
             }
         };
         let changed = now_pressed != self.pressed;
