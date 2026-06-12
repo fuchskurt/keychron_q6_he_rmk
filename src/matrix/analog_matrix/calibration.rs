@@ -72,17 +72,14 @@ pub(super) async fn calibrate_zero_raw<const ROW: usize, const COL: usize>(
 ) -> [[u16; COL]; ROW] {
     let mut acc = [[0_u32; COL]; ROW];
     for _ in 0..cfg.calib_passes {
-        cols.reset();
-        for col in 0..COL {
-            yield_now().await;
-            seq.read(buf).await;
-            cols.advance();
-            for (acc_row, &raw) in acc.iter_mut().zip(buf.iter()) {
+        scan_pass(cols, seq, buf, COL, |col, readings| {
+            for (acc_row, &raw) in acc.iter_mut().zip(readings.iter()) {
                 if let Some(cell) = acc_row.get_mut(col) {
                     *cell = cell.saturating_add(u32::from(raw));
                 }
             }
-        }
+        })
+        .await;
     }
 
     let mut result = [[REF_ZERO_TRAVEL; COL]; ROW];
@@ -220,22 +217,17 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
     let mut last_pct: u8 = 0;
 
     while Instant::now() < deadline && calibrated_count < total_keys {
-        cols.reset();
-        for col in 0..COL {
-            yield_now().await;
-            seq.read(buf).await;
-            cols.advance();
-
+        scan_pass(cols, seq, buf, COL, |col, readings| {
             // Only valid sensor positions are stored in VALID_ROWS_BY_COL;
             // columns with no sensors produce an empty list and are skipped
             // entirely without touching the calibration state machine.
             // Slice to exactly the populated entries, matching the hot-path
             // iteration pattern in `scan`.
-            let Some(valid) = VALID_ROWS_BY_COL.get(col) else { continue };
-            let Some(valid_rows) = valid.rows.get(..valid.count) else { continue };
+            let Some(valid) = VALID_ROWS_BY_COL.get(col) else { return };
+            let Some(valid_rows) = valid.rows.get(..valid.count) else { return };
             for &row_u8 in valid_rows {
                 let key_row = usize::from(row_u8);
-                let raw = buf.get(key_row).copied().unwrap_or(0);
+                let raw = readings.get(key_row).copied().unwrap_or(0);
 
                 // Always track the deepest reading seen, regardless of
                 // whether the key has been accepted yet.
@@ -300,7 +292,8 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
                     KeyCalibState::Accepted | KeyCalibState::Holding(_) | KeyCalibState::Waiting => {},
                 }
             }
-        }
+        })
+        .await;
     }
     calibrated_count
 }
@@ -359,19 +352,44 @@ pub(super) async fn settle_min_raw<const ROW: usize, const COL: usize>(
 ) {
     let deadline = Instant::now().saturating_add(duration);
     while Instant::now() < deadline {
-        cols.reset();
-        for col in 0..COL {
-            yield_now().await;
-            seq.read(buf).await;
-            cols.advance();
-            let Some(valid) = VALID_ROWS_BY_COL.get(col) else { continue };
-            let Some(valid_rows) = valid.rows.get(..valid.count) else { continue };
+        scan_pass(cols, seq, buf, COL, |col, readings| {
+            let Some(valid) = VALID_ROWS_BY_COL.get(col) else { return };
+            let Some(valid_rows) = valid.rows.get(..valid.count) else { return };
             for &row_u8 in valid_rows {
                 let row = usize::from(row_u8);
-                let raw = buf.get(row).copied().unwrap_or(0);
+                let raw = readings.get(row).copied().unwrap_or(0);
                 min_into(min_raw, row, col, raw);
             }
-        }
+        })
+        .await;
+    }
+}
+
+/// Run one full matrix pass: for each of the `col_count` columns, yield to
+/// the executor (doubling as the column settle delay), read all row ADCs
+/// into `buf`, advance the HC164 walking-one, and hand the readings to
+/// `on_col` together with the column index.
+///
+/// Shared by every calibration pass loop so the column-sequencing protocol
+/// stays in one place and cannot drift between the zero-travel, press-phase,
+/// and settle passes. The hot-path scan loop in `scan` intentionally does
+/// not use this helper; it pipelines processing into the DMA window instead
+/// of running it after the read.
+async fn scan_pass<F, const ROW: usize>(
+    cols: &mut Hc164Cols<'_>,
+    seq: &mut ConfiguredSequence<'_, adc::Adc>,
+    buf: &mut [u16; ROW],
+    col_count: usize,
+    mut on_col: F,
+) where
+    F: FnMut(usize, &[u16; ROW]),
+{
+    cols.reset();
+    for col in 0..col_count {
+        yield_now().await;
+        seq.read(buf).await;
+        cols.advance();
+        on_col(col, buf);
     }
 }
 
