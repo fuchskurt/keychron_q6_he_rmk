@@ -1,55 +1,46 @@
-// Based on the implementation from https://github.com/anpage/rmk-keychron-q6-max/blob/main/src/flash16k.rs
-// Copyright (C) 2025 Alex Page
-// Modified by Kurt Fuchs to support async flash operations for RMK
-// Copyright (C) 2026
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
-//
+//! Erase-size override for the RMK storage backend.
 
 use embedded_storage_async::nor_flash::{ErrorType, NorFlash, ReadNorFlash};
 
-/// Wrapper to report 16KB erase size for STM32F4 sectors 1-2.
+/// Wraps a NOR-flash driver and reports a fixed 16 KiB erase granularity.
+///
+/// The embassy flash driver reports the largest sector size of the
+/// STM32F401's heterogeneous flash layout, but the two sectors reserved for
+/// the RMK storage region (sectors 1 and 2, `0x4000..0xC000`) are both
+/// 16 KiB. Overriding [`NorFlash::ERASE_SIZE`] to match lets the storage
+/// layer address exactly those sectors. Every operation is forwarded to the
+/// wrapped driver unchanged.
 pub struct Flash16K<F>(pub F);
 
 impl<F: ErrorType> ErrorType for Flash16K<F> {
-    /// Error type propagated from the wrapped flash implementation.
+    /// Error type propagated from the wrapped flash driver.
     type Error = F::Error;
 }
 
 impl<F: ReadNorFlash> ReadNorFlash for Flash16K<F> {
-    /// Read granularity for the underlying flash.
+    /// Read granularity of the wrapped driver.
     const READ_SIZE: usize = F::READ_SIZE;
 
-    /// Return the total capacity of the flash device.
+    /// Total capacity of the wrapped driver.
     fn capacity(&self) -> usize { self.0.capacity() }
 
-    /// Read bytes from the flash at the given offset.
+    /// Read `bytes.len()` bytes starting at `offset`.
     async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         self.0.read(offset, bytes).await
     }
 }
 
 impl<F: NorFlash> NorFlash for Flash16K<F> {
-    /// Erase size reported as 16 KiB - matches STM32F4 sectors 1 and 2.
+    /// Erase granularity reported to the storage layer: 16 KiB, matching
+    /// STM32F401 sectors 1 and 2.
     const ERASE_SIZE: usize = 16_usize.saturating_mul(1024);
-    /// Write granularity for the underlying flash.
+    /// Write granularity of the wrapped driver.
     const WRITE_SIZE: usize = F::WRITE_SIZE;
 
-    /// Erase the flash range between the given offsets.
+    /// Erase the range `from..to`.
     async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> { self.0.erase(from, to).await }
 
-    /// Write bytes to the flash at the given offset.
+    /// Write `bytes` starting at `offset`.
     async fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         self.0.write(offset, bytes).await
     }

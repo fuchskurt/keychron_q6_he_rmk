@@ -33,10 +33,11 @@ pub const AUTO_CALIB_FULL_TRAVEL_THRESHOLD: u16 =
     REF_ZERO_TRAVEL.saturating_sub(DEFAULT_FULL_RANGE).saturating_add(AUTO_CALIB_FULL_JITTER);
 
 /// Minimum ADC range (zero - full) for a complete press/release cycle to be
-/// scored as confident during auto-calibration.
+/// scored at all during auto-calibration.
 ///
 /// Cycles with a narrower range are likely partial presses or ADC noise and
-/// are discarded without incrementing the confidence counter.
+/// are discarded without adding confidence; see [`cycle_weight`] for the
+/// graded scoring above this floor.
 pub const AUTO_CALIB_MIN_RANGE: u16 = 900;
 
 /// ADC range (zero - full) from which a press/release cycle is scored with
@@ -438,16 +439,7 @@ impl KeyEntry {
                         // (wrapping_sub handles timestamp wraparound), with
                         // deeper cycles earning more confidence.
                         if now.wrapping_sub(self.ac_full_at) < AUTO_CALIB_VALID_RELEASE_WINDOW {
-                            let weight = if range >= AUTO_CALIB_RANGE_STRONG {
-                                AUTO_CALIB_WEIGHT_STRONG
-                            } else if range >= AUTO_CALIB_RANGE_GOOD {
-                                AUTO_CALIB_WEIGHT_GOOD
-                            } else if range >= AUTO_CALIB_MIN_RANGE {
-                                AUTO_CALIB_WEIGHT_MIN
-                            } else {
-                                0
-                            };
-                            self.ac_confidence = self.ac_confidence.saturating_add(weight);
+                            self.ac_confidence = self.ac_confidence.saturating_add(cycle_weight(range));
                         }
 
                         if self.ac_confidence >= AUTO_CALIB_CONFIDENCE_THRESHOLD {
@@ -561,6 +553,27 @@ impl KeyEntry {
 #[inline]
 pub fn coarse_ms_now() -> u32 {
     u32::try_from(Instant::now().as_ticks().wrapping_shr(10) & u64::from(u32::MAX)).unwrap_or(0)
+}
+
+/// Grade a press/release cycle's confidence weight from its observed ADC
+/// range (zero - full).
+///
+/// Deeper cycles are stronger evidence of the key's true endpoints:
+/// [`AUTO_CALIB_RANGE_STRONG`] earns enough to commit an update on its own,
+/// [`AUTO_CALIB_RANGE_GOOD`] needs three confirmations,
+/// [`AUTO_CALIB_MIN_RANGE`] four, and anything narrower scores nothing.
+#[must_use]
+#[inline]
+pub const fn cycle_weight(range: u16) -> u8 {
+    if range >= AUTO_CALIB_RANGE_STRONG {
+        AUTO_CALIB_WEIGHT_STRONG
+    } else if range >= AUTO_CALIB_RANGE_GOOD {
+        AUTO_CALIB_WEIGHT_GOOD
+    } else if range >= AUTO_CALIB_MIN_RANGE {
+        AUTO_CALIB_WEIGHT_MIN
+    } else {
+        0
+    }
 }
 
 /// Compute a calibrated full-travel ADC value from a measured minimum and

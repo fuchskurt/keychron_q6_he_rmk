@@ -100,7 +100,7 @@ back in, and run the calibration again.
 
 On every later boot the keyboard briefly re-measures each key's resting position to account for temperature changes,
 then starts up normally. A key held down while the keyboard powers on keeps working and recalibrates itself
-automatically after a few presses.
+automatically after the first solid press.
 
 ## Keymap editing
 
