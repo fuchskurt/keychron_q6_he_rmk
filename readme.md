@@ -28,8 +28,10 @@ built on [RMK](https://github.com/HaoboGu/rmk). Builds are available for the ANS
 - **Thermal protection**: The backlight dims itself if the LED driver chips run hot and returns to full brightness once
   they cool down.
 - **Low power when the host sleeps**: When your computer suspends, the backlight switches off and the keyboard powers
-  the key sensors down between brief checks while the processor naps in between. Pressing a key still registers and
-  asks the computer to wake, and full-speed scanning resumes the moment it does.
+  the key sensors down, waking about twice a second to check for a keypress while the processor naps in between.
+  Pressing a key still registers and asks the computer to wake, and full-speed scanning resumes the moment it does.
+  Building with the optional `stop_suspend` feature (`cargo make ... --features stop_suspend`) puts the processor into
+  deep sleep between those checks for the lowest idle draw, at the cost of waking feeling slightly less instant.
 
 ## Layouts
 

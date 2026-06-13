@@ -12,6 +12,10 @@ license = "MIT OR Apache-2.0"
 ansi_layout = []
 iso_layout = []
 jis_layout = []
+# Opt-in deep-sleep: enter STOP mode between trickle scans while the USB host
+# is suspended (see src/low_power.rs). Off by default because it drives the
+# clock/power peripherals directly and can only be validated on hardware.
+stop_suspend = []
 
 [dependencies]
 cortex-m = { version = "0", features = ["critical-section-single-core", "inline-asm", "linker-plugin-lto"] }
