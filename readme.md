@@ -14,7 +14,7 @@ built on [RMK](https://github.com/HaoboGu/rmk). Builds are available for the ANS
 
 - **Analog keys with Rapid Trigger**: Keys actuate at 1.0 mm of travel. A held key releases after rising just 0.3 mm
   and re-fires after 0.5 mm of downward travel, wherever in the stroke that happens, with no fixed reset point. All
-  three distances are firmware settings in 0.1 mm steps.
+  three distances are firmware settings in 0.05 mm steps.
 - **Live keymap editing**: Remap any key, layer, or encoder action on the fly through
   [rynk](https://github.com/HaoboGu/rmk/tree/feat/rynk_protocol), RMK's experimental remapping protocol. No reflashing
   needed.
@@ -27,6 +27,9 @@ built on [RMK](https://github.com/HaoboGu/rmk). Builds are available for the ANS
   sensor drift never becomes your problem.
 - **Thermal protection**: The backlight dims itself if the LED driver chips run hot and returns to full brightness once
   they cool down.
+- **Polite when the host sleeps**: When your computer suspends, the backlight switches off and the matrix drops to a
+  slow trickle scan that leaves the sensors unpowered between passes. Pressing a key still registers and asks the host
+  to wake up, and full-speed scanning resumes the moment the computer does.
 
 ## Layouts
 

@@ -132,9 +132,9 @@ pub const FULL_TRAVEL_FINE: u8 = FULL_TRAVEL_UNIT.saturating_mul(TRAVEL_SCALE);
 /// (`FULL_TRAVEL_FINE * INV_SCALE_ONE`).
 pub const FULL_TRAVEL_SCALED: u32 = u32::from(FULL_TRAVEL_FINE).saturating_mul(INV_SCALE_ONE);
 
-/// Expected travel distance in configuration units (mm/10); represents
+/// Expected travel distance in configuration units (mm/20); represents
 /// 4.0 mm.
-pub const FULL_TRAVEL_UNIT: u8 = 40;
+pub const FULL_TRAVEL_UNIT: u8 = 80;
 
 /// Number of fractional bits in the Q16.16 `inv_scale`.
 pub const INV_SCALE_FRAC_BITS: u32 = 16;
@@ -151,14 +151,18 @@ pub const MIN_USEFUL_FULL_RANGE: u16 = 100;
 /// validation.
 pub const REF_ZERO_TRAVEL: u16 = 3121;
 
-/// Fine travel quanta per 0.1 mm configuration unit.
+/// Fine travel quanta per 0.05 mm configuration unit.
 ///
-/// Travel is tracked internally at 1/6 of the 0.1 mm configuration step
-/// (the same `TRAVEL_SCALE` the stock firmware uses), so rapid-trigger
-/// comparisons are exact instead of carrying up to ±0.05 mm of
-/// quantisation slop. [`HallCfg`] stays in 0.1 mm units;
-/// [`RtTuning::from_cfg`] converts to fine units once at startup.
-pub const TRAVEL_SCALE: u8 = 6;
+/// Travel is tracked internally at 1/60 mm (the same fine unit the stock
+/// firmware uses), three quanta per 0.05 mm configuration step, so
+/// rapid-trigger comparisons are exact instead of carrying up to half a
+/// configuration step of quantisation slop. [`HallCfg`] stays in 0.05 mm
+/// units; [`RtTuning::from_cfg`] converts to fine units once at startup.
+///
+/// 0.05 mm is the finest honest configuration step for this sensor: the
+/// ±10-count noise gate already spans ~0.045 mm of travel, so finer steps
+/// would be indistinguishable in practice.
+pub const TRAVEL_SCALE: u8 = 3;
 
 /// ADC counts subtracted from the averaged zero-travel reading before storing
 /// it as the calibration zero point.
@@ -195,9 +199,9 @@ pub enum AutoCalibPhase {
 /// Configuration parameters for hall-effect key sensing.
 #[derive(Clone, Copy, Default)]
 pub struct HallCfg {
-    /// Minimum travel threshold in mm/10 units before a key is considered
-    /// actuated.
-    pub actuation_pt:           u8           = 10,
+    /// Minimum travel threshold in mm/20 units (1 = 0.05 mm) before a key is
+    /// considered actuated.
+    pub actuation_pt:           u8           = 20,
     /// Number of full-matrix passes averaged together during zero-travel
     /// calibration.
     pub calib_passes:           u32          = 512,
@@ -207,17 +211,17 @@ pub struct HallCfg {
     /// Raw ADC delta below which readings are treated as noise and discarded.
     pub noise_gate:             u16          = 10,
     /// Minimum upward travel from the trough required to register a new press,
-    /// in mm/10 units (e.g. 1 = 0.1 mm).
-    pub rt_sensitivity_press:   u8           = 5,
+    /// in mm/20 units (e.g. 1 = 0.05 mm).
+    pub rt_sensitivity_press:   u8           = 10,
     /// Minimum downward travel from the peak required to register a release,
-    /// in mm/10 units (e.g. 1 = 0.1 mm).
-    pub rt_sensitivity_release: u8           = 3,
+    /// in mm/20 units (e.g. 1 = 0.05 mm).
+    pub rt_sensitivity_release: u8           = 6,
 }
 
 /// Rapid-trigger tuning values derived once from [`HallCfg`] before the scan
 /// loop starts, so the hot path reads pre-clamped constants instead of
 /// re-deriving them on every pass. All travel values are in fine travel
-/// units ([`TRAVEL_SCALE`] quanta per 0.1 mm).
+/// units (1/60 mm each, [`TRAVEL_SCALE`] quanta per configuration step).
 #[derive(Clone, Copy)]
 pub struct RtTuning {
     /// Minimum travel threshold before a key is considered actuated, in
@@ -237,7 +241,7 @@ pub struct RtTuning {
 }
 
 impl RtTuning {
-    /// Derive the tuning values from `cfg`, converting the 0.1 mm
+    /// Derive the tuning values from `cfg`, converting the 0.05 mm
     /// configuration units into fine travel units.
     ///
     /// Both sensitivities are clamped to 1 so a zero config value never
@@ -326,7 +330,7 @@ pub struct KeyEntry {
     /// Whether the key is currently considered pressed.
     pub pressed:       bool,
     /// Quantised travel value from the previous scan cycle, in fine travel
-    /// units ([`TRAVEL_SCALE`] quanta per 0.1 mm).
+    /// units (1/60 mm each).
     pub travel:        u8,
 }
 

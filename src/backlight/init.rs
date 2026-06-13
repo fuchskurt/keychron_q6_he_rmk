@@ -4,13 +4,13 @@ use super::gamma;
 use crate::{
     backlight::processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
     layout::LED_LAYOUT,
+    usb_state::usb_is_active,
 };
 use CalibPhase::{AllAccepted, Done, Full, Zero};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_stm32::{
     gpio::Output,
     mode::Async,
-    pac::USB_OTG_FS,
     spi::{Spi, mode::Master},
 };
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
@@ -548,20 +548,3 @@ const fn stage_indicator_leds(driver: &mut BacklightDriver, state: BacklightStat
     let (num_red, num_green, num_blue) = correct_color(num_color, brightness);
     driver.stage_led(NUM_LOCK_LED_INDEX, num_red, num_green, num_blue);
 }
-
-/// Returns `true` when the USB host is present and the bus is not suspended.
-#[inline]
-fn usb_is_active() -> bool { usb_vbus_present() && !usb_is_suspended() }
-
-/// Returns `true` when the OTG FS hardware reports the USB bus is suspended.
-///
-/// Reads `OTG_FS.DSTS.SUSPSTS` directly so suspend is detected regardless of
-/// whether the embassy-usb handler fires.
-#[inline]
-fn usb_is_suspended() -> bool { USB_OTG_FS.dsts().read().suspsts() }
-
-/// Returns `true` when VBUS is present (cable plugged in, host powered).
-///
-/// Reads `OTG_FS.GOTGCTL.BSVLD` directly.
-#[inline]
-fn usb_vbus_present() -> bool { USB_OTG_FS.gotgctl().read().bsvld() }

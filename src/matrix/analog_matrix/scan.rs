@@ -15,16 +15,28 @@ use crate::{
         analog_matrix::types::{HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
         hc164_cols::Hc164Cols,
     },
+    usb_state::usb_is_active,
 };
 use core::{
-    hint::{cold_path, likely},
+    hint::{cold_path, likely, unlikely},
     mem::swap,
 };
 use embassy_stm32::{adc::ConfiguredSequence, pac::adc};
+use embassy_time::{Duration, Timer};
 use rmk::{
     embassy_futures::{join::join, yield_now},
     event::{KeyboardEvent, publish_event_async},
 };
+
+/// Interval between matrix passes while the USB bus is suspended or the
+/// cable is unplugged.
+///
+/// Trickle mode keeps key presses detectable during host sleep (RMK issues
+/// a USB remote wakeup for the resulting event) at a tiny duty cycle: the
+/// HC164 register is cleared so no sensor column is powered between passes
+/// and the executor sleeps the CPU. Bounds the added wake-by-keypress
+/// latency at one interval.
+const SUSPEND_SCAN_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Process one column's ADC readings: noise-gate each populated row, advance
 /// the auto-calibrator, recompute travel, run the rapid-trigger state
@@ -119,6 +131,12 @@ async fn process_column<const ROW: usize, const COL: usize>(
 ///
 /// The last column of a pass is processed during the first conversion of the
 /// next pass, so the pipeline never needs a separate drain step.
+///
+/// While the USB bus is suspended (or the cable unplugged) the loop runs in
+/// trickle mode: one pass every [`SUSPEND_SCAN_INTERVAL`] with the sensor
+/// columns unpowered in between, so a keypress can still remote-wake the
+/// host without the keyboard burning full scan power against a sleeping
+/// machine.
 #[optimize(speed)]
 pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
@@ -131,6 +149,15 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     let mut prev = [0_u16; ROW];
     let mut prev_col: Option<usize> = None;
     loop {
+        if unlikely(!usb_is_active()) {
+            cold_path();
+            // Trickle mode: deselect every column so no sensor is powered
+            // while the bus stays suspended, then nap before the next pass.
+            // Presses are still detected (at SUSPEND_SCAN_INTERVAL
+            // granularity), so a keystroke can remote-wake the host.
+            cols.clear();
+            Timer::after(SUSPEND_SCAN_INTERVAL).await;
+        }
         cols.reset();
         for col in 0..COL {
             // Column settle delay; also the executor yield point.
