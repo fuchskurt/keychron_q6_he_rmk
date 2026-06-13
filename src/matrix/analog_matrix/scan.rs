@@ -11,7 +11,6 @@
 
 use crate::{
     layout::VALID_ROWS_BY_COL,
-    low_power::{arm_rtc_wakeup, stop_nap},
     matrix::{
         analog_matrix::types::{HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
         hc164_cols::Hc164Cols,
@@ -32,12 +31,11 @@ use rmk::{
 /// Interval between matrix passes while the USB bus is suspended or the
 /// cable is unplugged.
 ///
-/// Between passes the hall-sensor power rail is cut and the core sleeps, so
-/// the keyboard draws only the leakage of an idle MCU plus the LED drivers
-/// (already shut down by the backlight task). One pass every interval keeps a
-/// held key detectable so it can remote-wake the host; it also bounds both
-/// the wake-by-keypress latency and the host-initiated resume latency at one
-/// interval, so it trades sleep current against how snappy waking feels.
+/// Between passes the hall-sensor power rail is cut and the executor sleeps
+/// the CPU (WFI), so the keyboard draws only the leakage of an idle MCU plus
+/// the LED drivers (already shut down by the backlight task). One pass every
+/// interval keeps a held key detectable so it can remote-wake the host, and
+/// bounds the added wake-by-keypress latency at one interval.
 const SUSPEND_SCAN_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Delay after re-powering the hall-sensor rail before its readings are
@@ -171,16 +169,12 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     cfg: HallCfg,
 ) -> ! {
     let tuning = RtTuning::from_cfg(cfg);
-    // Arm the RTC wakeup timer that paces STOP-mode naps during suspend. If it
-    // does not confirm, suspend falls back to a timer delay and never enters
-    // STOP (there would be no wakeup source to return from it).
-    let rtc_armed = arm_rtc_wakeup(SUSPEND_SCAN_INTERVAL);
     let mut prev = [0_u16; ROW];
     let mut prev_col: Option<usize> = None;
     loop {
         if unlikely(!usb_is_active()) {
             cold_path();
-            suspend_trickle(cols, keys, seq, buf, power, tuning, rtc_armed).await;
+            suspend_trickle(cols, keys, seq, buf, power, tuning).await;
             // The rail was power-cycled, so the pipelined `prev` buffer is
             // stale; drop it so the resumed pass does not process a column
             // against pre-suspend readings.
@@ -228,20 +222,13 @@ async fn suspend_trickle<const ROW: usize, const COL: usize>(
     buf: &mut [u16; ROW],
     power: &mut Output<'_>,
     tuning: RtTuning,
-    rtc_armed: bool,
 ) {
     while !usb_is_active() {
         // No column selected and the rail off: nothing in the matrix draws
-        // current while the core sleeps out the interval. When the RTC wakeup
-        // timer is armed the core enters STOP mode (low-microamp); otherwise
-        // it falls back to an ordinary timer delay with the CPU in WFI sleep.
+        // current while the CPU sleeps out the interval.
         cols.clear();
         power.set_low();
-        if rtc_armed {
-            stop_nap();
-        } else {
-            Timer::after(SUSPEND_SCAN_INTERVAL).await;
-        }
+        Timer::after(SUSPEND_SCAN_INTERVAL).await;
 
         // Re-power, settle, and flush the power-up transient before trusting
         // a reading.
