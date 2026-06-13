@@ -21,7 +21,7 @@ use core::{
     hint::{cold_path, likely, unlikely},
     mem::swap,
 };
-use embassy_stm32::{adc::ConfiguredSequence, pac::adc};
+use embassy_stm32::{adc::ConfiguredSequence, gpio::Output, pac::adc};
 use embassy_time::{Duration, Timer};
 use rmk::{
     embassy_futures::{join::join, yield_now},
@@ -31,12 +31,27 @@ use rmk::{
 /// Interval between matrix passes while the USB bus is suspended or the
 /// cable is unplugged.
 ///
-/// Trickle mode keeps key presses detectable during host sleep (RMK issues
-/// a USB remote wakeup for the resulting event) at a tiny duty cycle: the
-/// HC164 register is cleared so no sensor column is powered between passes
-/// and the executor sleeps the CPU. Bounds the added wake-by-keypress
-/// latency at one interval.
+/// Between passes the hall-sensor power rail is cut and the executor sleeps
+/// the CPU (WFI), so the keyboard draws only the leakage of an idle MCU plus
+/// the LED drivers (already shut down by the backlight task). One pass every
+/// interval keeps a held key detectable so it can remote-wake the host, and
+/// bounds the added wake-by-keypress latency at one interval.
 const SUSPEND_SCAN_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Delay after re-powering the hall-sensor rail before its readings are
+/// trusted, letting the sensor outputs settle.
+///
+/// Hardware-dependent; validate on the board and lengthen if a key ever
+/// phantom-wakes the host on resume.
+const SENSOR_SETTLE: Duration = Duration::from_millis(2);
+
+/// Number of throwaway matrix passes after re-powering the rail, before the
+/// one evaluated pass.
+///
+/// The first reads after power-up are unreliable (the stock firmware
+/// discards several at boot for the same reason); flushing them keeps a
+/// power-up transient from being mistaken for a keypress.
+const SUSPEND_DISCARD_PASSES: u8 = 3;
 
 /// Process one column's ADC readings: noise-gate each populated row, advance
 /// the auto-calibrator, recompute travel, run the rapid-trigger state
@@ -143,6 +158,7 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     keys: &mut [[KeyEntry; ROW]; COL],
     seq: &mut ConfiguredSequence<'_, adc::Adc>,
     buf: &mut [u16; ROW],
+    power: &mut Output<'_>,
     cfg: HallCfg,
 ) -> ! {
     let tuning = RtTuning::from_cfg(cfg);
@@ -151,12 +167,11 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     loop {
         if unlikely(!usb_is_active()) {
             cold_path();
-            // Trickle mode: deselect every column so no sensor is powered
-            // while the bus stays suspended, then nap before the next pass.
-            // Presses are still detected (at SUSPEND_SCAN_INTERVAL
-            // granularity), so a keystroke can remote-wake the host.
-            cols.clear();
-            Timer::after(SUSPEND_SCAN_INTERVAL).await;
+            suspend_trickle(cols, keys, seq, buf, power, tuning).await;
+            // The rail was power-cycled, so the pipelined `prev` buffer is
+            // stale; drop it so the resumed pass does not process a column
+            // against pre-suspend readings.
+            prev_col = None;
         }
         cols.reset();
         for col in 0..COL {
@@ -171,6 +186,71 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
             cols.advance();
             swap(buf, &mut prev);
             prev_col = Some(col);
+        }
+    }
+}
+
+/// Low-power suspend loop, entered when the USB bus is suspended or
+/// unplugged.
+///
+/// Each iteration cuts the hall-sensor power rail and naps for
+/// [`SUSPEND_SCAN_INTERVAL`] (the executor puts the CPU into WFI sleep while
+/// the timer runs), then re-powers the rail, lets it settle, discards the
+/// power-up transient, and runs one evaluated pass. A genuinely held key
+/// publishes a press on that pass, which RMK turns into a USB remote-wakeup
+/// request. Returns once the host is active again, leaving the rail powered
+/// so the caller's full-speed loop resumes immediately.
+#[optimize(speed)]
+async fn suspend_trickle<const ROW: usize, const COL: usize>(
+    cols: &mut Hc164Cols<'_>,
+    keys: &mut [[KeyEntry; ROW]; COL],
+    seq: &mut ConfiguredSequence<'_, adc::Adc>,
+    buf: &mut [u16; ROW],
+    power: &mut Output<'_>,
+    tuning: RtTuning,
+) {
+    while !usb_is_active() {
+        // No column selected and the rail off: nothing in the matrix draws
+        // current while the CPU sleeps out the interval.
+        cols.clear();
+        power.set_low();
+        Timer::after(SUSPEND_SCAN_INTERVAL).await;
+
+        // Re-power, settle, and flush the power-up transient before trusting
+        // a reading.
+        power.set_high();
+        Timer::after(SENSOR_SETTLE).await;
+        for _ in 0..SUSPEND_DISCARD_PASSES {
+            trickle_pass(cols, keys, seq, buf, tuning, false).await;
+        }
+        trickle_pass(cols, keys, seq, buf, tuning, true).await;
+    }
+}
+
+/// Run one sequential (non-pipelined) matrix pass during suspend trickle.
+///
+/// Reads every column in turn; when `evaluate` is set, each column's
+/// readings are run through [`process_column`] so a held key publishes a
+/// press. Discard passes (`evaluate == false`) only flush the ADC and leave
+/// the per-key `last_raw` untouched, so the evaluated pass still compares a
+/// settled reading against the pre-suspend resting value and the noise gate
+/// rejects an unchanged key.
+#[optimize(speed)]
+async fn trickle_pass<const ROW: usize, const COL: usize>(
+    cols: &mut Hc164Cols<'_>,
+    keys: &mut [[KeyEntry; ROW]; COL],
+    seq: &mut ConfiguredSequence<'_, adc::Adc>,
+    buf: &mut [u16; ROW],
+    tuning: RtTuning,
+    evaluate: bool,
+) {
+    cols.reset();
+    for col in 0..COL {
+        yield_now().await;
+        seq.read(buf).await;
+        cols.advance();
+        if evaluate {
+            process_column(keys, buf, col, tuning).await;
         }
     }
 }
