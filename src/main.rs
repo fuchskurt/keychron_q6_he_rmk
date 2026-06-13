@@ -22,6 +22,8 @@ mod eeprom;
 mod flash_wrapper_async;
 /// Default layout definitions.
 mod layout;
+/// STOP-mode deep sleep during USB suspend.
+mod low_power;
 /// Matrix scanning components.
 mod matrix;
 /// USB host connection state helpers shared across tasks.

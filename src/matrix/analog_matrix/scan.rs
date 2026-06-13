@@ -11,6 +11,7 @@
 
 use crate::{
     layout::VALID_ROWS_BY_COL,
+    low_power::{arm_rtc_wakeup, stop_nap},
     matrix::{
         analog_matrix::types::{HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
         hc164_cols::Hc164Cols,
@@ -31,12 +32,13 @@ use rmk::{
 /// Interval between matrix passes while the USB bus is suspended or the
 /// cable is unplugged.
 ///
-/// Between passes the hall-sensor power rail is cut and the executor sleeps
-/// the CPU (WFI), so the keyboard draws only the leakage of an idle MCU plus
-/// the LED drivers (already shut down by the backlight task). One pass every
-/// interval keeps a held key detectable so it can remote-wake the host, and
-/// bounds the added wake-by-keypress latency at one interval.
-const SUSPEND_SCAN_INTERVAL: Duration = Duration::from_millis(50);
+/// Between passes the hall-sensor power rail is cut and the core sleeps, so
+/// the keyboard draws only the leakage of an idle MCU plus the LED drivers
+/// (already shut down by the backlight task). One pass every interval keeps a
+/// held key detectable so it can remote-wake the host; it also bounds both
+/// the wake-by-keypress latency and the host-initiated resume latency at one
+/// interval, so it trades sleep current against how snappy waking feels.
+const SUSPEND_SCAN_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Delay after re-powering the hall-sensor rail before its readings are
 /// trusted, letting the sensor outputs settle.
@@ -169,6 +171,8 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     cfg: HallCfg,
 ) -> ! {
     let tuning = RtTuning::from_cfg(cfg);
+    // Arm the RTC wakeup timer that paces STOP-mode naps during suspend.
+    arm_rtc_wakeup(SUSPEND_SCAN_INTERVAL);
     let mut prev = [0_u16; ROW];
     let mut prev_col: Option<usize> = None;
     loop {
@@ -225,10 +229,11 @@ async fn suspend_trickle<const ROW: usize, const COL: usize>(
 ) {
     while !usb_is_active() {
         // No column selected and the rail off: nothing in the matrix draws
-        // current while the CPU sleeps out the interval.
+        // current while the core sleeps in STOP mode (low-microamp) until the
+        // RTC wakeup timer brings it back.
         cols.clear();
         power.set_low();
-        Timer::after(SUSPEND_SCAN_INTERVAL).await;
+        stop_nap();
 
         // Re-power, settle, and flush the power-up transient before trusting
         // a reading.

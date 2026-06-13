@@ -27,9 +27,9 @@ built on [RMK](https://github.com/HaoboGu/rmk). Builds are available for the ANS
   sensor drift never becomes your problem.
 - **Thermal protection**: The backlight dims itself if the LED driver chips run hot and returns to full brightness once
   they cool down.
-- **Low power when the host sleeps**: When your computer suspends, the backlight switches off and the keyboard powers
-  the key sensors down between brief checks while the processor naps in between. Pressing a key still registers and
-  asks the computer to wake, and full-speed scanning resumes the moment it does.
+- **Low power when the host sleeps**: When your computer suspends, the backlight switches off, the key sensors power
+  down, and the processor drops into deep sleep, waking about twice a second to check for a keypress. Pressing a key
+  still registers and asks the computer to wake, and full-speed scanning resumes the moment it does.
 
 ## Layouts
 
