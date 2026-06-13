@@ -171,14 +171,16 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     cfg: HallCfg,
 ) -> ! {
     let tuning = RtTuning::from_cfg(cfg);
-    // Arm the RTC wakeup timer that paces STOP-mode naps during suspend.
-    arm_rtc_wakeup(SUSPEND_SCAN_INTERVAL);
+    // Arm the RTC wakeup timer that paces STOP-mode naps during suspend. If it
+    // does not confirm, suspend falls back to a timer delay and never enters
+    // STOP (there would be no wakeup source to return from it).
+    let rtc_armed = arm_rtc_wakeup(SUSPEND_SCAN_INTERVAL);
     let mut prev = [0_u16; ROW];
     let mut prev_col: Option<usize> = None;
     loop {
         if unlikely(!usb_is_active()) {
             cold_path();
-            suspend_trickle(cols, keys, seq, buf, power, tuning).await;
+            suspend_trickle(cols, keys, seq, buf, power, tuning, rtc_armed).await;
             // The rail was power-cycled, so the pipelined `prev` buffer is
             // stale; drop it so the resumed pass does not process a column
             // against pre-suspend readings.
@@ -226,14 +228,20 @@ async fn suspend_trickle<const ROW: usize, const COL: usize>(
     buf: &mut [u16; ROW],
     power: &mut Output<'_>,
     tuning: RtTuning,
+    rtc_armed: bool,
 ) {
     while !usb_is_active() {
         // No column selected and the rail off: nothing in the matrix draws
-        // current while the core sleeps in STOP mode (low-microamp) until the
-        // RTC wakeup timer brings it back.
+        // current while the core sleeps out the interval. When the RTC wakeup
+        // timer is armed the core enters STOP mode (low-microamp); otherwise
+        // it falls back to an ordinary timer delay with the CPU in WFI sleep.
         cols.clear();
         power.set_low();
-        stop_nap();
+        if rtc_armed {
+            stop_nap();
+        } else {
+            Timer::after(SUSPEND_SCAN_INTERVAL).await;
+        }
 
         // Re-power, settle, and flush the power-up transient before trusting
         // a reading.
