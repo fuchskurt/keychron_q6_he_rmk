@@ -25,6 +25,7 @@
 //! resume latency is one wakeup period (the suspended USB peripheral cannot
 //! interrupt the core to wake it earlier).
 
+use core::hint::spin_loop;
 use cortex_m::{Peripherals, asm, interrupt::free};
 use embassy_stm32::pac::{
     EXTI,
@@ -52,24 +53,60 @@ const WPR_LOCK: u8 = 0xFF;
 /// millisecond.
 const WAKEUP_TICKS_PER_MS: u64 = 2;
 
+/// Upper bound on hardware-flag poll iterations during [`arm_rtc_wakeup`].
+///
+/// The flags settle within tens of microseconds, far inside this budget at
+/// 84 MHz. The bound exists only so a misconfigured or absent RTC clock can
+/// never spin forever: this runs in the matrix task on the shared
+/// single-thread executor, so an unbounded wait here would freeze every task
+/// (USB, encoder, backlight) and the keyboard would do nothing at all.
+const SETUP_POLL_LIMIT: u32 = 1_000_000;
+
+/// Spin until `ready` returns true, giving up after [`SETUP_POLL_LIMIT`]
+/// iterations. Returns whether the flag was observed set.
+fn spin_until(mut ready: impl FnMut() -> bool) -> bool {
+    let mut tries = 0_u32;
+    while tries < SETUP_POLL_LIMIT {
+        if ready() {
+            return true;
+        }
+        spin_loop();
+        tries = tries.saturating_add(1);
+    }
+    false
+}
+
 /// Configure the LSI, RTC, and RTC wakeup timer to fire every `interval`, and
 /// route it to the core's STOP wakeup logic through EXTI.
 ///
 /// Call once before the suspend loop. `interval` sets the trickle-scan cadence
 /// and therefore the worst-case host-initiated resume latency.
-pub fn arm_rtc_wakeup(interval: Duration) {
+///
+/// Returns `true` only if every step confirmed; on `false` the caller must not
+/// call [`stop_nap()`] (there is no wakeup source to bring the core back) and
+/// should fall back to an ordinary timer delay. Every hardware poll is bounded
+/// so this can never hang the shared executor, even if the RTC clock never
+/// starts.
+#[must_use]
+pub fn arm_rtc_wakeup(interval: Duration) -> bool {
     // Auto-reload value: the wakeup timer counts `wut + 1` cycles.
     let ticks = interval.as_millis().saturating_mul(WAKEUP_TICKS_PER_MS);
     let wut = u16::try_from(ticks.saturating_sub(1)).unwrap_or(u16::MAX);
 
     // Bring up the low-speed internal oscillator that clocks the RTC in STOP.
     RCC.csr().modify(|w| w.set_lsion(true));
-    while !RCC.csr().read().lsirdy() {
-        asm::nop();
+    if !spin_until(|| RCC.csr().read().lsirdy()) {
+        return false;
     }
 
-    // Unlock the backup domain, select LSI as the RTC clock, and enable it.
+    // Unlock the backup domain. Reset it first so the RTC clock source can be
+    // (re)selected: once `RTCSEL` is set it is locked until a backup-domain
+    // reset, so a value left by a previous firmware would otherwise stick and
+    // could leave the RTC unclocked (then `WUTWF` below would never set). The
+    // backup registers are unused here, so the reset costs nothing.
     PWR.cr1().modify(|w| w.set_dbp(true));
+    RCC.bdcr().modify(|w| w.set_bdrst(true));
+    RCC.bdcr().modify(|w| w.set_bdrst(false));
     RCC.bdcr().modify(|w| {
         w.set_rtcsel(Rtcsel::Lsi);
         w.set_rtcen(true);
@@ -78,8 +115,9 @@ pub fn arm_rtc_wakeup(interval: Duration) {
     // Program the wakeup timer behind the RTC write-protection keys.
     unlock_rtc();
     RTC.cr().modify(|w| w.set_wute(false));
-    while !RTC.isr().read().wutwf() {
-        asm::nop();
+    if !spin_until(|| RTC.isr().read().wutwf()) {
+        lock_rtc();
+        return false;
     }
     RTC.wutr().write(|w| w.set_wut(wut));
     RTC.cr().modify(|w| w.set_wucksel(Wucksel::Div16));
@@ -94,6 +132,7 @@ pub fn arm_rtc_wakeup(interval: Duration) {
     // wakes the core from STOP without vectoring to an interrupt handler.
     EXTI.rtsr(0).modify(|w| w.set_line(RTC_WAKEUP_EXTI_LINE, true));
     EXTI.emr(0).modify(|w| w.set_line(RTC_WAKEUP_EXTI_LINE, true));
+    true
 }
 
 /// Enter STOP mode until the next RTC wakeup, then restore the 84 MHz clock
