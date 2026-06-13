@@ -9,10 +9,9 @@
 //! readings in `process_column`, hiding the per-column processing window
 //! behind the DMA transfer that dominates the per-column budget.
 
-#[cfg(feature = "stop_suspend")]
-use crate::low_power::{arm_rtc_wakeup, stop_nap};
 use crate::{
     layout::VALID_ROWS_BY_COL,
+    low_power::{arm_rtc_wakeup, stop_nap},
     matrix::{
         analog_matrix::types::{HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
         hc164_cols::Hc164Cols,
@@ -173,7 +172,6 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
 ) -> ! {
     let tuning = RtTuning::from_cfg(cfg);
     // Arm the RTC wakeup timer that paces STOP-mode naps during suspend.
-    #[cfg(feature = "stop_suspend")]
     arm_rtc_wakeup(SUSPEND_SCAN_INTERVAL);
     let mut prev = [0_u16; ROW];
     let mut prev_col: Option<usize> = None;
@@ -231,15 +229,11 @@ async fn suspend_trickle<const ROW: usize, const COL: usize>(
 ) {
     while !usb_is_active() {
         // No column selected and the rail off: nothing in the matrix draws
-        // current while the core sleeps out the interval. With `stop_suspend`
-        // the core enters STOP mode (low-microamp) and an RTC timer wakes it;
-        // otherwise it is an ordinary timer delay with the CPU in WFI sleep.
+        // current while the core sleeps in STOP mode (low-microamp) until the
+        // RTC wakeup timer brings it back.
         cols.clear();
         power.set_low();
-        #[cfg(feature = "stop_suspend")]
         stop_nap();
-        #[cfg(not(feature = "stop_suspend"))]
-        Timer::after(SUSPEND_SCAN_INTERVAL).await;
 
         // Re-power, settle, and flush the power-up transient before trusting
         // a reading.

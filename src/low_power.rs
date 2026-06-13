@@ -1,12 +1,11 @@
-//! Opt-in deep-sleep (STOP mode) suspend for the wired keyboard.
+//! Deep-sleep (STOP mode) suspend for the wired keyboard.
 //!
-//! Enabled by the `stop_suspend` cargo feature. While the USB host is
-//! suspended, the matrix scan loop calls `stop_nap` in place of an ordinary
-//! timer delay: the MCU enters STOP mode (every clock except the LSI-driven
-//! RTC gated, SRAM and peripheral registers retained) and an RTC wakeup timer
-//! brings it back about once per `arm_rtc_wakeup` period to trickle-scan.
-//! This drops suspend current from the milliamp range (CPU in WFI sleep) to
-//! the low-microamp range.
+//! While the USB host is suspended, the matrix scan loop calls `stop_nap` in
+//! place of an ordinary timer delay: the MCU enters STOP mode (every clock
+//! except the LSI-driven RTC gated, SRAM and peripheral registers retained)
+//! and an RTC wakeup timer brings it back about once per `arm_rtc_wakeup`
+//! period to trickle-scan. This drops suspend current from the milliamp range
+//! (CPU in WFI sleep) to the low-microamp range.
 //!
 //! On STM32F4 the embassy low-power executor does not restore the clock tree
 //! after STOP, so this module restores it by hand. STOP wakes the core on the
@@ -21,10 +20,10 @@
 //! # Warning
 //!
 //! This path drives PWR, RCC, RTC, and EXTI directly and cannot be exercised
-//! in CI. A mistake can leave the keyboard unresponsive until it is re-flashed
-//! over DFU, which is why it is gated behind an off-by-default feature. The
-//! host-initiated resume latency is one wakeup period (the suspended USB
-//! peripheral cannot interrupt the core to wake it earlier).
+//! in CI; it must be validated on hardware. A mistake here can leave the
+//! keyboard unresponsive until it is re-flashed over DFU. The host-initiated
+//! resume latency is one wakeup period (the suspended USB peripheral cannot
+//! interrupt the core to wake it earlier).
 
 use cortex_m::{Peripherals, asm, interrupt::free};
 use embassy_stm32::pac::{
