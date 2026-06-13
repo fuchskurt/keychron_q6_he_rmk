@@ -12,55 +12,31 @@
 use crate::{
     layout::VALID_ROWS_BY_COL,
     matrix::{
-        analog_matrix::types::{HallCfg, KeyEntry, VALID_RAW_MAX, VALID_RAW_MIN},
+        analog_matrix::types::{HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
         hc164_cols::Hc164Cols,
     },
+    usb_state::usb_is_active,
 };
 use core::{
-    hint::{cold_path, likely},
+    hint::{cold_path, likely, unlikely},
     mem::swap,
 };
 use embassy_stm32::{adc::ConfiguredSequence, pac::adc};
+use embassy_time::{Duration, Timer};
 use rmk::{
     embassy_futures::{join::join, yield_now},
     event::{KeyboardEvent, publish_event_async},
 };
 
-/// Rapid-trigger tuning values derived once from [`HallCfg`] before the scan
-/// loop starts, so the hot path reads pre-clamped constants instead of
-/// re-deriving them on every pass.
-#[derive(Clone, Copy)]
-struct RtTuning {
-    /// Minimum travel threshold before a key is considered actuated.
-    act_threshold:       u8,
-    /// Raw ADC delta below which readings are treated as noise.
-    noise_gate:          u16,
-    /// Minimum upward travel from the trough required to register a press.
-    sensitivity_press:   u8,
-    /// Minimum downward travel from the peak required to register a release.
-    sensitivity_release: u8,
-    /// Lower clamp applied to the released-side extremum so a key driven
-    /// below the actuation point re-fires cleanly at the actuation floor.
-    trough_floor:        u8,
-}
-
-impl RtTuning {
-    /// Derive the tuning values from `cfg`.
-    ///
-    /// Both sensitivities are clamped to 1 so a zero config value never
-    /// disables the dead-band.
-    const fn from_cfg(cfg: HallCfg) -> Self {
-        let act_threshold = cfg.actuation_pt;
-        let sensitivity_press = cfg.rt_sensitivity_press.max(1);
-        Self {
-            act_threshold,
-            noise_gate: cfg.noise_gate,
-            sensitivity_press,
-            sensitivity_release: cfg.rt_sensitivity_release.max(1),
-            trough_floor: act_threshold.saturating_sub(sensitivity_press),
-        }
-    }
-}
+/// Interval between matrix passes while the USB bus is suspended or the
+/// cable is unplugged.
+///
+/// Trickle mode keeps key presses detectable during host sleep (RMK issues
+/// a USB remote wakeup for the resulting event) at a tiny duty cycle: the
+/// HC164 register is cleared so no sensor column is powered between passes
+/// and the executor sleeps the CPU. Bounds the added wake-by-keypress
+/// latency at one interval.
+const SUSPEND_SCAN_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Process one column's ADC readings: noise-gate each populated row, advance
 /// the auto-calibrator, recompute travel, run the rapid-trigger state
@@ -77,13 +53,15 @@ async fn process_column<const ROW: usize, const COL: usize>(
     col: usize,
     tuning: RtTuning,
 ) {
-    // Slice to exactly the populated entries (one check instead of
-    // one per key), and hoist keys[col] out of the inner loop.
+    // valid_rows() slices to exactly the populated entries (one check
+    // instead of one per key); hoist keys[col] out of the inner loop.
     if let Some(valid) = VALID_ROWS_BY_COL.get(col)
-        && let Some(valid_rows) = valid.rows.get(..valid.count)
         && let Some(key_col) = keys.get_mut(col)
     {
-        for &row_u8 in valid_rows {
+        // One timestamp per column is plenty for the auto-calibrator's
+        // ~1 s release-time bound; the whole column processes in microseconds.
+        let now = coarse_ms_now();
+        for &row_u8 in valid.valid_rows() {
             let row = usize::from(row_u8);
 
             // Clamp raw ADC value to valid range to prevent out-of-bounds
@@ -104,7 +82,7 @@ async fn process_column<const ROW: usize, const COL: usize>(
 
             // Update the auto-calibrator with this reading before the
             // travel computation so any refined calibration is used immediately.
-            entry.auto_calib_step(raw);
+            entry.auto_calib_step(raw, now);
 
             let Some(new_travel) = entry.travel_from(raw) else { continue };
 
@@ -118,13 +96,7 @@ async fn process_column<const ROW: usize, const COL: usize>(
             // Dynamic Rapid Trigger; only the transition path needs
             // to publish, so the common no-transition case stays in
             // the `None` arm.
-            if let Some(now_pressed) = entry.step_rapid_trigger(
-                new_travel,
-                tuning.act_threshold,
-                tuning.sensitivity_press,
-                tuning.sensitivity_release,
-                tuning.trough_floor,
-            ) {
+            if let Some(now_pressed) = entry.step_rapid_trigger(new_travel, tuning) {
                 cold_path();
                 publish_event_async(KeyboardEvent::key(
                     row_u8,
@@ -154,11 +126,17 @@ async fn process_column<const ROW: usize, const COL: usize>(
 /// [`join`] arms the DMA transfer and starts the ADC sequence, then the
 /// previous column's readings are processed on the CPU while the conversion
 /// proceeds in hardware. This hides the per-column processing window behind
-/// the DMA transfer, which the readme benchmarks show dominating the
-/// per-column budget.
+/// the DMA transfer, which development benchmarks measured dominating the
+/// per-column budget (~9.8 µs DMA versus ~3.5 µs processing).
 ///
 /// The last column of a pass is processed during the first conversion of the
 /// next pass, so the pipeline never needs a separate drain step.
+///
+/// While the USB bus is suspended (or the cable unplugged) the loop runs in
+/// trickle mode: one pass every [`SUSPEND_SCAN_INTERVAL`] with the sensor
+/// columns unpowered in between, so a keypress can still remote-wake the
+/// host without the keyboard burning full scan power against a sleeping
+/// machine.
 #[optimize(speed)]
 pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
@@ -171,6 +149,15 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     let mut prev = [0_u16; ROW];
     let mut prev_col: Option<usize> = None;
     loop {
+        if unlikely(!usb_is_active()) {
+            cold_path();
+            // Trickle mode: deselect every column so no sensor is powered
+            // while the bus stays suspended, then nap before the next pass.
+            // Presses are still detected (at SUSPEND_SCAN_INTERVAL
+            // granularity), so a keystroke can remote-wake the host.
+            cols.clear();
+            Timer::after(SUSPEND_SCAN_INTERVAL).await;
+        }
         cols.reset();
         for col in 0..COL {
             // Column settle delay; also the executor yield point.

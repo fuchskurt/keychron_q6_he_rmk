@@ -24,6 +24,8 @@ mod flash_wrapper_async;
 mod layout;
 /// Matrix scanning components.
 mod matrix;
+/// USB host connection state helpers shared across tasks.
+mod usb_state;
 
 use crate::{
     backlight::{init::BacklightRunner, processor::LedIndicator},

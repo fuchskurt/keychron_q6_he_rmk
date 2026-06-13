@@ -1,6 +1,19 @@
 use embassy_stm32::gpio::Output;
 
 /// Column selector driven by an HC164 shift register.
+///
+/// The register holds a walking-one: exactly one column line is high at a
+/// time. Every scan pass must follow the same protocol, which both the
+/// calibration passes and the hot scan loop rely on:
+///
+/// 1. [`Hc164Cols::reset`] once before the pass, leaving column 0 selected.
+/// 2. Read the rows for the selected column (after a settle delay).
+/// 3. [`Hc164Cols::advance`] once after each read to select the next column.
+///
+/// After `COL - 1` advances the walking-one has moved past the last column;
+/// the next pass starts with a fresh [`Hc164Cols::reset`]. Reordering reads
+/// and advances desynchronises the selected column from the loop index for
+/// the remainder of the pass.
 pub struct Hc164Cols<'peripherals> {
     /// Clock input (`CP`) for shifting data into the register.
     cp: Output<'peripherals>,
@@ -19,6 +32,17 @@ impl<'peripherals> Hc164Cols<'peripherals> {
         self.cp.set_low();
     }
 
+    /// Clear the register so no column is selected (all outputs low).
+    ///
+    /// Used while scanning is idle (during USB suspend) so no sensor column
+    /// is left powered between trickle passes. Follow with
+    /// [`Hc164Cols::reset`] before the next pass.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.mr.set_low();
+        self.mr.set_high();
+    }
+
     /// Create a new column selector for the HC164.
     pub const fn new(ds: Output<'peripherals>, cp: Output<'peripherals>, mr: Output<'peripherals>) -> Self {
         Self { cp, ds, mr }
@@ -28,8 +52,7 @@ impl<'peripherals> Hc164Cols<'peripherals> {
     /// Call this before the first column of every scan.
     #[inline]
     pub fn reset(&mut self) {
-        self.mr.set_low();
-        self.mr.set_high();
+        self.clear();
         self.ds.set_high();
         self.advance();
         self.ds.set_low();

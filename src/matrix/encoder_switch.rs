@@ -1,3 +1,4 @@
+use crate::matrix::INPUT_DEBOUNCE;
 use embassy_stm32::{exti::ExtiInput, mode::Async};
 use embassy_time::{Duration, Timer};
 use rmk::{event::KeyboardEvent, macros::input_device};
@@ -18,13 +19,10 @@ pub struct EncoderSwitch<'peripherals> {
 }
 
 impl<'peripherals> EncoderSwitch<'peripherals> {
-    /// Default debounce window in milliseconds.
-    const DEFAULT_DEBOUNCE_MS: u64 = 15;
-
     /// Create a new encoder switch input wrapper.
     #[must_use]
     pub const fn new(pin: ExtiInput<'peripherals, Async>, row: u8, col: u8) -> Self {
-        Self { pin, row, col, last_pressed: false, debounce: Duration::from_millis(Self::DEFAULT_DEBOUNCE_MS) }
+        Self { pin, row, col, last_pressed: false, debounce: INPUT_DEBOUNCE }
     }
 
     /// Wait for the next debounced encoder switch event.

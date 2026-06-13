@@ -20,9 +20,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  clippy:
-    name: Clippy (${{ matrix.features }})
+  fmt:
+    name: Rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Nightly rustfmt: rustfmt.toml uses nightly-only options.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+  check:
+    name: Clippy & build (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +55,12 @@ jobs:
           components: clippy, rust-src
           targets: thumbv7em-none-eabihf
 
+      # Prebuilt binary where available; falls back to cargo install.
+      - name: Install flip-link
+        uses: taiki-e/install-action@v2
+        with:
+          tool: flip-link
+
       # Caches the cargo registry, the embassy/rmk git checkouts, and the
       # build-std artifacts in target/, which dominate cold-build time.
       - name: Cache cargo and target
@@ -49,32 +73,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --release --locked --features ${{ matrix.features }}
 
-  build:
-    name: Build (${{ matrix.features }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        features: [ansi_layout, iso_layout, jis_layout]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rust-src
-          targets: thumbv7em-none-eabihf
-
-      # Also restores ~/.cargo/bin, so flip-link installs from cache on
-      # subsequent runs.
-      - name: Cache cargo and target
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.features }}
-
-      - name: Install flip-link
-        run: cargo install flip-link
-
+      # Runs in the same job as clippy so it reuses the dependency
+      # artifacts in target/ and only adds codegen and linking, instead of
+      # paying a second full dependency compile in a separate job with its
+      # own cache.
       - name: Build firmware
         run: cargo build --release --locked --features ${{ matrix.features }}

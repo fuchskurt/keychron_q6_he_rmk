@@ -113,6 +113,18 @@ pub struct ColValidKeys {
     pub rows:  [u8; ROW],
 }
 
+impl ColValidKeys {
+    /// The populated prefix of [`ColValidKeys::rows`]: every matrix row in
+    /// this column with a physical hall-effect sensor, in ascending order.
+    ///
+    /// Returns an empty slice for columns with no sensors (or on a structural
+    /// `count > ROW` bug), so callers can iterate directly without a separate
+    /// presence check.
+    #[must_use]
+    #[inline]
+    pub const fn valid_rows(&self) -> &[u8] { if let Some(rows) = self.rows.get(..self.count) { rows } else { &[] } }
+}
+
 /// Return the default encoder action map for each layer.
 pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAYER] { [ENCODER_VOLUME, ENCODER_VOLUME] }
 
