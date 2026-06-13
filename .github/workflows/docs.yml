@@ -1,0 +1,65 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: ["main"]
+    # Cargo.lock and rust-toolchain.toml are included so dependency and
+    # toolchain bumps (e.g. from dependabot) redeploy the docs too.
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - "build.rs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7em-none-eabihf
+          components: rust-src
+
+      # Caches the cargo registry, the embassy/rmk git checkouts, and the
+      # build-std artifacts in target/, which dominate cold-build time.
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build docs
+        run: cargo doc --release --locked --no-deps --document-private-items --features ansi_layout
+        env:
+          RUSTDOCFLAGS: "--default-theme dark"
+
+      - name: Add redirect index
+        run: echo '<meta http-equiv="refresh" content="0; url=keychron_q6_he_rmk/index.html">' > target/thumbv7em-none-eabihf/doc/index.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: target/thumbv7em-none-eabihf/doc
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
