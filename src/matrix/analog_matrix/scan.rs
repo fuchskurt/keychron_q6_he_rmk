@@ -45,13 +45,20 @@ const SUSPEND_SCAN_INTERVAL: Duration = Duration::from_millis(50);
 /// phantom-wakes the host on resume.
 const SENSOR_SETTLE: Duration = Duration::from_millis(2);
 
-/// Number of throwaway matrix passes after re-powering the rail, before the
-/// one evaluated pass.
+/// Number of throwaway matrix passes after re-powering the rail, before any
+/// reading is trusted.
 ///
 /// The first reads after power-up are unreliable (the stock firmware
 /// discards several at boot for the same reason); flushing them keeps a
 /// power-up transient from being mistaken for a keypress.
 const SUSPEND_DISCARD_PASSES: u8 = 3;
+
+/// Delay between the two press-detection passes that must agree before a
+/// suspended keyboard wakes the host.
+///
+/// A power-up or sensor transient does not survive this gap, but a key a
+/// user is actually holding does, so the host only wakes on a real press.
+const SUSPEND_CONFIRM_DELAY: Duration = Duration::from_millis(8);
 
 /// Process one column's ADC readings: noise-gate each populated row, advance
 /// the auto-calibrator, recompute travel, run the rapid-trigger state
@@ -195,11 +202,18 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
 ///
 /// Each iteration cuts the hall-sensor power rail and naps for
 /// [`SUSPEND_SCAN_INTERVAL`] (the executor puts the CPU into WFI sleep while
-/// the timer runs), then re-powers the rail, lets it settle, discards the
-/// power-up transient, and runs one evaluated pass. A genuinely held key
-/// publishes a press on that pass, which RMK turns into a USB remote-wakeup
-/// request. Returns once the host is active again, leaving the rail powered
-/// so the caller's full-speed loop resumes immediately.
+/// the timer runs), then re-powers the rail, lets it settle, and discards the
+/// power-up transient. It then looks for a genuinely pressed key, and only
+/// when one is confirmed does it run a publishing pass so RMK issues a USB
+/// remote-wakeup request. Returns once the host is active again, leaving the
+/// rail powered so the caller's full-speed loop resumes immediately.
+///
+/// Wake detection is deliberately decoupled from the edge-triggered
+/// [`process_column`] machine: it tests each key's *absolute* calibrated
+/// travel against the actuation point and requires two reads
+/// [`SUSPEND_CONFIRM_DELAY`] apart to agree. A settling artifact after the
+/// rail powers up therefore cannot wake the host; only a key the user is
+/// actually holding does.
 #[optimize(speed)]
 async fn suspend_trickle<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
@@ -221,36 +235,94 @@ async fn suspend_trickle<const ROW: usize, const COL: usize>(
         power.set_high();
         Timer::after(SENSOR_SETTLE).await;
         for _ in 0..SUSPEND_DISCARD_PASSES {
-            trickle_pass(cols, keys, seq, buf, tuning, false).await;
+            read_pass::<ROW, COL>(cols, seq, buf).await;
         }
-        trickle_pass(cols, keys, seq, buf, tuning, true).await;
+
+        // Wake only on a real, sustained press: two absolute-travel checks
+        // SUSPEND_CONFIRM_DELAY apart must both see a pressed key.
+        if !any_key_pressed(cols, keys, seq, buf, tuning.act_threshold).await {
+            continue;
+        }
+        Timer::after(SUSPEND_CONFIRM_DELAY).await;
+        if !any_key_pressed(cols, keys, seq, buf, tuning.act_threshold).await {
+            continue;
+        }
+
+        // Confirmed: run one publishing pass so the held key's press reaches
+        // RMK, which raises the remote-wakeup request and registers the key.
+        eval_pass(cols, keys, seq, buf, tuning).await;
     }
 }
 
-/// Run one sequential (non-pipelined) matrix pass during suspend trickle.
-///
-/// Reads every column in turn; when `evaluate` is set, each column's
-/// readings are run through [`process_column`] so a held key publishes a
-/// press. Discard passes (`evaluate == false`) only flush the ADC and leave
-/// the per-key `last_raw` untouched, so the evaluated pass still compares a
-/// settled reading against the pre-suspend resting value and the noise gate
-/// rejects an unchanged key.
+/// Read every column once without touching key state, to flush the ADC and
+/// sensor settling transient after the rail is re-powered.
 #[optimize(speed)]
-async fn trickle_pass<const ROW: usize, const COL: usize>(
+async fn read_pass<const ROW: usize, const COL: usize>(
+    cols: &mut Hc164Cols<'_>,
+    seq: &mut ConfiguredSequence<'_, adc::Adc>,
+    buf: &mut [u16; ROW],
+) {
+    cols.reset();
+    for _ in 0..COL {
+        yield_now().await;
+        seq.read(buf).await;
+        cols.advance();
+    }
+}
+
+/// Test whether any calibrated key is currently pressed past the actuation
+/// point, by its absolute travel rather than any change from a prior reading.
+///
+/// Reads the whole matrix once without mutating key state, so it is safe to
+/// call repeatedly for confirmation and leaves the edge-triggered
+/// [`process_column`] machine free to publish the real transition afterwards.
+#[optimize(speed)]
+async fn any_key_pressed<const ROW: usize, const COL: usize>(
+    cols: &mut Hc164Cols<'_>,
+    keys: &[[KeyEntry; ROW]; COL],
+    seq: &mut ConfiguredSequence<'_, adc::Adc>,
+    buf: &mut [u16; ROW],
+    act_threshold: u8,
+) -> bool {
+    let mut pressed = false;
+    cols.reset();
+    for col in 0..COL {
+        yield_now().await;
+        seq.read(buf).await;
+        cols.advance();
+        if let Some(valid) = VALID_ROWS_BY_COL.get(col)
+            && let Some(key_col) = keys.get(col)
+        {
+            for &row_u8 in valid.valid_rows() {
+                let row = usize::from(row_u8);
+                let raw = buf.get(row).copied().unwrap_or(0).clamp(VALID_RAW_MIN, VALID_RAW_MAX);
+                if let Some(entry) = key_col.get(row)
+                    && let Some(travel) = entry.travel_from(raw)
+                    && travel >= act_threshold
+                {
+                    pressed = true;
+                }
+            }
+        }
+    }
+    pressed
+}
+
+/// Run one sequential (non-pipelined) publishing pass, used once a suspend
+/// wake has been confirmed so the held key's press reaches RMK.
+#[optimize(speed)]
+async fn eval_pass<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
     keys: &mut [[KeyEntry; ROW]; COL],
     seq: &mut ConfiguredSequence<'_, adc::Adc>,
     buf: &mut [u16; ROW],
     tuning: RtTuning,
-    evaluate: bool,
 ) {
     cols.reset();
     for col in 0..COL {
         yield_now().await;
         seq.read(buf).await;
         cols.advance();
-        if evaluate {
-            process_column(keys, buf, col, tuning).await;
-        }
+        process_column(keys, buf, col, tuning).await;
     }
 }
