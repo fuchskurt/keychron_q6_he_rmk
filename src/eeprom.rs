@@ -6,7 +6,8 @@ use embassy_stm32::{
 use embassy_time::{Duration, Timer};
 use embedded_hal_async::i2c::Operation;
 
-/// 7-bit I²C device address (A0 = A1 = A2 = GND).
+/// 7-bit I²C device address: base 0x50 with A0 wired high on this board
+/// (A1 = A2 = GND), giving 0x51.
 const DEVICE_ADDR: u8 = 0x51;
 /// Total size of the FT24C64 in bytes (64 Kbit).
 const EEPROM_SIZE: usize = 8192;
