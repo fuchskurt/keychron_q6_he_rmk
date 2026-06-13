@@ -216,10 +216,10 @@ async fn main(spawner: Spawner) {
         },
         ..Default::default()
     };
-    // PC13 must be driven high for the duration of main to keep the analog
-    // matrix powered. Dropping this binding would return the pin to its reset
-    // state and cut power to the hall-effect sensors.
-    let _analog_matrix_power = Output::new(peripheral.PC13, Level::High, Speed::Low);
+    // PC13 powers the hall-sensor rail; driven high here and handed to the
+    // matrix scanner, which keeps it high during calibration and active
+    // scanning and cuts it between passes while the USB bus is suspended.
+    let matrix_power = Output::new(peripheral.PC13, Level::High, Speed::Low);
     // PC5 must be held low via pull-down so it does not float and trigger a
     // spurious wakeup from the MCU's wakeup-pin logic.
     let _analog_matrix_wakeup = Input::new(peripheral.PC5, Pull::Down);
@@ -270,8 +270,15 @@ async fn main(spawner: Spawner) {
     let crc = Crc::new(peripheral.CRC);
 
     let adc_part = AdcPart::new(adc, row_pins, peripheral.DMA2_CH0, SampleTime::Cycles56);
-    let mut matrix =
-        AnalogHallMatrix::<_, _, _, _, _, ROW, COL>::new(adc_part, Irqs, cols, HallCfg::default(), eeprom, crc);
+    let mut matrix = AnalogHallMatrix::<_, _, _, _, _, ROW, COL>::new(
+        adc_part,
+        Irqs,
+        cols,
+        HallCfg::default(),
+        eeprom,
+        crc,
+        matrix_power,
+    );
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);
     let pin_b = ExtiInput::new(peripheral.PB15, peripheral.EXTI15, Pull::None, Irqs);

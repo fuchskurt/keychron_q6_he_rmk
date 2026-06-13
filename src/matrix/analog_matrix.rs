@@ -25,6 +25,7 @@ use embassy_stm32::{
     adc::{Adc, BasicInstance, BorrowedAdcChannel, ConfiguredSequence, Instance, RxDma},
     crc::Crc,
     dma::InterruptHandler,
+    gpio::Output,
     i2c::mode::MasterMode,
     interrupt::typelevel::Binding,
     pac::adc,
@@ -164,6 +165,9 @@ where
     /// load-store unit pipelines better than scattered indirect loads from a
     /// row-major layout.
     keys:     [[KeyEntry; ROW]; COL],
+    /// Hall-sensor power rail (PC13), held high during calibration and active
+    /// scanning and cut between passes while the USB bus is suspended.
+    power:    Output<'peripherals>,
 }
 
 impl<'peripherals, ADC, D, R, IRQ, IM, const ROW: usize, const COL: usize>
@@ -187,8 +191,9 @@ where
         cfg: HallCfg,
         eeprom: Ft24c64<'peripherals, IM>,
         crc: Crc<'peripherals>,
+        power: Output<'peripherals>,
     ) -> Self {
-        Self { adc_part, cfg, cols, crc, eeprom, irq, keys: from_fn(|_| from_fn(|_| KeyEntry::default())) }
+        Self { adc_part, cfg, cols, crc, eeprom, irq, keys: from_fn(|_| from_fn(|_| KeyEntry::default())), power }
     }
 }
 
@@ -227,6 +232,6 @@ where
             .await;
         }
 
-        scan::run_scan_loop(&mut self.cols, &mut self.keys, &mut seq, &mut buf, self.cfg).await;
+        scan::run_scan_loop(&mut self.cols, &mut self.keys, &mut seq, &mut buf, &mut self.power, self.cfg).await;
     }
 }
