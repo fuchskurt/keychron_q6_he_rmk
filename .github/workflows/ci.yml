@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Nightly rustfmt: rustfmt.toml uses nightly-only options.
       - name: Install Rust toolchain
@@ -47,7 +47,7 @@ jobs:
         features: [ansi_layout, iso_layout, jis_layout]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@nightly
