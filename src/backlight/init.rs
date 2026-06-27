@@ -361,7 +361,12 @@ impl Runnable for BacklightRunner {
     /// functional without LEDs, so each handler ignores driver errors via
     /// `_ = …`.
     async fn run(&mut self) -> ! {
-        _ = self.driver.init(0xFF).await;
+        for _ in 0_u8..3_u8 {
+            if self.driver.init(0xFF).await.is_ok() {
+                break;
+            }
+            Timer::after_millis(200).await;
+        }
 
         // Wait for USB enumeration before entering the event loop. The
         // connection ticker handles all subsequent transitions, so
