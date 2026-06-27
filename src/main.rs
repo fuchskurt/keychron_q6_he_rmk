@@ -18,8 +18,6 @@ extern crate cortex_m as _;
 mod backlight;
 /// EEPROM I²C driver.
 mod eeprom;
-/// Flash storage wrapper types.
-mod flash_wrapper_async;
 /// Default layout definitions.
 mod layout;
 /// Matrix scanning components.
@@ -30,7 +28,6 @@ mod usb_state;
 use crate::{
     backlight::{init::BacklightRunner, processor::LedIndicator},
     eeprom::Ft24c64,
-    flash_wrapper_async::Flash16K,
     layout::{COL, ROW},
     matrix::{
         analog_matrix::{AdcPart, AnalogHallMatrix, HallCfg, RowChannels},
@@ -48,7 +45,6 @@ use embassy_stm32::{
     crc::Crc,
     dma,
     exti::{self, ExtiInput},
-    flash::{self, Flash},
     gpio::{Flex, Input, Level, Output, Pull, Speed},
     i2c::{self, I2c},
     init,
@@ -78,8 +74,8 @@ use layout::{get_default_encoder_map, get_default_keymap};
 use pac::{ADC1_COMMON, SYSCFG, adccommon::vals::Adcpre};
 use rmk::{
     KeymapData,
-    config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig},
-    initialize_keymap_and_storage,
+    config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig},
+    initialize_keymap,
     input_device::rotary_encoder::RotaryEncoder,
     keyboard::Keyboard,
     run_all,
@@ -95,7 +91,6 @@ bind_interrupts!(struct Irqs {
     DMA1_STREAM2 => dma::InterruptHandler<peripherals::DMA1_CH2>;
     EXTI3 => exti::InterruptHandler<typelevel::EXTI3>;
     EXTI15_10 => exti::InterruptHandler<typelevel::EXTI15_10>;
-    FLASH => flash::InterruptHandler;
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
     I2C3_EV => i2c::EventInterruptHandler<peripherals::I2C3>;
     I2C3_ER => i2c::ErrorInterruptHandler<peripherals::I2C3>;
@@ -196,15 +191,6 @@ async fn main(spawner: Spawner) {
         usb_config,
     );
 
-    // Use internal flash to emulate eeprom
-    let storage_config = StorageConfig {
-        // Start at sector 1, 0x4000 from the start of the FLASH region
-        start_addr: 0x4000,
-        num_sectors: 2,
-        ..Default::default()
-    };
-    let flash = Flash16K(Flash::new(peripheral.FLASH, Irqs));
-
     // Keyboard config
     let rmk_config = RmkConfig {
         device_config: DeviceConfig {
@@ -214,7 +200,6 @@ async fn main(spawner: Spawner) {
             pid:           0x0B60,
             serial_number: "rmk:q6he:000006",
         },
-        ..Default::default()
     };
     // PC13 powers the hall-sensor rail; driven high here and handed to the
     // matrix scanner, which keeps it high during calibration and active
@@ -298,9 +283,7 @@ async fn main(spawner: Spawner) {
     let mut keymap_data = KeymapData::new_with_encoder(get_default_keymap(), get_default_encoder_map());
     let mut behavior_config = BehaviorConfig::default();
     let key_config = PositionalConfig::default();
-    let (keymap, mut storage) =
-        initialize_keymap_and_storage(&mut keymap_data, flash, &storage_config, &mut behavior_config, &key_config)
-            .await;
+    let keymap = initialize_keymap(&mut keymap_data, &mut behavior_config, &key_config).await;
 
     // Initialize the keyboard
     let mut keyboard = Keyboard::new(&keymap);
@@ -338,6 +321,5 @@ async fn main(spawner: Spawner) {
     // Moving the scanner to a higher-priority InterruptExecutor would lock
     // those mutexes from handler mode, which is unsound; that optimisation
     // is blocked until RMK uses CriticalSectionRawMutex on this target.
-    run_all!(keyboard, usb_transport, matrix, encoder, enc_switch, layer_toggle, storage, led_indicator, backlight)
-        .await;
+    run_all!(keyboard, usb_transport, matrix, encoder, enc_switch, layer_toggle, led_indicator, backlight).await;
 }
