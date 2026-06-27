@@ -21,7 +21,6 @@ embassy-stm32 = { features = ["stm32f401rc", "memory-x", "time-driver-tim5", "ti
 embassy-sync = { git = "https://github.com/embassy-rs/embassy.git"}
 embassy-executor = { features = ["platform-cortex-m", "executor-thread", "nightly"], git = "https://github.com/embassy-rs/embassy.git" }
 embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
-embedded-storage-async = "0"
 rmk = { default-features = false, features = ["async_matrix", "watchdog"], git = "https://github.com/fuchskurt/rmk.git", branch="feat/rynk_protocol"}
 static_cell = "2"
 snled27351-driver = { git = "https://github.com/fuchskurt/snled27351_driver.git", features = ["spi"] }

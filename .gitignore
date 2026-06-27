@@ -1,15 +1,9 @@
 target
 node_modules
-
 .DS_Store
-
 *.bin
 *.elf
 *.hex
 *.uf2
-
-.idea
-
-# rspress
 docs/dist
 docs/docs/v*

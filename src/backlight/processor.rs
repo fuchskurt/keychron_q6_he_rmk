@@ -39,6 +39,12 @@ pub enum BacklightCmd {
         /// Whether Num Lock is currently active.
         num:  bool,
     },
+    /// Host suspend/resume transition: `true` = configured/awake, `false` =
+    /// suspended.
+    ///
+    /// Sent by `UsbStateTask` on each USB lifecycle edge so the backlight cuts
+    /// or restores immediately rather than at poll granularity.
+    Power(bool),
 }
 
 /// Calibration phase signaled to the backlight task during first-boot setup.

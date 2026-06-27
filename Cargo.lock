@@ -1021,7 +1021,6 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embedded-hal-async",
- "embedded-storage-async",
  "rmk",
  "snled27351-driver",
  "static_cell",
@@ -1594,7 +1593,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 [[package]]
 name = "snled27351-driver"
 version = "1.0.0"
-source = "git+https://github.com/fuchskurt/snled27351_driver.git#7591a8af494702afa84a9dd1813b9365615e4257"
+source = "git+https://github.com/fuchskurt/snled27351_driver.git#c89facb12eec1bcadfc03aedb98268e5a0d0ff0e"
 dependencies = [
  "embassy-time",
  "embedded-hal 1.0.0",

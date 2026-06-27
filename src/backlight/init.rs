@@ -1,8 +1,10 @@
 //! Backlight task initialization and runtime loop.
 
-use super::gamma;
 use crate::{
-    backlight::processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
+    backlight::{
+        gamma,
+        processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
+    },
     layout::LED_LAYOUT,
     usb_state::usb_is_active,
 };
@@ -18,7 +20,7 @@ use embassy_time::{Duration, Ticker, Timer};
 use embedded_hal_async::spi::ErrorType;
 use rmk::{
     core_traits::Runnable,
-    embassy_futures::select::{Either3, select3},
+    embassy_futures::select::{Either, select},
 };
 use snled27351_driver::{
     driver::Driver,
@@ -58,12 +60,6 @@ const SOFTSTART_RAMP_MS: u32 = 1000;
 const THERMAL_THROTTLE_BRIGHTNESS: u8 = 50;
 /// Interval between thermal register polls.
 const THERMAL_POLL: Duration = Duration::from_secs(5);
-/// Interval between host connection state polls.
-///
-/// Short enough to detect an unplug within half a second without spinning
-/// at full speed. The connection check is a single register read so the cost
-/// per tick is negligible.
-const CONNECTION_POLL: Duration = Duration::from_millis(500);
 /// Duration in milliseconds to hold the solid-green display after calibration
 /// is successfully stored, before returning to normal white backlight.
 const CALIB_DONE_HOLD_MS: u64 = 2000;
@@ -247,6 +243,7 @@ impl BacklightRunner {
                 // Background is already correct; only repaint indicator LEDs.
                 _ = render_indicators(&mut self.driver, *state).await;
             },
+            BacklightCmd::Power(on) => self.handle_power(state, on).await,
         }
     }
 
@@ -263,8 +260,7 @@ impl BacklightRunner {
     /// ramp. Without this, the first connection tick after boot (or a USB
     /// resume mid-calibration) would clobber the guided amber/gradient
     /// display with a one-second ramp to solid white.
-    async fn handle_connection_tick(&mut self, state: &mut BacklightState) {
-        let connected = usb_is_active();
+    async fn handle_power(&mut self, state: &mut BacklightState, connected: bool) {
         if connected == state.flags.get(BacklightFlags::HOST_CONNECTED) {
             return;
         }
@@ -378,14 +374,12 @@ impl Runnable for BacklightRunner {
 
         let rx = BACKLIGHT_CH.receiver();
         let mut thermal_ticker = Ticker::every(THERMAL_POLL);
-        let mut connection_ticker = Ticker::every(CONNECTION_POLL);
         let mut state = BacklightState::default();
 
         loop {
-            match select3(rx.receive(), thermal_ticker.next(), connection_ticker.next()).await {
-                Either3::First(cmd) => self.handle_cmd(&mut state, cmd).await,
-                Either3::Second(()) => self.handle_thermal_tick(&mut state).await,
-                Either3::Third(()) => self.handle_connection_tick(&mut state).await,
+            match select(rx.receive(), thermal_ticker.next()).await {
+                Either::First(cmd) => self.handle_cmd(&mut state, cmd).await,
+                Either::Second(()) => self.handle_thermal_tick(&mut state).await,
             }
         }
     }

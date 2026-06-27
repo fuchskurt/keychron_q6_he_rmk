@@ -311,6 +311,7 @@ async fn main(spawner: Spawner) {
     let sdb = Output::new(peripheral.PB7, Level::Low, Speed::VeryHigh);
     let mut led_indicator = LedIndicator::new();
     let mut backlight = BacklightRunner::new(spi_backlight, cs0, cs1, sdb);
+    let mut usb_state_task = usb_state::UsbStateTask::new();
 
     // Start.
     //
@@ -321,5 +322,16 @@ async fn main(spawner: Spawner) {
     // Moving the scanner to a higher-priority InterruptExecutor would lock
     // those mutexes from handler mode, which is unsound; that optimisation
     // is blocked until RMK uses CriticalSectionRawMutex on this target.
-    run_all!(keyboard, usb_transport, matrix, encoder, enc_switch, layer_toggle, led_indicator, backlight).await;
+    run_all!(
+        keyboard,
+        usb_transport,
+        matrix,
+        encoder,
+        enc_switch,
+        layer_toggle,
+        led_indicator,
+        usb_state_task,
+        backlight
+    )
+    .await;
 }

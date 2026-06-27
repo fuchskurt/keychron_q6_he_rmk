@@ -1,28 +1,61 @@
-//! USB host connection state read directly from the OTG FS hardware
-//! registers, shared by the backlight and matrix scan tasks.
+//! USB host suspend state, sourced from RMK's connection-status events.
 //!
-//! Reading the registers directly (rather than relying on embassy-usb
-//! events) means suspend and disconnect are detected even when the USB
-//! handler does not fire, and lets independent tasks poll the same state
-//! without coordination.
+//! `usb_is_active()` is a cheap synchronous atomic load — the matrix scan hot
+//! loop and the backlight connection poll both call it and neither can
+//! `.await`. The single [`UsbStateTask`] subscriber is the only writer: it
+//! translates `ConnectionStatusChangeEvent` (published from RMK's `suspended()`
+//! / `configured()` USB handlers) into the flag.
 
-use embassy_stm32::pac::USB_OTG_FS;
+use crate::backlight::processor::{BACKLIGHT_CH, BacklightCmd};
+use core::sync::atomic::{AtomicBool, Ordering};
+use rmk::{
+    core_traits::Runnable,
+    event::{ConnectionStatusChangeEvent, EventSubscriber as _, SubscribableEvent},
+    types::connection::UsbState,
+};
 
-/// Returns `true` when the USB host is present and the bus is not suspended.
-#[must_use]
-#[inline]
-pub fn usb_is_active() -> bool { usb_vbus_present() && !usb_is_suspended() }
-
-/// Returns `true` when the OTG FS hardware reports the USB bus is suspended.
+/// `true` once the host has configured the device and has not suspended it.
 ///
-/// Reads `OTG_FS.DSTS.SUSPSTS` directly.
-#[must_use]
-#[inline]
-fn usb_is_suspended() -> bool { USB_OTG_FS.dsts().read().suspsts() }
+/// Starts `false`: [`UsbStateTask::new`] subscribes before `run_all!` drives
+/// USB enumeration, so the initial `Enabled → Configured` edge is captured and
+/// flips this to `true`. A host-initiated suspend flips it back.
+static ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// Returns `true` when VBUS is present (cable plugged in, host powered).
-///
-/// Reads `OTG_FS.GOTGCTL.BSVLD` directly.
+/// Mirrors USB lifecycle transitions into [`ACTIVE`]. Hand to `run_all!`.
+pub struct UsbStateTask {
+    /// Subscription to USB connection-status transitions; the sole writer of
+    /// [`ACTIVE`].
+    sub: <ConnectionStatusChangeEvent as SubscribableEvent>::Subscriber,
+}
+
+impl UsbStateTask {
+    /// Subscribes immediately so the subscription is live before enumeration.
+    ///
+    /// Must be constructed before `run_all!`; constructing it after USB has
+    /// enumerated would miss the initial `Configured` edge and latch off.
+    #[must_use]
+    pub fn new() -> Self { Self { sub: ConnectionStatusChangeEvent::subscriber() } }
+}
+
+impl Default for UsbStateTask {
+    fn default() -> Self { Self::new() }
+}
+
+impl Runnable for UsbStateTask {
+    async fn run(&mut self) -> ! {
+        let mut prev = false; // matches ACTIVE's initial value
+        loop {
+            let active = matches!(self.sub.next_event().await.0.usb, UsbState::Configured);
+            ACTIVE.store(active, Ordering::Relaxed);
+            if active != prev {
+                prev = active;
+                BACKLIGHT_CH.sender().send(BacklightCmd::Power(active)).await;
+            }
+        }
+    }
+}
+
+/// Returns `true` when the USB host has the device configured and awake.
 #[must_use]
 #[inline]
-fn usb_vbus_present() -> bool { USB_OTG_FS.gotgctl().read().bsvld() }
+pub fn usb_is_active() -> bool { ACTIVE.load(Ordering::Relaxed) }
