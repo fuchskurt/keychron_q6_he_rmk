@@ -60,6 +60,24 @@ where
     /// only for the duration of the sequence build, after which the pins are
     /// free to be re-borrowed again.
     fn reborrow_channels(&mut self) -> [BorrowedAdcChannel<'_, ADC>; ROW];
+
+    /// Park the row pins for suspend by driving each to input-pull-down,
+    /// mirroring the stock firmware's `setPinInputLow` on every row. While the
+    /// sensor rail is cut the analog row nodes would otherwise float (the ADC
+    /// leaves them in high-impedance analog mode), and a floating node can
+    /// couple noise into the PC5 key-wake comparator network; a defined low
+    /// avoids that. Undone by [`RowChannels::set_active`] before the next
+    /// sequence build re-asserts analog mode.
+    fn set_low_power(&mut self);
+
+    /// Clear the suspend pull-down ahead of resuming analog sampling.
+    ///
+    /// The ADC's analog-mode setup (`reborrow_adc`) only writes the mode
+    /// register and leaves the pull configuration untouched, so a pull-down
+    /// left over from [`RowChannels::set_low_power`] would otherwise drag the
+    /// hall-sensor reading low. This returns every row to a no-pull input
+    /// before the sequence is rebuilt.
+    fn set_active(&mut self);
 }
 
 /// ADC-related peripherals grouped to allow split borrows when constructing
@@ -219,23 +237,29 @@ where
         let loaded = self.eeprom.read(EEPROM_BASE_ADDR, &mut eeprom_buf).await.is_ok()
             && try_deserialize::<ROW, COL>(&eeprom_buf, &mut self.keys, &mut self.crc);
         let mut buf = [0_u16; ROW];
-        let mut seq = self.adc_part.configure_sequence(self.irq);
-        if loaded {
-            // Re-measure zero travel on every boot to compensate for
-            // temperature drift; full-travel data comes from EEPROM.
-            let zero_raw = calibration::calibrate_zero_raw(&mut self.cols, &mut seq, &mut buf, self.cfg).await;
-            calibration::apply_calib(&mut self.keys, &zero_raw);
-        } else {
-            calibration::run_first_boot_calib(
-                &mut self.cols,
-                &mut seq,
-                &mut buf,
-                self.cfg,
-                &mut self.eeprom,
-                &mut self.crc,
-                &mut self.keys,
-            )
-            .await;
+
+        // Scope the calibration sequence so it is dropped (stopping the ADC)
+        // before `scan::run` takes over `adc_part` to build and tear down its
+        // own sequences around each suspend.
+        {
+            let mut seq = self.adc_part.configure_sequence(self.irq);
+            if loaded {
+                // Re-measure zero travel on every boot to compensate for
+                // temperature drift; full-travel data comes from EEPROM.
+                let zero_raw = calibration::calibrate_zero_raw(&mut self.cols, &mut seq, &mut buf, self.cfg).await;
+                calibration::apply_calib(&mut self.keys, &zero_raw);
+            } else {
+                calibration::run_first_boot_calib(
+                    &mut self.cols,
+                    &mut seq,
+                    &mut buf,
+                    self.cfg,
+                    &mut self.eeprom,
+                    &mut self.crc,
+                    &mut self.keys,
+                )
+                .await;
+            }
         }
 
         let Some(mut usb) = USB_ACTIVE.receiver() else {
@@ -246,7 +270,8 @@ where
         scan::run(
             &mut self.cols,
             &mut self.keys,
-            &mut seq,
+            &mut self.adc_part,
+            self.irq,
             &mut buf,
             &mut self.power,
             &mut self.wake,

@@ -12,7 +12,11 @@
 use crate::{
     layout::VALID_ROWS_BY_COL,
     matrix::{
-        analog_matrix::types::{HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
+        analog_matrix::{
+            AdcPart,
+            RowChannels,
+            types::{AdcSampleTime, HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
+        },
         hc164_cols::Hc164Cols,
     },
     usb_state::{UsbReceiver, wait_active},
@@ -21,7 +25,15 @@ use core::{
     hint::{cold_path, likely},
     mem::swap,
 };
-use embassy_stm32::{adc::ConfiguredSequence, exti::ExtiInput, gpio::Output, mode::Async, pac::adc};
+use embassy_stm32::{
+    adc::{BasicInstance, ConfiguredSequence, Instance, RxDma},
+    dma::InterruptHandler,
+    exti::ExtiInput,
+    gpio::Output,
+    interrupt::typelevel::Binding,
+    mode::Async,
+    pac::adc,
+};
 use embassy_time::{Duration, Timer};
 use rmk::{
     embassy_futures::{
@@ -214,30 +226,44 @@ async fn confirmed_press<const ROW: usize, const COL: usize>(
 /// detect needs the rail powered, hold `power` high through the suspend block
 /// instead and drop the re-power / settle / discard steps.
 #[optimize(speed)]
-pub(super) async fn run<const ROW: usize, const COL: usize>(
+pub(super) async fn run<'peripherals, ADC, D, R, IRQ, const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
     keys: &mut [[KeyEntry; ROW]; COL],
-    seq: &mut ConfiguredSequence<'_, adc::Adc>,
+    adc_part: &mut AdcPart<'peripherals, ADC, D, R, ROW>,
+    irq: IRQ,
     buf: &mut [u16; ROW],
     power: &mut Output<'_>,
     wake: &mut ExtiInput<'_, Async>,
     usb: &mut UsbReceiver,
     cfg: HallCfg,
-) -> ! {
+) -> !
+where
+    ADC: Instance<Regs = adc::Adc> + BasicInstance,
+    D: RxDma<ADC>,
+    R: RowChannels<ADC, ROW>,
+    IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
+    AdcSampleTime<ADC>: Clone,
+{
     let tuning = RtTuning::from_cfg(cfg);
 
     // Hold off scanning until the host first configures the device.
     wait_active(usb, true).await;
 
     loop {
-        // Awake: full-rate scan until the host suspends. `active_scan` returns
-        // on its own when it observes the suspend edge, always finishing the
-        // in-flight ADC read first — it must not be cancelled mid-transfer, or
-        // a stale sample left latched in the ADC data register would shift
-        // every row by one on the next resume.
-        active_scan(cols, keys, seq, buf, usb, tuning).await;
+        // Awake: clear any suspend pull-down, build a fresh ADC sequence (which
+        // re-asserts analog mode on the rows), and full-rate scan until the
+        // host suspends. `active_scan` returns on its own when it observes the
+        // suspend edge, always finishing the in-flight ADC read first — it must
+        // not be cancelled mid-transfer, or a stale sample left latched in the
+        // ADC data register would shift every row by one on the next resume.
+        adc_part.rows.set_active();
+        {
+            let mut seq = adc_part.configure_sequence(irq);
+            active_scan(cols, keys, &mut seq, buf, usb, tuning).await;
+        }; // `seq` dropped here: ADC stopped, `adc_part` released.
 
-        // Suspended: rail off, park on the PC5 rising edge.
+        // Suspended: rail off, HC164 and rows parked low, ADC already stopped.
+        adc_part.rows.set_low_power();
         cols.set_low_power();
         power.set_low();
         loop {
@@ -245,20 +271,29 @@ pub(super) async fn run<const ROW: usize, const COL: usize>(
                 Either::First(()) => break, // host resumed on its own
                 Either::Second(()) => {
                     cold_path();
-                    // Re-arm the matrix: restore outputs, power, settle, flush.
+                    // Re-arm the matrix: restore outputs, power, settle, then
+                    // build a sequence (clearing the row pull-down first) and
+                    // flush the settling transient.
                     power.set_high();
                     Timer::after(SENSOR_SETTLE).await;
                     cols.set_active();
+                    adc_part.rows.set_active();
+                    let mut seq = adc_part.configure_sequence(irq);
                     for _ in 0..SUSPEND_DISCARD_PASSES {
-                        read_pass::<ROW, COL>(cols, seq, buf).await;
+                        read_pass::<ROW, COL>(cols, &mut seq, buf).await;
                     }
-                    if confirmed_press(cols, keys, seq, buf, tuning.act_threshold).await {
+                    if confirmed_press(cols, keys, &mut seq, buf, tuning.act_threshold).await {
                         // Publishing pass raises RMK's remote-wakeup request;
                         // the host resumes and the outer wait_active(true)
-                        // breaks us out. Leave the rail powered for it.
-                        eval_pass(cols, keys, seq, buf, tuning).await;
+                        // breaks us out. Leave the rail powered for it; `seq`
+                        // drops at the end of this arm, stopping the ADC until
+                        // the awake window rebuilds it.
+                        eval_pass(cols, keys, &mut seq, buf, tuning).await;
                     } else {
-                        // Spurious edge: park again.
+                        // Spurious edge: drop the sequence (stopping the ADC),
+                        // then park rail, HC164, and rows low again.
+                        drop(seq);
+                        adc_part.rows.set_low_power();
                         cols.set_low_power();
                         power.set_low();
                     }
@@ -266,7 +301,8 @@ pub(super) async fn run<const ROW: usize, const COL: usize>(
             }
         }
 
-        // Resumed: restore outputs and power before active_scan restarts.
+        // Resumed: restore outputs and power; the awake window rebuilds the
+        // sequence and clears the row pull-down before scanning resumes.
         power.set_high();
         Timer::after(SENSOR_SETTLE).await;
         cols.set_active();
