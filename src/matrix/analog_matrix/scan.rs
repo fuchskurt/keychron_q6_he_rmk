@@ -221,17 +221,23 @@ async fn confirmed_press<const ROW: usize, const COL: usize>(
 /// polling and no periodic trickle scan — the CPU sits in WFI through suspend
 /// and wakes only on the resume event or a key-wake edge.
 ///
-/// While suspended the sensor rail (PC13) is cut. This assumes the PC5 wake
-/// line still asserts on a keypress with the rail unpowered; if your board's
-/// detect needs the rail powered, hold `power` high through the suspend block
-/// instead and drop the re-power / settle / discard steps.
+/// The ADC [`ConfiguredSequence`] is built fresh for each awake window and
+/// dropped when the host suspends. Embassy exposes no public ADC stop, but
+/// `ConfiguredSequence`'s `Drop` issues one, so dropping the sequence both
+/// stops the ADC (its clock would otherwise keep running through suspend) and
+/// releases `adc_part`, letting us park the row pins to a defined low while
+/// they are not committed to the ADC channel API.
+///
+/// While suspended the sensor rail (PC13) is cut, the HC164 control lines and
+/// the analog row pins are pulled low, and the ADC is stopped. This assumes the
+/// PC5 wake line still asserts on a keypress with the rail unpowered; if your
+/// board's detect needs the rail powered, hold `power` high through the suspend
+/// block instead and drop the re-power / settle / discard steps.
 #[optimize(speed)]
 pub(super) async fn run<'peripherals, ADC, D, R, IRQ, const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
     keys: &mut [[KeyEntry; ROW]; COL],
-    adc_part: &mut AdcPart<'peripherals, ADC, D, R, ROW>,
-    irq: IRQ,
-    buf: &mut [u16; ROW],
+    adc_part: &mut AdcPart<'peripherals, ADC, D, R, IRQ, ROW>,
     power: &mut Output<'_>,
     wake: &mut ExtiInput<'_, Async>,
     usb: &mut UsbReceiver,
@@ -246,6 +252,10 @@ where
 {
     let tuning = RtTuning::from_cfg(cfg);
 
+    // Scratch buffer for one column's row readings; lives for the whole scan so
+    // calibration's own buffer can be dropped before we take over `adc_part`.
+    let mut buf = [0_u16; ROW];
+
     // Hold off scanning until the host first configures the device.
     wait_active(usb, true).await;
 
@@ -258,8 +268,8 @@ where
         // ADC data register would shift every row by one on the next resume.
         adc_part.rows.set_active();
         {
-            let mut seq = adc_part.configure_sequence(irq);
-            active_scan(cols, keys, &mut seq, buf, usb, tuning).await;
+            let mut seq = adc_part.configure_sequence();
+            active_scan(cols, keys, &mut seq, &mut buf, usb, tuning).await;
         }; // `seq` dropped here: ADC stopped, `adc_part` released.
 
         // Suspended: rail off, HC164 and rows parked low, ADC already stopped.
@@ -278,17 +288,17 @@ where
                     Timer::after(SENSOR_SETTLE).await;
                     cols.set_active();
                     adc_part.rows.set_active();
-                    let mut seq = adc_part.configure_sequence(irq);
+                    let mut seq = adc_part.configure_sequence();
                     for _ in 0..SUSPEND_DISCARD_PASSES {
-                        read_pass::<ROW, COL>(cols, &mut seq, buf).await;
+                        read_pass::<ROW, COL>(cols, &mut seq, &mut buf).await;
                     }
-                    if confirmed_press(cols, keys, &mut seq, buf, tuning.act_threshold).await {
+                    if confirmed_press(cols, keys, &mut seq, &mut buf, tuning.act_threshold).await {
                         // Publishing pass raises RMK's remote-wakeup request;
                         // the host resumes and the outer wait_active(true)
                         // breaks us out. Leave the rail powered for it; `seq`
                         // drops at the end of this arm, stopping the ADC until
                         // the awake window rebuilds it.
-                        eval_pass(cols, keys, &mut seq, buf, tuning).await;
+                        eval_pass(cols, keys, &mut seq, &mut buf, tuning).await;
                     } else {
                         // Spurious edge: drop the sequence (stopping the ADC),
                         // then park rail, HC164, and rows low again.

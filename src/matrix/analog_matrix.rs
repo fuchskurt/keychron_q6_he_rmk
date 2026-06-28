@@ -61,15 +61,6 @@ where
     /// free to be re-borrowed again.
     fn reborrow_channels(&mut self) -> [BorrowedAdcChannel<'_, ADC>; ROW];
 
-    /// Park the row pins for suspend by driving each to input-pull-down,
-    /// mirroring the stock firmware's `setPinInputLow` on every row. While the
-    /// sensor rail is cut the analog row nodes would otherwise float (the ADC
-    /// leaves them in high-impedance analog mode), and a floating node can
-    /// couple noise into the PC5 key-wake comparator network; a defined low
-    /// avoids that. Undone by [`RowChannels::set_active`] before the next
-    /// sequence build re-asserts analog mode.
-    fn set_low_power(&mut self);
-
     /// Clear the suspend pull-down ahead of resuming analog sampling.
     ///
     /// The ADC's analog-mode setup (`reborrow_adc`) only writes the mode
@@ -78,32 +69,45 @@ where
     /// hall-sensor reading low. This returns every row to a no-pull input
     /// before the sequence is rebuilt.
     fn set_active(&mut self);
+
+    /// Park the row pins for suspend by driving each to input-pull-down,
+    /// mirroring the stock firmware's `setPinInputLow` on every row. While the
+    /// sensor rail is cut the analog row nodes would otherwise float (the ADC
+    /// leaves them in high-impedance analog mode), and a floating node can
+    /// couple noise into the PC5 key-wake comparator network; a defined low
+    /// avoids that. Undone by [`RowChannels::set_active`] before the next
+    /// sequence build re-asserts analog mode.
+    fn set_low_power(&mut self);
 }
 
 /// ADC-related peripherals grouped to allow split borrows when constructing
 /// a [`embassy_stm32::adc::ConfiguredSequence`].
-pub struct AdcPart<'peripherals, ADC, D, R, const ROW: usize>
+pub struct AdcPart<'peripherals, ADC, D, R, IRQ, const ROW: usize>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
     R: RowChannels<ADC, ROW>,
+    IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
     AdcSampleTime<ADC>: Clone,
 {
     /// ADC peripheral used for sampling hall sensors.
     pub adc:         Adc<'peripherals, ADC>,
     /// DMA channel used for non-blocking ADC sequence reads.
     pub dma:         Peri<'peripherals, D>,
+    /// DMA interrupt binding reused for every ADC sequence read.
+    pub irq:         IRQ,
     /// Owned row pins, re-borrowed into ADC channels for each sequence read.
     pub rows:        R,
     /// ADC sample time applied to every channel in the sequence.
     pub sample_time: AdcSampleTime<ADC>,
 }
 
-impl<'peripherals, ADC, D, R, const ROW: usize> AdcPart<'peripherals, ADC, D, R, ROW>
+impl<'peripherals, ADC, D, R, IRQ, const ROW: usize> AdcPart<'peripherals, ADC, D, R, IRQ, ROW>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,
     D: RxDma<ADC>,
     R: RowChannels<ADC, ROW>,
+    IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
     AdcSampleTime<ADC>: Clone,
 {
     /// Create a [`embassy_stm32::adc::ConfiguredSequence`] over all row
@@ -113,15 +117,12 @@ where
     /// triggered repeatedly without reprogramming. The row pins are re-borrowed
     /// only while the sequence is being built, so the returned reader borrows
     /// just the ADC and DMA channel.
-    fn configure_sequence<'reader, IRQ2>(&'reader mut self, irq: IRQ2) -> ConfiguredSequence<'reader, adc::Adc>
-    where
-        IRQ2: Binding<D::Interrupt, InterruptHandler<D>> + 'reader + 'peripherals,
-    {
+    fn configure_sequence(&mut self) -> ConfiguredSequence<'_, adc::Adc> {
         let st = self.sample_time;
         self.adc.configure_sequence(
             self.dma.reborrow(),
             self.rows.reborrow_channels().into_iter().map(|ch| (ch, st)),
-            irq,
+            self.irq,
         )
     }
 
@@ -130,9 +131,10 @@ where
         adc: Adc<'peripherals, ADC>,
         rows: R,
         dma: Peri<'peripherals, D>,
+        irq: IRQ,
         sample_time: AdcSampleTime<ADC>,
     ) -> Self {
-        Self { adc, dma, rows, sample_time }
+        Self { adc, dma, irq, rows, sample_time }
     }
 }
 
@@ -168,8 +170,9 @@ where
     IM: MasterMode,
     AdcSampleTime<ADC>: Clone,
 {
-    /// ADC peripherals and channels grouped for split-borrow compatibility.
-    adc_part: AdcPart<'peripherals, ADC, D, R, ROW>,
+    /// ADC peripherals and channels grouped for split-borrow compatibility;
+    /// also owns the DMA interrupt binding used to build each sequence.
+    adc_part: AdcPart<'peripherals, ADC, D, R, IRQ, ROW>,
     /// Sensing and scanning configuration.
     cfg:      HallCfg,
     /// Column driver used to select the active column via the HC164.
@@ -178,8 +181,6 @@ where
     crc:      Crc<'peripherals>,
     /// EEPROM driver for loading and persisting calibration data.
     eeprom:   Ft24c64<'peripherals, IM>,
-    /// DMA interrupt binding reused for every ADC sequence read.
-    irq:      IRQ,
     /// Per-key runtime state, calibration, and auto-calibration. Stored
     /// column-major (`[[KeyEntry; ROW]; COL]`) so the per-column inner scan
     /// loop walks one contiguous SRAM block per HC164 column, which the AHB
@@ -208,8 +209,7 @@ where
     /// Calibration is deferred to [`Runnable::run`], which loads from EEPROM
     /// on subsequent boots or runs a full first-boot calibration pass.
     pub fn new(
-        adc_part: AdcPart<'peripherals, ADC, D, R, ROW>,
-        irq: IRQ,
+        adc_part: AdcPart<'peripherals, ADC, D, R, IRQ, ROW>,
         cols: Hc164Cols<'peripherals>,
         cfg: HallCfg,
         eeprom: Ft24c64<'peripherals, IM>,
@@ -217,7 +217,7 @@ where
         power: Output<'peripherals>,
         wake: ExtiInput<'peripherals, Async>,
     ) -> Self {
-        Self { adc_part, cfg, cols, crc, eeprom, irq, keys: from_fn(|_| from_fn(|_| KeyEntry::default())), power, wake }
+        Self { adc_part, cfg, cols, crc, eeprom, keys: from_fn(|_| from_fn(|_| KeyEntry::default())), power, wake }
     }
 }
 
@@ -242,7 +242,7 @@ where
         // before `scan::run` takes over `adc_part` to build and tear down its
         // own sequences around each suspend.
         {
-            let mut seq = self.adc_part.configure_sequence(self.irq);
+            let mut seq = self.adc_part.configure_sequence();
             if loaded {
                 // Re-measure zero travel on every boot to compensate for
                 // temperature drift; full-travel data comes from EEPROM.
@@ -271,8 +271,6 @@ where
             &mut self.cols,
             &mut self.keys,
             &mut self.adc_part,
-            self.irq,
-            &mut buf,
             &mut self.power,
             &mut self.wake,
             &mut usb,
