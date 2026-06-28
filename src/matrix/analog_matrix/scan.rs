@@ -128,10 +128,22 @@ async fn process_column<const ROW: usize, const COL: usize>(
     }
 }
 
-/// Pipelined full-rate scan body. Runs until cancelled by the supervisor's
-/// `select`; `prev`/`prev_col` are local so each (re)entry after a resume
+/// Pipelined full-rate scan body. Returns cleanly the moment the host
+/// suspends; `prev`/`prev_col` are local so each (re)entry after a resume
 /// starts a fresh pipeline rather than processing a column against stale,
 /// pre-suspend readings.
+///
+/// Suspend is detected *cooperatively* — by polling `UsbReceiver::try_get`
+/// at the per-column yield point — rather than by letting the supervisor drop
+/// this future mid-read. That matters because [`ConfiguredSequence::read`] is
+/// **not** cancellation-safe with respect to the ADC: it calls `start()` and
+/// then awaits the DMA transfer, and `ConfiguredSequence`'s own `Drop` (which
+/// issues the ADC `stop()`) never runs while the sequence is kept alive across
+/// suspend. Dropping the read future mid-transfer aborts only the DMA, leaving
+/// the ADC converting the rest of the scan with nothing draining it; a stale
+/// sample stays latched in the data register and shifts every subsequent
+/// fixed-length read by one row on resume. Always completing the in-flight
+/// read before returning keeps the data register drained and the rows aligned.
 ///
 /// Double-buffered: the first poll of [`ConfiguredSequence::read`] inside
 /// [`join`] arms the DMA transfer and starts the ADC sequence, then the
@@ -145,13 +157,20 @@ async fn active_scan<const ROW: usize, const COL: usize>(
     keys: &mut [[KeyEntry; ROW]; COL],
     seq: &mut ConfiguredSequence<'_, adc::Adc>,
     buf: &mut [u16; ROW],
+    usb: &mut UsbReceiver,
     tuning: RtTuning,
-) -> ! {
+) {
     let mut prev = [0_u16; ROW];
     let mut prev_col: Option<usize> = None;
     loop {
         cols.reset();
         for col in 0..COL {
+            // Stop between completed reads (never mid-transfer) once the host
+            // suspends, so the ADC sequence always finishes and the data
+            // register is left drained and row-aligned for the next resume.
+            if usb.try_get() == Some(false) {
+                return;
+            }
             // Column settle delay; also the executor yield point.
             yield_now().await;
             join(seq.read(buf), async {
@@ -211,13 +230,12 @@ pub(super) async fn run<const ROW: usize, const COL: usize>(
     wait_active(usb, true).await;
 
     loop {
-        // Awake: full-rate scan until the host suspends. Dropping the scan
-        // future here is cancellation-safe — the in-flight ADC DMA is aborted
-        // on drop, and `prev`/`prev_col` are reset on the next `active_scan`.
-        match select(active_scan(cols, keys, seq, buf, tuning), wait_active(usb, false)).await {
-            Either::First(never) => match never {},
-            Either::Second(()) => {},
-        }
+        // Awake: full-rate scan until the host suspends. `active_scan` returns
+        // on its own when it observes the suspend edge, always finishing the
+        // in-flight ADC read first — it must not be cancelled mid-transfer, or
+        // a stale sample left latched in the ADC data register would shift
+        // every row by one on the next resume.
+        active_scan(cols, keys, seq, buf, usb, tuning).await;
 
         // Suspended: rail off, park on the PC5 rising edge.
         cols.set_low_power();
