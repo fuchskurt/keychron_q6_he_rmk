@@ -228,9 +228,9 @@ pub(super) async fn run<const ROW: usize, const COL: usize>(
                 Either::Second(()) => {
                     cold_path();
                     // Re-arm the matrix: restore outputs, power, settle, flush.
-                    cols.set_active();
                     power.set_high();
                     Timer::after(SENSOR_SETTLE).await;
+                    cols.set_active();
                     for _ in 0..SUSPEND_DISCARD_PASSES {
                         read_pass::<ROW, COL>(cols, seq, buf).await;
                     }
@@ -249,8 +249,9 @@ pub(super) async fn run<const ROW: usize, const COL: usize>(
         }
 
         // Resumed: restore outputs and power before active_scan restarts.
-        cols.set_active();
         power.set_high();
+        Timer::after(SENSOR_SETTLE).await;
+        cols.set_active();
     }
 }
 
