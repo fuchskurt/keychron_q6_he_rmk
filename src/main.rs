@@ -36,6 +36,7 @@ use crate::{
         layer_toggle::{LayerToggle, MatrixPos},
     },
 };
+use core::mem;
 use embassy_executor::{Spawner, main};
 use embassy_stm32::{
     Config,
@@ -45,7 +46,7 @@ use embassy_stm32::{
     crc::Crc,
     dma,
     exti::{self, ExtiInput},
-    gpio::{Flex, Input, Level, Output, Pull, Speed},
+    gpio::{Flex, Level, Output, Pin, Pull, Speed},
     i2c::{self, I2c},
     init,
     interrupt::typelevel,
@@ -90,6 +91,7 @@ bind_interrupts!(struct Irqs {
     DMA1_STREAM4 => dma::InterruptHandler<peripherals::DMA1_CH4>;
     DMA1_STREAM2 => dma::InterruptHandler<peripherals::DMA1_CH2>;
     EXTI3 => exti::InterruptHandler<typelevel::EXTI3>;
+    EXTI9_5 => exti::InterruptHandler<typelevel::EXTI9_5>;
     EXTI15_10 => exti::InterruptHandler<typelevel::EXTI15_10>;
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
     I2C3_EV => i2c::EventInterruptHandler<peripherals::I2C3>;
@@ -129,6 +131,59 @@ impl RowChannels<ADC1, ROW> for Q6RowPins<'_> {
             self.pa1.reborrow_adc(),
         ]
     }
+
+    fn set_active(&mut self) {
+        release_row_pull(&mut self.pc0);
+        release_row_pull(&mut self.pc1);
+        release_row_pull(&mut self.pc2);
+        release_row_pull(&mut self.pc3);
+        release_row_pull(&mut self.pa0);
+        release_row_pull(&mut self.pa1);
+    }
+
+    fn set_low_power(&mut self) {
+        park_row_low(&mut self.pc0);
+        park_row_low(&mut self.pc1);
+        park_row_low(&mut self.pc2);
+        park_row_low(&mut self.pc3);
+        park_row_low(&mut self.pa0);
+        park_row_low(&mut self.pa1);
+    }
+}
+
+/// Drive one row pin to input-pull-down and leave it there.
+///
+/// A [`Flex`] resets its pin to disconnected (floating analog) on drop, so the
+/// guard is deliberately `forget`-ten to persist the pull-down through suspend.
+/// Nothing is leaked but the register state; the pin is reclaimed by
+/// `reborrow_adc` (analog) or [`release_row_pull`] (no-pull) on resume.
+#[expect(
+    clippy::mem_forget,
+    reason = "Flex resets its pin on drop; the suspend pull-down must persist until resume reconfigures it"
+)]
+fn park_row_low<P>(pin: &mut Peri<'_, P>)
+where
+    P: Pin,
+{
+    let mut flex = Flex::new(pin.reborrow());
+    flex.set_as_input(Pull::Down);
+    mem::forget(flex);
+}
+
+/// Return one row pin to a no-pull input, clearing a suspend pull-down before
+/// the ADC re-asserts analog mode (which only sets the mode register and would
+/// otherwise leave the pull-down in place, biasing the reading).
+#[expect(
+    clippy::mem_forget,
+    reason = "Flex resets its pin on drop; the no-pull input state must persist until the ADC takes the pin"
+)]
+fn release_row_pull<P>(pin: &mut Peri<'_, P>)
+where
+    P: Pin,
+{
+    let mut flex = Flex::new(pin.reborrow());
+    flex.set_as_input(Pull::None);
+    mem::forget(flex);
 }
 
 /// Build the STM32F401 clock and bus configuration used at boot.
@@ -205,14 +260,14 @@ async fn main(spawner: Spawner) {
     // matrix scanner, which keeps it high during calibration and active
     // scanning and cuts it between passes while the USB bus is suspended.
     let matrix_power = Output::new(peripheral.PC13, Level::High, Speed::Low);
-    // PC5 must be held low via pull-down so it does not float and trigger a
-    // spurious wakeup from the MCU's wakeup-pin logic.
-    let _analog_matrix_wakeup = Input::new(peripheral.PC5, Pull::Down);
+    // PC5: hardware any-key wake line, pulled down so it idles low; the matrix
+    // parks on its rising edge during USB suspend.
+    let wake = ExtiInput::new(peripheral.PC5, peripheral.EXTI5, Pull::Up, Irqs);
 
     // HC164 columns
-    let ds = Output::new(peripheral.PB3, Level::Low, Speed::VeryHigh);
-    let cp = Output::new(peripheral.PB5, Level::Low, Speed::VeryHigh);
-    let mr = Output::new(peripheral.PD2, Level::Low, Speed::VeryHigh);
+    let ds = Flex::new(peripheral.PB3);
+    let cp = Flex::new(peripheral.PB5);
+    let mr = Flex::new(peripheral.PD2);
     let cols = Hc164Cols::new(ds, cp, mr);
 
     // ADC matrix (rows are ADC pins)
@@ -263,6 +318,7 @@ async fn main(spawner: Spawner) {
         eeprom,
         crc,
         matrix_power,
+        wake,
     );
     // Rotary encoder
     let pin_a = ExtiInput::new(peripheral.PB14, peripheral.EXTI14, Pull::None, Irqs);

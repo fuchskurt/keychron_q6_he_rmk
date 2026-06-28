@@ -6,7 +6,6 @@ use crate::{
         processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
     },
     layout::LED_LAYOUT,
-    usb_state::usb_is_active,
 };
 use CalibPhase::{AllAccepted, Done, Full, Zero};
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
@@ -155,9 +154,8 @@ struct BacklightState {
     calib_pct:       u8,
     /// Packed lock / host-connection flags.
     ///
-    /// `host_connected` is tracked across [`CONNECTION_POLL`] ticks to detect
-    /// connect and disconnect transitions. On disconnect all LEDs are turned
-    /// off; on reconnect the backlight is restored.
+    /// `host_connected` is tracked across Power commands to detect connect/disconnect transitions.
+    /// On disconnect all LEDs are turned off; on reconnect the backlight is restored.
     flags:           BacklightFlags,
 }
 
@@ -350,8 +348,6 @@ impl Runnable for BacklightRunner {
     ///   are routed to [`BacklightRunner::handle_cmd`].
     /// - **Thermal polling** on a [`THERMAL_POLL`] ticker is handled by
     ///   [`BacklightRunner::handle_thermal_tick`].
-    /// - **Connection polling** on a [`CONNECTION_POLL`] ticker is handled by
-    ///   [`BacklightRunner::handle_connection_tick`].
     ///
     /// Backlight failures are non-critical: the keyboard remains fully
     /// functional without LEDs, so each handler ignores driver errors via
@@ -362,14 +358,6 @@ impl Runnable for BacklightRunner {
                 break;
             }
             Timer::after_millis(200).await;
-        }
-
-        // Wait for USB enumeration before entering the event loop. The
-        // connection ticker handles all subsequent transitions, so
-        // host_connected starts false and the first CONNECTION_POLL tick
-        // after enumeration triggers the connect path naturally.
-        while !usb_is_active() {
-            Timer::after_millis(10).await;
         }
 
         let rx = BACKLIGHT_CH.receiver();

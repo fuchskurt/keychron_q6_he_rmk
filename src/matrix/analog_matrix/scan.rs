@@ -12,31 +12,37 @@
 use crate::{
     layout::VALID_ROWS_BY_COL,
     matrix::{
-        analog_matrix::types::{HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
+        analog_matrix::{
+            AdcPart,
+            RowChannels,
+            types::{AdcSampleTime, HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
+        },
         hc164_cols::Hc164Cols,
     },
-    usb_state::usb_is_active,
+    usb_state::{UsbReceiver, wait_active},
 };
 use core::{
-    hint::{cold_path, likely, unlikely},
+    hint::{cold_path, likely},
     mem::swap,
 };
-use embassy_stm32::{adc::ConfiguredSequence, gpio::Output, pac::adc};
+use embassy_stm32::{
+    adc::{BasicInstance, ConfiguredSequence, Instance, RxDma},
+    dma::InterruptHandler,
+    exti::ExtiInput,
+    gpio::Output,
+    interrupt::typelevel::Binding,
+    mode::Async,
+    pac::adc,
+};
 use embassy_time::{Duration, Timer};
 use rmk::{
-    embassy_futures::{join::join, yield_now},
+    embassy_futures::{
+        join::join,
+        select::{Either, select},
+        yield_now,
+    },
     event::{KeyboardEvent, publish_event_async},
 };
-
-/// Interval between matrix passes while the USB bus is suspended or the
-/// cable is unplugged.
-///
-/// Between passes the hall-sensor power rail is cut and the executor sleeps
-/// the CPU (WFI), so the keyboard draws only the leakage of an idle MCU plus
-/// the LED drivers (already shut down by the backlight task). One pass every
-/// interval keeps a held key detectable so it can remote-wake the host, and
-/// bounds the added wake-by-keypress latency at one interval.
-const SUSPEND_SCAN_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Delay after re-powering the hall-sensor rail before its readings are
 /// trusted, letting the sensor outputs settle.
@@ -134,15 +140,22 @@ async fn process_column<const ROW: usize, const COL: usize>(
     }
 }
 
-/// Pipelined hot-path matrix scan loop. Runs forever, publishing key state
-/// changes directly via [`publish_event_async`] as they are detected.
+/// Pipelined full-rate scan body. Returns cleanly the moment the host
+/// suspends; `prev`/`prev_col` are local so each (re)entry after a resume
+/// starts a fresh pipeline rather than processing a column against stale,
+/// pre-suspend readings.
 ///
-/// The [`ConfiguredSequence`] is programmed once before entry and reused
-/// across all columns and passes. Both the column settle delay and the DMA
-/// transfer are fully async. For each reading that passes the noise gate
-/// the auto-calibrator is updated before the travel and rapid-trigger
-/// logic runs, so any calibration refinement takes effect within the same
-/// scan pass.
+/// Suspend is detected *cooperatively* — by polling `UsbReceiver::try_get`
+/// at the per-column yield point — rather than by letting the supervisor drop
+/// this future mid-read. That matters because [`ConfiguredSequence::read`] is
+/// **not** cancellation-safe with respect to the ADC: it calls `start()` and
+/// then awaits the DMA transfer, and `ConfiguredSequence`'s own `Drop` (which
+/// issues the ADC `stop()`) never runs while the sequence is kept alive across
+/// suspend. Dropping the read future mid-transfer aborts only the DMA, leaving
+/// the ADC converting the rest of the scan with nothing draining it; a stale
+/// sample stays latched in the data register and shifts every subsequent
+/// fixed-length read by one row on resume. Always completing the in-flight
+/// read before returning keeps the data register drained and the rows aligned.
 ///
 /// Double-buffered: the first poll of [`ConfiguredSequence::read`] inside
 /// [`join`] arms the DMA transfer and starts the ADC sequence, then the
@@ -150,38 +163,26 @@ async fn process_column<const ROW: usize, const COL: usize>(
 /// proceeds in hardware. This hides the per-column processing window behind
 /// the DMA transfer, which development benchmarks measured dominating the
 /// per-column budget (~9.8 µs DMA versus ~3.5 µs processing).
-///
-/// The last column of a pass is processed during the first conversion of the
-/// next pass, so the pipeline never needs a separate drain step.
-///
-/// While the USB bus is suspended (or the cable unplugged) the loop runs in
-/// trickle mode: one pass every [`SUSPEND_SCAN_INTERVAL`] with the sensor
-/// columns unpowered in between, so a keypress can still remote-wake the
-/// host without the keyboard burning full scan power against a sleeping
-/// machine.
 #[optimize(speed)]
-pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
+async fn active_scan<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
     keys: &mut [[KeyEntry; ROW]; COL],
     seq: &mut ConfiguredSequence<'_, adc::Adc>,
     buf: &mut [u16; ROW],
-    power: &mut Output<'_>,
-    cfg: HallCfg,
-) -> ! {
-    let tuning = RtTuning::from_cfg(cfg);
+    usb: &mut UsbReceiver,
+    tuning: RtTuning,
+) {
     let mut prev = [0_u16; ROW];
     let mut prev_col: Option<usize> = None;
     loop {
-        if unlikely(!usb_is_active()) {
-            cold_path();
-            suspend_trickle(cols, keys, seq, buf, power, tuning).await;
-            // The rail was power-cycled, so the pipelined `prev` buffer is
-            // stale; drop it so the resumed pass does not process a column
-            // against pre-suspend readings.
-            prev_col = None;
-        }
         cols.reset();
         for col in 0..COL {
+            // Stop between completed reads (never mid-transfer) once the host
+            // suspends, so the ADC sequence always finishes and the data
+            // register is left drained and row-aligned for the next resume.
+            if usb.try_get() == Some(false) {
+                return;
+            }
             // Column settle delay; also the executor yield point.
             yield_now().await;
             join(seq.read(buf), async {
@@ -197,60 +198,114 @@ pub(super) async fn run_scan_loop<const ROW: usize, const COL: usize>(
     }
 }
 
-/// Low-power suspend loop, entered when the USB bus is suspended or
-/// unplugged.
-///
-/// Each iteration cuts the hall-sensor power rail and naps for
-/// [`SUSPEND_SCAN_INTERVAL`] (the executor puts the CPU into WFI sleep while
-/// the timer runs), then re-powers the rail, lets it settle, and discards the
-/// power-up transient. It then looks for a genuinely pressed key, and only
-/// when one is confirmed does it run a publishing pass so RMK issues a USB
-/// remote-wakeup request. Returns once the host is active again, leaving the
-/// rail powered so the caller's full-speed loop resumes immediately.
-///
-/// Wake detection is deliberately decoupled from the edge-triggered
-/// [`process_column`] machine: it tests each key's *absolute* calibrated
-/// travel against the actuation point and requires two reads
-/// [`SUSPEND_CONFIRM_DELAY`] apart to agree. A settling artifact after the
-/// rail powers up therefore cannot wake the host; only a key the user is
-/// actually holding does.
+/// Confirm a real, sustained press: two absolute-travel checks
+/// [`SUSPEND_CONFIRM_DELAY`] apart must both see a pressed key, so a sensor
+/// settling artifact after the rail powers up cannot wake the host.
 #[optimize(speed)]
-async fn suspend_trickle<const ROW: usize, const COL: usize>(
+async fn confirmed_press<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
-    keys: &mut [[KeyEntry; ROW]; COL],
+    keys: &[[KeyEntry; ROW]; COL],
     seq: &mut ConfiguredSequence<'_, adc::Adc>,
     buf: &mut [u16; ROW],
-    power: &mut Output<'_>,
-    tuning: RtTuning,
-) {
-    while !usb_is_active() {
-        // No column selected and the rail off: nothing in the matrix draws
-        // current while the CPU sleeps out the interval.
-        cols.clear();
-        power.set_low();
-        Timer::after(SUSPEND_SCAN_INTERVAL).await;
+    act_threshold: u8,
+) -> bool {
+    if !any_key_pressed(cols, keys, seq, buf, act_threshold).await {
+        return false;
+    }
+    Timer::after(SUSPEND_CONFIRM_DELAY).await;
+    any_key_pressed(cols, keys, seq, buf, act_threshold).await
+}
 
-        // Re-power, settle, and flush the power-up transient before trusting
-        // a reading.
+/// Event-driven scan supervisor: full-rate scan while the host is awake, park
+/// on the PC5 hardware key-wake interrupt while suspended. No USB-state
+/// polling and no periodic trickle scan — the CPU sits in WFI through suspend
+/// and wakes only on the resume event or a key-wake edge.
+///
+/// While suspended the sensor rail (PC13) is cut. This assumes the PC5 wake
+/// line still asserts on a keypress with the rail unpowered; if your board's
+/// detect needs the rail powered, hold `power` high through the suspend block
+/// instead and drop the re-power / settle / discard steps.
+#[optimize(speed)]
+pub(super) async fn run<'peripherals, ADC, D, R, IRQ, const ROW: usize, const COL: usize>(
+    cols: &mut Hc164Cols<'_>,
+    keys: &mut [[KeyEntry; ROW]; COL],
+    adc_part: &mut AdcPart<'peripherals, ADC, D, R, ROW>,
+    irq: IRQ,
+    buf: &mut [u16; ROW],
+    power: &mut Output<'_>,
+    wake: &mut ExtiInput<'_, Async>,
+    usb: &mut UsbReceiver,
+    cfg: HallCfg,
+) -> !
+where
+    ADC: Instance<Regs = adc::Adc> + BasicInstance,
+    D: RxDma<ADC>,
+    R: RowChannels<ADC, ROW>,
+    IRQ: Binding<D::Interrupt, InterruptHandler<D>> + Copy + 'peripherals,
+    AdcSampleTime<ADC>: Clone,
+{
+    let tuning = RtTuning::from_cfg(cfg);
+
+    // Hold off scanning until the host first configures the device.
+    wait_active(usb, true).await;
+
+    loop {
+        // Awake: clear any suspend pull-down, build a fresh ADC sequence (which
+        // re-asserts analog mode on the rows), and full-rate scan until the
+        // host suspends. `active_scan` returns on its own when it observes the
+        // suspend edge, always finishing the in-flight ADC read first — it must
+        // not be cancelled mid-transfer, or a stale sample left latched in the
+        // ADC data register would shift every row by one on the next resume.
+        adc_part.rows.set_active();
+        {
+            let mut seq = adc_part.configure_sequence(irq);
+            active_scan(cols, keys, &mut seq, buf, usb, tuning).await;
+        }; // `seq` dropped here: ADC stopped, `adc_part` released.
+
+        // Suspended: rail off, HC164 and rows parked low, ADC already stopped.
+        adc_part.rows.set_low_power();
+        cols.set_low_power();
+        power.set_low();
+        loop {
+            match select(wait_active(usb, true), wake.wait_for_falling_edge()).await {
+                Either::First(()) => break, // host resumed on its own
+                Either::Second(()) => {
+                    cold_path();
+                    // Re-arm the matrix: restore outputs, power, settle, then
+                    // build a sequence (clearing the row pull-down first) and
+                    // flush the settling transient.
+                    power.set_high();
+                    Timer::after(SENSOR_SETTLE).await;
+                    cols.set_active();
+                    adc_part.rows.set_active();
+                    let mut seq = adc_part.configure_sequence(irq);
+                    for _ in 0..SUSPEND_DISCARD_PASSES {
+                        read_pass::<ROW, COL>(cols, &mut seq, buf).await;
+                    }
+                    if confirmed_press(cols, keys, &mut seq, buf, tuning.act_threshold).await {
+                        // Publishing pass raises RMK's remote-wakeup request;
+                        // the host resumes and the outer wait_active(true)
+                        // breaks us out. Leave the rail powered for it; `seq`
+                        // drops at the end of this arm, stopping the ADC until
+                        // the awake window rebuilds it.
+                        eval_pass(cols, keys, &mut seq, buf, tuning).await;
+                    } else {
+                        // Spurious edge: drop the sequence (stopping the ADC),
+                        // then park rail, HC164, and rows low again.
+                        drop(seq);
+                        adc_part.rows.set_low_power();
+                        cols.set_low_power();
+                        power.set_low();
+                    }
+                },
+            }
+        }
+
+        // Resumed: restore outputs and power; the awake window rebuilds the
+        // sequence and clears the row pull-down before scanning resumes.
         power.set_high();
         Timer::after(SENSOR_SETTLE).await;
-        for _ in 0..SUSPEND_DISCARD_PASSES {
-            read_pass::<ROW, COL>(cols, seq, buf).await;
-        }
-
-        // Wake only on a real, sustained press: two absolute-travel checks
-        // SUSPEND_CONFIRM_DELAY apart must both see a pressed key.
-        if !any_key_pressed(cols, keys, seq, buf, tuning.act_threshold).await {
-            continue;
-        }
-        Timer::after(SUSPEND_CONFIRM_DELAY).await;
-        if !any_key_pressed(cols, keys, seq, buf, tuning.act_threshold).await {
-            continue;
-        }
-
-        // Confirmed: run one publishing pass so the held key's press reaches
-        // RMK, which raises the remote-wakeup request and registers the key.
-        eval_pass(cols, keys, seq, buf, tuning).await;
+        cols.set_active();
     }
 }
 
