@@ -18,16 +18,19 @@ use crate::{
         calib_store::{CALIB_BUF_LEN, EEPROM_BASE_ADDR, try_deserialize},
         hc164_cols::Hc164Cols,
     },
+    usb_state::USB_ACTIVE,
 };
-use core::array::from_fn;
+use core::{array::from_fn, future::pending};
 use embassy_stm32::{
     Peri,
     adc::{Adc, BasicInstance, BorrowedAdcChannel, ConfiguredSequence, Instance, RxDma},
     crc::Crc,
     dma::InterruptHandler,
+    exti::ExtiInput,
     gpio::Output,
     i2c::mode::MasterMode,
     interrupt::typelevel::Binding,
+    mode::Async,
     pac::adc,
 };
 use rmk::core_traits::Runnable;
@@ -168,6 +171,8 @@ where
     /// Hall-sensor power rail (PC13), held high during calibration and active
     /// scanning and cut between passes while the USB bus is suspended.
     power:    Output<'peripherals>,
+    /// Hardware any-key wake line (PC5); parks the scanner during suspend.
+    wake:     ExtiInput<'peripherals, Async>,
 }
 
 impl<'peripherals, ADC, D, R, IRQ, IM, const ROW: usize, const COL: usize>
@@ -192,8 +197,9 @@ where
         eeprom: Ft24c64<'peripherals, IM>,
         crc: Crc<'peripherals>,
         power: Output<'peripherals>,
+        wake: ExtiInput<'peripherals, Async>,
     ) -> Self {
-        Self { adc_part, cfg, cols, crc, eeprom, irq, keys: from_fn(|_| from_fn(|_| KeyEntry::default())), power }
+        Self { adc_part, cfg, cols, crc, eeprom, irq, keys: from_fn(|_| from_fn(|_| KeyEntry::default())), power, wake }
     }
 }
 
@@ -232,6 +238,21 @@ where
             .await;
         }
 
-        scan::run_scan_loop(&mut self.cols, &mut self.keys, &mut seq, &mut buf, &mut self.power, self.cfg).await;
+        let Some(mut usb) = USB_ACTIVE.receiver() else {
+            loop {
+                pending::<()>().await;
+            }
+        };
+        scan::run(
+            &mut self.cols,
+            &mut self.keys,
+            &mut seq,
+            &mut buf,
+            &mut self.power,
+            &mut self.wake,
+            &mut usb,
+            self.cfg,
+        )
+        .await;
     }
 }

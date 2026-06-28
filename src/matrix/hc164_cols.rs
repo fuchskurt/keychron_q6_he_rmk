@@ -1,4 +1,4 @@
-use embassy_stm32::gpio::Output;
+use embassy_stm32::gpio::{Flex, Pull, Speed};
 
 /// Column selector driven by an HC164 shift register.
 ///
@@ -16,11 +16,11 @@ use embassy_stm32::gpio::Output;
 /// the remainder of the pass.
 pub struct Hc164Cols<'peripherals> {
     /// Clock input (`CP`) for shifting data into the register.
-    cp: Output<'peripherals>,
+    cp: Flex<'peripherals>,
     /// Serial data input (`DS`) for the shift register.
-    ds: Output<'peripherals>,
+    ds: Flex<'peripherals>,
     /// Master reset (`MR`) input for clearing the register.
-    mr: Output<'peripherals>,
+    mr: Flex<'peripherals>,
 }
 
 impl<'peripherals> Hc164Cols<'peripherals> {
@@ -44,7 +44,13 @@ impl<'peripherals> Hc164Cols<'peripherals> {
     }
 
     /// Create a new column selector for the HC164.
-    pub const fn new(ds: Output<'peripherals>, cp: Output<'peripherals>, mr: Output<'peripherals>) -> Self {
+    pub fn new(mut ds: Flex<'peripherals>, mut cp: Flex<'peripherals>, mut mr: Flex<'peripherals>) -> Self {
+        ds.set_as_output(Speed::VeryHigh);
+        cp.set_as_output(Speed::VeryHigh);
+        mr.set_as_output(Speed::VeryHigh);
+        ds.set_low();
+        cp.set_low();
+        mr.set_low();
         Self { cp, ds, mr }
     }
 
@@ -56,5 +62,25 @@ impl<'peripherals> Hc164Cols<'peripherals> {
         self.ds.set_high();
         self.advance();
         self.ds.set_low();
+    }
+
+    /// Restore the control lines to push-pull outputs after a resume.
+    #[inline]
+    pub fn set_active(&mut self) {
+        self.ds.set_as_output(Speed::VeryHigh);
+        self.cp.set_as_output(Speed::VeryHigh);
+        self.mr.set_as_output(Speed::VeryHigh);
+    }
+
+    /// Park the control lines for suspend, mirroring the stock firmware's
+    /// `matrix_enter_low_power`: clear the register, then tristate DS/CP/MR to
+    /// input-pulldown so the MCU does not backfeed the unpowered HC164. Pair
+    /// with [`Hc164Cols::set_active`] on resume.
+    #[inline]
+    pub fn set_low_power(&mut self) {
+        self.clear();
+        self.ds.set_as_input(Pull::Down);
+        self.cp.set_as_input(Pull::Down);
+        self.mr.set_as_input(Pull::Down);
     }
 }

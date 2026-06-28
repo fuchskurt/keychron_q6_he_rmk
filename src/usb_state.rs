@@ -1,38 +1,46 @@
-//! USB host suspend state, sourced from RMK's connection-status events.
+//! USB suspend/resume fan-out, sourced from RMK's connection-status events.
 //!
-//! `usb_is_active()` is a cheap synchronous atomic load — the matrix scan hot
-//! loop and the backlight connection poll both call it and neither can
-//! `.await`. The single [`UsbStateTask`] subscriber is the only writer: it
-//! translates `ConnectionStatusChangeEvent` (published from RMK's `suspended()`
-//! / `configured()` USB handlers) into the flag.
+//! `UsbStateTask` subscribes once to `ConnectionStatusChangeEvent` and, on
+//! each USB lifecycle edge, pushes the active/suspended transition to the
+//! backlight (via `BACKLIGHT_CH`) and the matrix (via `USB_ACTIVE`). Nothing
+//! polls; both consumers react to edges.
 
 use crate::backlight::processor::{BACKLIGHT_CH, BacklightCmd};
-use core::sync::atomic::{AtomicBool, Ordering};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex,
+    watch::{Receiver, Watch},
+};
 use rmk::{
     core_traits::Runnable,
     event::{ConnectionStatusChangeEvent, EventSubscriber as _, SubscribableEvent},
     types::connection::UsbState,
 };
 
-/// `true` once the host has configured the device and has not suspended it.
-///
-/// Starts `false`: [`UsbStateTask::new`] subscribes before `run_all!` drives
-/// USB enumeration, so the initial `Enabled → Configured` edge is captured and
-/// flips this to `true`. A host-initiated suspend flips it back.
-static ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Receiver count for [`USB_ACTIVE`] (matrix scan task only).
+const USB_ACTIVE_RECEIVERS: usize = 1;
 
-/// Mirrors USB lifecycle transitions into [`ACTIVE`]. Hand to `run_all!`.
+/// Latest USB activity edge: `true` = host configured and awake, `false` =
+/// suspended.
+///
+/// A retained-value [`Watch`] rather than a pub/sub channel, so a receiver
+/// created after the initial `Configured` edge still observes it.
+pub static USB_ACTIVE: Watch<CriticalSectionRawMutex, bool, USB_ACTIVE_RECEIVERS> = Watch::new();
+
+/// Receiver handle for [`USB_ACTIVE`].
+pub type UsbReceiver = Receiver<'static, CriticalSectionRawMutex, bool, USB_ACTIVE_RECEIVERS>;
+
+/// Event subscriber fanning USB transitions out to the backlight and matrix.
+///
+/// Hand to `run_all!`; construct before it so the subscription is live before
+/// USB enumeration publishes the first edge.
 pub struct UsbStateTask {
-    /// Subscription to USB connection-status transitions; the sole writer of
-    /// [`ACTIVE`].
+    /// Subscription to USB connection-status transitions; the sole producer of
+    /// edges.
     sub: <ConnectionStatusChangeEvent as SubscribableEvent>::Subscriber,
 }
 
 impl UsbStateTask {
-    /// Subscribes immediately so the subscription is live before enumeration.
-    ///
-    /// Must be constructed before `run_all!`; constructing it after USB has
-    /// enumerated would miss the initial `Configured` edge and latch off.
+    /// Subscribe immediately so no enumeration edge is missed.
     #[must_use]
     pub fn new() -> Self { Self { sub: ConnectionStatusChangeEvent::subscriber() } }
 }
@@ -43,19 +51,30 @@ impl Default for UsbStateTask {
 
 impl Runnable for UsbStateTask {
     async fn run(&mut self) -> ! {
-        let mut prev = false; // matches ACTIVE's initial value
+        let tx = USB_ACTIVE.sender();
+        let mut prev = false;
         loop {
             let active = matches!(self.sub.next_event().await.0.usb, UsbState::Configured);
-            ACTIVE.store(active, Ordering::Relaxed);
             if active != prev {
                 prev = active;
+                tx.send(active);
                 BACKLIGHT_CH.sender().send(BacklightCmd::Power(active)).await;
             }
         }
     }
 }
 
-/// Returns `true` when the USB host has the device configured and awake.
-#[must_use]
-#[inline]
-pub fn usb_is_active() -> bool { ACTIVE.load(Ordering::Relaxed) }
+/// Wait until the USB activity edge equals `target`.
+///
+/// Resolves immediately if the retained value already matches, otherwise on
+/// the first matching transition.
+pub async fn wait_active(rx: &mut UsbReceiver, target: bool) {
+    if rx.try_get() == Some(target) {
+        return;
+    }
+    loop {
+        if rx.changed().await == target {
+            return;
+        }
+    }
+}
