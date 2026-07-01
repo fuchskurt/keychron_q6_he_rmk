@@ -28,7 +28,7 @@ mod matrix;
 mod usb_state;
 
 use crate::{
-    backlight::{processor::LedIndicator, runner::BacklightRunner},
+    backlight::{processor::LedIndicator, task::BacklightRunner},
     board::{Q6RowPins, enable_flash_acceleration, stm32_config, tune_adc},
     eeprom::Ft24c64,
     layout::{COL, ROW},

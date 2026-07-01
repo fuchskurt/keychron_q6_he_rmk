@@ -4,7 +4,7 @@
 //!
 //! Everything here answers "what should the LEDs show for this state";
 //! deciding *when* to repaint (command handling, thermal polling, USB
-//! power transitions) lives in `runner`.
+//! power transitions) lives in `task`.
 
 use crate::backlight::gamma;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
@@ -110,7 +110,7 @@ pub(super) enum CalibDisplay {
 #[derive(Clone, Copy, Default)]
 pub(super) struct BacklightState {
     /// Global brightness percentage (0-100); reduced under thermal throttle.
-    pub(super) brightness:      u8 = FULL_BRIGHTNESS,
+    pub brightness:      u8 = FULL_BRIGHTNESS,
     /// The calibration frame (if any) that currently owns the display.
     ///
     /// Set to [`CalibDisplay::Zero`] when the zero-travel pass starts,
@@ -118,25 +118,25 @@ pub(super) struct BacklightState {
     /// [`CalibDisplay::None`] once calibration completes and the keyboard
     /// returns to normal white operation. Consulted by every asynchronous
     /// repaint path.
-    pub(super) calib_display:   CalibDisplay,
+    pub calib_display:   CalibDisplay,
     /// Bitset of LED indices confirmed calibrated during the full-travel pass.
     ///
     /// Bit `i` set means LED `i` should be painted solid green by
     /// [`render_calib`]. Cleared to zero when calibration completes
     /// and the keyboard returns to normal white operation.
-    pub(super) calib_leds_done: u128,
+    pub calib_leds_done: u128,
     /// Whole-keyboard gradient percentage (0-100) during the full-travel pass.
     ///
     /// Drives the red-blue background interpolation in [`render_calib`].
     /// Cleared to zero alongside [`BacklightState::calib_leds_done`] on
     /// calibration completion.
-    pub(super) calib_pct:       u8,
+    pub calib_pct:       u8,
     /// Packed lock / host-connection flags.
     ///
     /// `host_connected` is tracked across Power commands to detect
     /// connect/disconnect transitions. On disconnect all LEDs are turned
     /// off; on reconnect the backlight is restored.
-    pub(super) flags:           BacklightFlags,
+    pub flags:           BacklightFlags,
 }
 
 /// Performs a brightness ramp on all LEDs.

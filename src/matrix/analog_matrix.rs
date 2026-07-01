@@ -36,36 +36,6 @@ use embassy_stm32::{
 use rmk::{core_traits::Runnable, embassy_futures::yield_now};
 pub use types::HallCfg;
 
-/// Run one full matrix pass: for each of the `col_count` columns, yield to
-/// the executor (doubling as the column settle delay), read all row ADCs
-/// into `buf`, advance the HC164 walking-one, and hand the readings to
-/// `on_col` together with the column index.
-///
-/// Shared by every calibration pass and the sequential suspend/resume passes
-/// in `scan`, so the column-sequencing protocol stays in one place and cannot
-/// drift between them. Two passes intentionally do not use this helper: the
-/// full-rate scan loop (`scan::active_scan`) pipelines processing into the
-/// DMA window instead of running it after the read, and the post-wake
-/// publishing pass (`scan::eval_pass`) must `await` per column, which a
-/// synchronous `FnMut` callback cannot express.
-async fn scan_pass<F, const ROW: usize>(
-    cols: &mut Hc164Cols<'_>,
-    seq: &mut ConfiguredSequence<'_, adc::Adc>,
-    buf: &mut [u16; ROW],
-    col_count: usize,
-    mut on_col: F,
-) where
-    F: FnMut(usize, &[u16; ROW]),
-{
-    cols.reset();
-    for col in 0..col_count {
-        yield_now().await;
-        seq.read(buf).await;
-        cols.advance();
-        on_col(col, buf);
-    }
-}
-
 /// Supplies the per-row ADC channels for a single sequence read.
 ///
 /// The current embassy ADC API exposes channels only as transient
@@ -307,5 +277,35 @@ where
             self.cfg,
         )
         .await;
+    }
+}
+
+/// Run one full matrix pass: for each of the `col_count` columns, yield to
+/// the executor (doubling as the column settle delay), read all row ADCs
+/// into `buf`, advance the HC164 walking-one, and hand the readings to
+/// `on_col` together with the column index.
+///
+/// Shared by every calibration pass and the sequential suspend/resume passes
+/// in `scan`, so the column-sequencing protocol stays in one place and cannot
+/// drift between them. Two passes intentionally do not use this helper: the
+/// full-rate scan loop (`scan::active_scan`) pipelines processing into the
+/// DMA window instead of running it after the read, and the post-wake
+/// publishing pass (`scan::eval_pass`) must `await` per column, which a
+/// synchronous `FnMut` callback cannot express.
+async fn scan_pass<F, const ROW: usize>(
+    cols: &mut Hc164Cols<'_>,
+    seq: &mut ConfiguredSequence<'_, adc::Adc>,
+    buf: &mut [u16; ROW],
+    col_count: usize,
+    mut on_col: F,
+) where
+    F: FnMut(usize, &[u16; ROW]),
+{
+    cols.reset();
+    for col in 0..col_count {
+        yield_now().await;
+        seq.read(buf).await;
+        cols.advance();
+        on_col(col, buf);
     }
 }
