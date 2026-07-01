@@ -18,15 +18,12 @@ use crate::{
             CALIB_PRESS_THRESHOLD,
             CALIB_SETTLE_AFTER_ALL_DONE,
             CALIB_ZERO_TOLERANCE,
-            DEFAULT_FULL_RANGE,
             HallCfg,
             KeyCalibState,
             KeyEntry,
-            MIN_USEFUL_FULL_RANGE,
             REF_ZERO_TRAVEL,
-            VALID_RAW_MIN,
             ZERO_TRAVEL_DEAD_ZONE,
-            full_from_min,
+            entry_full_from,
         },
         calib_store::{self, CALIB_BUF_LEN, EEPROM_BASE_ADDR, try_deserialize},
         hc164_cols::Hc164Cols,
@@ -156,18 +153,13 @@ pub(super) async fn run_first_boot_calib<IM, const ROW: usize, const COL: usize>
     let full_raw = sample_full_raw(cols, seq, buf, cfg, &zero_raw).await;
 
     // Compute entry_full for every key from the measured zero and the
-    // minimum ADC seen during the full-travel press window. Keys that
-    // never crossed the press threshold fall back to the synthetic
-    // `zero - DEFAULT_FULL_RANGE` floor so the keyboard stays usable.
+    // minimum ADC seen during the full-travel press window; see
+    // `entry_full_from` for the never-pressed fallback policy.
     for (col, key_col) in keys.iter_mut().enumerate() {
         for (row, key) in key_col.iter_mut().enumerate() {
             let zero = zero_raw.get(row).and_then(|row_slice| row_slice.get(col)).copied().unwrap_or(REF_ZERO_TRAVEL);
             let seen_min = full_raw.get(row).and_then(|row_slice| row_slice.get(col)).copied().unwrap_or(u16::MAX);
-            key.entry_full = if zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
-                full_from_min(zero, seen_min)
-            } else {
-                zero.saturating_sub(DEFAULT_FULL_RANGE).max(VALID_RAW_MIN)
-            };
+            key.entry_full = entry_full_from(zero, seen_min);
         }
     }
 
