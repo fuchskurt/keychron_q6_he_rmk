@@ -357,7 +357,7 @@ impl KeyEntry {
         self.inv_scale = FULL_TRAVEL_SCALED.saturating_add(delta.saturating_sub(1)).checked_div(delta).unwrap_or(0);
         self.lut_zero = zero_lut;
         self.calib_zero = zero;
-        self.calib_used = zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE;
+        self.calib_used = zero_plausible(zero);
     }
 
     /// Recompute calibration from a freshly measured `zero`-travel reading
@@ -619,3 +619,15 @@ pub const fn entry_full_from(zero: u16, observed_min: u16) -> u16 {
 pub const fn full_from_min(zero: u16, observed_min: u16) -> u16 {
     observed_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE)).max(VALID_RAW_MIN)
 }
+
+/// Whether a resting (zero-travel) ADC reading is close enough to
+/// [`REF_ZERO_TRAVEL`] to indicate a working hall sensor at that position.
+///
+/// The single definition of "plausible sensor" shared by the calibration
+/// arithmetic ([`KeyEntry::apply_calib`] derives `calib_used` from it, which
+/// gates the entire travel hot path) and the first-boot progress accounting
+/// (`count_real_sensors`), so the two can never disagree on which positions
+/// count as real keys.
+#[must_use]
+#[inline]
+pub const fn zero_plausible(zero: u16) -> bool { zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE }

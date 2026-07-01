@@ -11,19 +11,19 @@ use super::scan_pass;
 use crate::{
     backlight::processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
     eeprom::Ft24c64,
-    layout::{MATRIX_TO_LED, VALID_ROWS_BY_COL},
+    layout::{MATRIX_TO_LED, VALID_ROWS_BY_COL, valid_readings},
     matrix::{
         analog_matrix::types::{
             CALIB_HOLD_DURATION_MS,
             CALIB_PRESS_THRESHOLD,
             CALIB_SETTLE_AFTER_ALL_DONE,
-            CALIB_ZERO_TOLERANCE,
             HallCfg,
             KeyCalibState,
             KeyEntry,
             REF_ZERO_TRAVEL,
             ZERO_TRAVEL_DEAD_ZONE,
             entry_full_from,
+            zero_plausible,
         },
         calib_store::{self, CALIB_BUF_LEN, EEPROM_BASE_ADDR, try_deserialize},
         hc164_cols::Hc164Cols,
@@ -96,9 +96,10 @@ pub(super) async fn calibrate_zero_raw<const ROW: usize, const COL: usize>(
 /// plausible zero-travel reading.
 ///
 /// [`VALID_ROWS_BY_COL`] already filters to sensor-present positions; the
-/// additional [`CALIB_ZERO_TOLERANCE`] check discards any sensor whose
-/// resting ADC is too far from [`REF_ZERO_TRAVEL`] to produce reliable
-/// calibration data. The result drives both the Phase A early-exit
+/// additional [`zero_plausible`] check discards any sensor whose resting
+/// ADC is too far from [`REF_ZERO_TRAVEL`] to produce reliable calibration
+/// data, using the same predicate that later derives
+/// [`KeyEntry::calib_used`]. The result drives both the Phase A early-exit
 /// condition and the displayed progress percentage so they agree on the
 /// denominator.
 pub(super) fn count_real_sensors<const ROW: usize, const COL: usize>(zero_raw: &[[u16; COL]; ROW]) -> usize {
@@ -109,7 +110,7 @@ pub(super) fn count_real_sensors<const ROW: usize, const COL: usize>(zero_raw: &
                 .get(usize::from(row_u8))
                 .and_then(|row_slice| row_slice.get(col_idx))
                 .copied()
-                .is_some_and(|zero| zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE);
+                .is_some_and(zero_plausible);
             if in_range {
                 total = total.saturating_add(1);
             }
@@ -209,14 +210,12 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
 
     while Instant::now() < deadline && calibrated_count < total_keys {
         scan_pass(cols, seq, buf, COL, |col, readings| {
-            // Only valid sensor positions are stored in VALID_ROWS_BY_COL;
-            // columns with no sensors produce an empty list and are skipped
-            // entirely without touching the calibration state machine,
-            // matching the hot-path iteration pattern in `scan`.
-            let Some(valid) = VALID_ROWS_BY_COL.get(col) else { return };
-            for &row_u8 in valid.valid_rows() {
+            // valid_readings yields only positions with a physical sensor;
+            // columns with no sensors iterate zero times and never touch the
+            // calibration state machine, matching the hot-path pattern in
+            // `scan`.
+            for (row_u8, raw) in valid_readings(col, readings) {
                 let key_row = usize::from(row_u8);
-                let raw = readings.get(key_row).copied().unwrap_or(0);
 
                 // Always track the deepest reading seen, regardless of
                 // whether the key has been accepted yet.
@@ -342,11 +341,8 @@ pub(super) async fn settle_min_raw<const ROW: usize, const COL: usize>(
     let deadline = Instant::now().saturating_add(duration);
     while Instant::now() < deadline {
         scan_pass(cols, seq, buf, COL, |col, readings| {
-            let Some(valid) = VALID_ROWS_BY_COL.get(col) else { return };
-            for &row_u8 in valid.valid_rows() {
-                let row = usize::from(row_u8);
-                let raw = readings.get(row).copied().unwrap_or(0);
-                min_into(min_raw, row, col, raw);
+            for (row_u8, raw) in valid_readings(col, readings) {
+                min_into(min_raw, usize::from(row_u8), col, raw);
             }
         })
         .await;
@@ -358,7 +354,8 @@ pub(super) async fn settle_min_raw<const ROW: usize, const COL: usize>(
 ///
 /// Out-of-bounds positions are silently skipped; `min_raw` is dimensioned to
 /// match the matrix and the calling indices come from
-/// [`crate::layout::VALID_ROWS_BY_COL`] which itself is bounded by `ROW`/`COL`,
+/// [`crate::layout::valid_readings`] (backed by
+/// [`crate::layout::VALID_ROWS_BY_COL`], which is bounded by `ROW`/`COL`),
 /// so this only fires on a structural bug.
 #[inline]
 fn min_into<const ROW: usize, const COL: usize>(min_raw: &mut [[u16; COL]; ROW], key_row: usize, col: usize, raw: u16) {

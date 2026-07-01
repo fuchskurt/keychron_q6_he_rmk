@@ -10,7 +10,7 @@
 //! behind the DMA transfer that dominates the per-column budget.
 
 use crate::{
-    layout::VALID_ROWS_BY_COL,
+    layout::valid_readings,
     matrix::{
         analog_matrix::{
             AdcPart,
@@ -73,7 +73,7 @@ const SUSPEND_CONFIRM_DELAY: Duration = Duration::from_millis(8);
 /// [`publish_event_async`].
 ///
 /// `buf` must hold the row readings sampled while `col` was selected.
-/// Columns with no sensors produce an empty [`VALID_ROWS_BY_COL`] list and
+/// Columns with no sensors yield nothing from [`valid_readings`] and
 /// return without touching the key-state machine.
 #[optimize(speed)]
 async fn process_column<const ROW: usize, const COL: usize>(
@@ -82,25 +82,22 @@ async fn process_column<const ROW: usize, const COL: usize>(
     col: usize,
     tuning: RtTuning,
 ) {
-    // valid_rows() slices to exactly the populated entries (one check
-    // instead of one per key); hoist keys[col] out of the inner loop.
-    if let Some(valid) = VALID_ROWS_BY_COL.get(col)
-        && let Some(key_col) = keys.get_mut(col)
-    {
+    // valid_readings yields exactly the populated sensor positions (one
+    // presence check per column instead of one per key); hoist keys[col]
+    // out of the inner loop.
+    if let Some(key_col) = keys.get_mut(col) {
         // Timestamp for the auto-calibrator's ~1 s release-time bound,
         // computed lazily on the first reading that passes the noise gate:
         // in the steady idle state every reading is gated, so the scan loop
         // pays for no timer reads at all. One value per column is plenty;
         // the whole column processes in microseconds.
         let mut now: Option<u32> = None;
-        for &row_u8 in valid.valid_rows() {
-            let row = usize::from(row_u8);
-
+        for (row_u8, raw_reading) in valid_readings(col, buf) {
             // Clamp raw ADC value to valid range to prevent out-of-bounds
             // LUT access and ensure valid calibration updates.
-            let raw = buf.get(row).copied().unwrap_or(0).clamp(VALID_RAW_MIN, VALID_RAW_MAX);
+            let raw = raw_reading.clamp(VALID_RAW_MIN, VALID_RAW_MAX);
 
-            let Some(entry) = key_col.get_mut(row) else { continue };
+            let Some(entry) = key_col.get_mut(usize::from(row_u8)) else { continue };
 
             // Skip if the reading has not changed beyond the noise gate.
             if likely(entry.last_raw.abs_diff(raw) < tuning.noise_gate) {
@@ -282,21 +279,15 @@ where
         }; // `seq` dropped here: ADC stopped, `adc_part` released.
 
         // Suspended: rail off, HC164 and rows parked low, ADC already stopped.
-        adc_part.rows.set_low_power();
-        cols.set_low_power();
-        power.set_low();
+        park_matrix(&mut adc_part.rows, cols, power);
         loop {
             match select(wait_active(usb), wake.wait_for_falling_edge()).await {
                 Either::First(()) => break, // host resumed on its own
                 Either::Second(()) => {
                     cold_path();
-                    // Re-arm the matrix: restore outputs, power, settle, then
-                    // build a sequence (clearing the row pull-down first) and
-                    // flush the settling transient.
-                    power.set_high();
-                    Timer::after(SENSOR_SETTLE).await;
-                    cols.set_active();
-                    adc_part.rows.set_active();
+                    // Re-arm the matrix, then build a sequence and flush the
+                    // settling transient.
+                    wake_matrix(&mut adc_part.rows, cols, power).await;
                     let mut seq = adc_part.configure_sequence();
                     for _ in 0..SUSPEND_DISCARD_PASSES {
                         read_pass::<ROW, COL>(cols, &mut seq, &mut buf).await;
@@ -312,19 +303,15 @@ where
                         // Spurious edge: drop the sequence (stopping the ADC),
                         // then park rail, HC164, and rows low again.
                         drop(seq);
-                        adc_part.rows.set_low_power();
-                        cols.set_low_power();
-                        power.set_low();
+                        park_matrix(&mut adc_part.rows, cols, power);
                     }
                 },
             }
         }
 
-        // Resumed: restore outputs and power; the awake window rebuilds the
-        // sequence and clears the row pull-down before scanning resumes.
-        power.set_high();
-        Timer::after(SENSOR_SETTLE).await;
-        cols.set_active();
+        // Resumed: bring the matrix back up; the awake window rebuilds the
+        // ADC sequence before scanning resumes.
+        wake_matrix(&mut adc_part.rows, cols, power).await;
     }
 }
 
@@ -353,13 +340,10 @@ async fn any_key_pressed<const ROW: usize, const COL: usize>(
 ) -> bool {
     let mut pressed = false;
     scan_pass(cols, seq, buf, COL, |col, readings| {
-        if let Some(valid) = VALID_ROWS_BY_COL.get(col)
-            && let Some(key_col) = keys.get(col)
-        {
-            for &row_u8 in valid.valid_rows() {
-                let row = usize::from(row_u8);
-                let raw = readings.get(row).copied().unwrap_or(0).clamp(VALID_RAW_MIN, VALID_RAW_MAX);
-                if let Some(entry) = key_col.get(row)
+        if let Some(key_col) = keys.get(col) {
+            for (row_u8, raw_reading) in valid_readings(col, readings) {
+                let raw = raw_reading.clamp(VALID_RAW_MIN, VALID_RAW_MAX);
+                if let Some(entry) = key_col.get(usize::from(row_u8))
                     && let Some(travel) = entry.travel_from(raw)
                     && travel >= act_threshold
                 {
@@ -370,6 +354,36 @@ async fn any_key_pressed<const ROW: usize, const COL: usize>(
     })
     .await;
     pressed
+}
+
+/// Park the matrix for suspend: analog rows and HC164 control lines to a
+/// defined input-pull-down, hall-sensor rail cut. The ADC must already be
+/// stopped (its `ConfiguredSequence` dropped) so the row pins are free to
+/// leave analog mode.
+fn park_matrix<ADC, R, const ROW: usize>(rows: &mut R, cols: &mut Hc164Cols<'_>, power: &mut Output<'_>)
+where
+    ADC: Instance<Regs = adc::Adc> + BasicInstance,
+    R: RowChannels<ADC, ROW>,
+{
+    rows.set_low_power();
+    cols.set_low_power();
+    power.set_low();
+}
+
+/// Wake the matrix from suspend: restore the hall-sensor rail, wait out the
+/// [`SENSOR_SETTLE`] window, and return the HC164 control lines and analog
+/// rows to their active configurations. The caller rebuilds the ADC sequence
+/// afterwards; [`RowChannels::set_active`] only clears the suspend
+/// pull-down, while the sequence build re-asserts analog mode.
+async fn wake_matrix<ADC, R, const ROW: usize>(rows: &mut R, cols: &mut Hc164Cols<'_>, power: &mut Output<'_>)
+where
+    ADC: Instance<Regs = adc::Adc> + BasicInstance,
+    R: RowChannels<ADC, ROW>,
+{
+    power.set_high();
+    Timer::after(SENSOR_SETTLE).await;
+    cols.set_active();
+    rows.set_active();
 }
 
 /// Run one sequential (non-pipelined) publishing pass, used once a suspend
