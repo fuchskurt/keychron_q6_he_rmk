@@ -7,6 +7,7 @@
 //! auto-calibration that runs during normal scanning lives in
 //! [`KeyEntry`] and is driven by [`scan`].
 
+use super::scan_pass;
 use crate::{
     backlight::processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
     eeprom::Ft24c64,
@@ -34,7 +35,6 @@ use crate::{
 use core::hint::{likely, unlikely};
 use embassy_stm32::{adc::ConfiguredSequence, crc::Crc, i2c::mode::MasterMode, pac::adc};
 use embassy_time::{Duration, Instant};
-use rmk::embassy_futures::yield_now;
 
 /// Recompute [`KeyEntry::calib_used`] and the hot-path calibration fields
 /// for every key from the freshly measured zero-travel readings in
@@ -358,34 +358,6 @@ pub(super) async fn settle_min_raw<const ROW: usize, const COL: usize>(
             }
         })
         .await;
-    }
-}
-
-/// Run one full matrix pass: for each of the `col_count` columns, yield to
-/// the executor (doubling as the column settle delay), read all row ADCs
-/// into `buf`, advance the HC164 walking-one, and hand the readings to
-/// `on_col` together with the column index.
-///
-/// Shared by every calibration pass loop so the column-sequencing protocol
-/// stays in one place and cannot drift between the zero-travel, press-phase,
-/// and settle passes. The hot-path scan loop in `scan` intentionally does
-/// not use this helper; it pipelines processing into the DMA window instead
-/// of running it after the read.
-async fn scan_pass<F, const ROW: usize>(
-    cols: &mut Hc164Cols<'_>,
-    seq: &mut ConfiguredSequence<'_, adc::Adc>,
-    buf: &mut [u16; ROW],
-    col_count: usize,
-    mut on_col: F,
-) where
-    F: FnMut(usize, &[u16; ROW]),
-{
-    cols.reset();
-    for col in 0..col_count {
-        yield_now().await;
-        seq.read(buf).await;
-        cols.advance();
-        on_col(col, buf);
     }
 }
 

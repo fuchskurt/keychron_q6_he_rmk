@@ -250,8 +250,9 @@ async fn main(spawner: Spawner) {
     // matrix scanner, which keeps it high during calibration and active
     // scanning and cuts it between passes while the USB bus is suspended.
     let matrix_power = Output::new(peripheral.PC13, Level::High, Speed::Low);
-    // PC5: hardware any-key wake line, pulled down so it idles low; the matrix
-    // parks on its rising edge during USB suspend.
+    // PC5: hardware any-key wake line, pulled up so it idles high; a keypress
+    // pulls it low, and the matrix parks on that falling edge during USB
+    // suspend.
     let wake = ExtiInput::new(peripheral.PC5, peripheral.EXTI5, Pull::Up, Irqs);
 
     // HC164 columns

@@ -110,7 +110,10 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(
     out: &mut [[KeyEntry; ROW]; COL],
     crc: &mut Crc<'_>,
 ) -> bool {
-    if buf.len() < CALIB_BUF_LEN {
+    // Length check against the generic dimensions (matching `crc_end` below)
+    // rather than the crate-level CALIB_BUF_LEN, so the validation stays
+    // self-consistent for any ROW/COL instantiation.
+    if buf.len() < total_len(ROW, COL) {
         return false;
     }
     // Validate magic number.

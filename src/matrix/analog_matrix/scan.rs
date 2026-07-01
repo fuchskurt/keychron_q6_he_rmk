@@ -15,6 +15,7 @@ use crate::{
         analog_matrix::{
             AdcPart,
             RowChannels,
+            scan_pass,
             types::{AdcSampleTime, HallCfg, KeyEntry, RtTuning, VALID_RAW_MAX, VALID_RAW_MIN, coarse_ms_now},
         },
         hc164_cols::Hc164Cols,
@@ -86,9 +87,12 @@ async fn process_column<const ROW: usize, const COL: usize>(
     if let Some(valid) = VALID_ROWS_BY_COL.get(col)
         && let Some(key_col) = keys.get_mut(col)
     {
-        // One timestamp per column is plenty for the auto-calibrator's
-        // ~1 s release-time bound; the whole column processes in microseconds.
-        let now = coarse_ms_now();
+        // Timestamp for the auto-calibrator's ~1 s release-time bound,
+        // computed lazily on the first reading that passes the noise gate:
+        // in the steady idle state every reading is gated, so the scan loop
+        // pays for no timer reads at all. One value per column is plenty;
+        // the whole column processes in microseconds.
+        let mut now: Option<u32> = None;
         for &row_u8 in valid.valid_rows() {
             let row = usize::from(row_u8);
 
@@ -110,7 +114,7 @@ async fn process_column<const ROW: usize, const COL: usize>(
 
             // Update the auto-calibrator with this reading before the
             // travel computation so any refined calibration is used immediately.
-            entry.auto_calib_step(raw, now);
+            entry.auto_calib_step(raw, *now.get_or_insert_with(coarse_ms_now));
 
             let Some(new_travel) = entry.travel_from(raw) else { continue };
 
@@ -146,16 +150,22 @@ async fn process_column<const ROW: usize, const COL: usize>(
 /// pre-suspend readings.
 ///
 /// Suspend is detected *cooperatively* — by polling `UsbReceiver::try_get`
-/// at the per-column yield point — rather than by letting the supervisor drop
-/// this future mid-read. That matters because [`ConfiguredSequence::read`] is
-/// **not** cancellation-safe with respect to the ADC: it calls `start()` and
-/// then awaits the DMA transfer, and `ConfiguredSequence`'s own `Drop` (which
-/// issues the ADC `stop()`) never runs while the sequence is kept alive across
-/// suspend. Dropping the read future mid-transfer aborts only the DMA, leaving
-/// the ADC converting the rest of the scan with nothing draining it; a stale
-/// sample stays latched in the data register and shifts every subsequent
-/// fixed-length read by one row on resume. Always completing the in-flight
-/// read before returning keeps the data register drained and the rows aligned.
+/// once per matrix pass — rather than by letting the supervisor drop this
+/// future mid-read. Cooperative detection matters because
+/// [`ConfiguredSequence::read`] is **not** cancellation-safe with respect to
+/// the ADC: it calls `start()` and then awaits the DMA transfer, and
+/// `ConfiguredSequence`'s own `Drop` (which issues the ADC `stop()`) never runs
+/// while the sequence is kept alive across suspend. Dropping the read future
+/// mid-transfer aborts only the DMA, leaving the ADC converting the rest of the
+/// scan with nothing draining it; a stale sample stays latched in the data
+/// register and shifts every subsequent fixed-length read by one row on resume.
+/// Always completing the in-flight read before returning keeps the data
+/// register drained and the rows aligned.
+///
+/// The poll runs once per pass instead of once per column: that keeps the
+/// `Watch`'s critical-section lock off the per-column budget and delays
+/// suspend detection by at most one pass (~300 µs), which is noise against
+/// the multi-millisecond USB suspend timeline.
 ///
 /// Double-buffered: the first poll of [`ConfiguredSequence::read`] inside
 /// [`join`] arms the DMA transfer and starts the ADC sequence, then the
@@ -175,14 +185,14 @@ async fn active_scan<const ROW: usize, const COL: usize>(
     let mut prev = [0_u16; ROW];
     let mut prev_col: Option<usize> = None;
     loop {
+        // Stop between completed passes (never mid-transfer) once the host
+        // suspends, so the ADC sequence always finishes and the data
+        // register is left drained and row-aligned for the next resume.
+        if usb.try_get() == Some(false) {
+            return;
+        }
         cols.reset();
         for col in 0..COL {
-            // Stop between completed reads (never mid-transfer) once the host
-            // suspends, so the ADC sequence always finishes and the data
-            // register is left drained and row-aligned for the next resume.
-            if usb.try_get() == Some(false) {
-                return;
-            }
             // Column settle delay; also the executor yield point.
             yield_now().await;
             join(seq.read(buf), async {
@@ -201,7 +211,6 @@ async fn active_scan<const ROW: usize, const COL: usize>(
 /// Confirm a real, sustained press: two absolute-travel checks
 /// [`SUSPEND_CONFIRM_DELAY`] apart must both see a pressed key, so a sensor
 /// settling artifact after the rail powers up cannot wake the host.
-#[optimize(speed)]
 async fn confirmed_press<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
     keys: &[[KeyEntry; ROW]; COL],
@@ -321,18 +330,12 @@ where
 
 /// Read every column once without touching key state, to flush the ADC and
 /// sensor settling transient after the rail is re-powered.
-#[optimize(speed)]
 async fn read_pass<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
     seq: &mut ConfiguredSequence<'_, adc::Adc>,
     buf: &mut [u16; ROW],
 ) {
-    cols.reset();
-    for _ in 0..COL {
-        yield_now().await;
-        seq.read(buf).await;
-        cols.advance();
-    }
+    scan_pass(cols, seq, buf, COL, |_col, _readings| {}).await;
 }
 
 /// Test whether any calibrated key is currently pressed past the actuation
@@ -341,7 +344,6 @@ async fn read_pass<const ROW: usize, const COL: usize>(
 /// Reads the whole matrix once without mutating key state, so it is safe to
 /// call repeatedly for confirmation and leaves the edge-triggered
 /// [`process_column`] machine free to publish the real transition afterwards.
-#[optimize(speed)]
 async fn any_key_pressed<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
     keys: &[[KeyEntry; ROW]; COL],
@@ -350,17 +352,13 @@ async fn any_key_pressed<const ROW: usize, const COL: usize>(
     act_threshold: u8,
 ) -> bool {
     let mut pressed = false;
-    cols.reset();
-    for col in 0..COL {
-        yield_now().await;
-        seq.read(buf).await;
-        cols.advance();
+    scan_pass(cols, seq, buf, COL, |col, readings| {
         if let Some(valid) = VALID_ROWS_BY_COL.get(col)
             && let Some(key_col) = keys.get(col)
         {
             for &row_u8 in valid.valid_rows() {
                 let row = usize::from(row_u8);
-                let raw = buf.get(row).copied().unwrap_or(0).clamp(VALID_RAW_MIN, VALID_RAW_MAX);
+                let raw = readings.get(row).copied().unwrap_or(0).clamp(VALID_RAW_MIN, VALID_RAW_MAX);
                 if let Some(entry) = key_col.get(row)
                     && let Some(travel) = entry.travel_from(raw)
                     && travel >= act_threshold
@@ -369,13 +367,17 @@ async fn any_key_pressed<const ROW: usize, const COL: usize>(
                 }
             }
         }
-    }
+    })
+    .await;
     pressed
 }
 
 /// Run one sequential (non-pipelined) publishing pass, used once a suspend
 /// wake has been confirmed so the held key's press reaches RMK.
-#[optimize(speed)]
+///
+/// Follows the same column-sequencing protocol as `scan_pass` but inlines it,
+/// because publishing must `await` per column and the helper's synchronous
+/// `FnMut` callback cannot express that.
 async fn eval_pass<const ROW: usize, const COL: usize>(
     cols: &mut Hc164Cols<'_>,
     keys: &mut [[KeyEntry; ROW]; COL],
