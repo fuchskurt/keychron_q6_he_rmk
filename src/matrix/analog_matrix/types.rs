@@ -357,7 +357,7 @@ impl KeyEntry {
         self.inv_scale = FULL_TRAVEL_SCALED.saturating_add(delta.saturating_sub(1)).checked_div(delta).unwrap_or(0);
         self.lut_zero = zero_lut;
         self.calib_zero = zero;
-        self.calib_used = zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE;
+        self.calib_used = zero_plausible(zero);
     }
 
     /// Recompute calibration from a freshly measured `zero`-travel reading
@@ -580,6 +580,26 @@ pub const fn cycle_weight(range: u16) -> u8 {
     }
 }
 
+/// Derive the persistent full-travel calibration ([`KeyEntry::entry_full`])
+/// from a measured `zero`-travel reading and the minimum ADC observed during
+/// the first-boot full-travel window.
+///
+/// A key that was genuinely pressed produces at least
+/// [`MIN_USEFUL_FULL_RANGE`] of range and goes through [`full_from_min`].
+/// A key that was never pressed during the window falls back to the
+/// synthetic `zero - DEFAULT_FULL_RANGE` floor (clamped to
+/// [`VALID_RAW_MIN`]) so the keyboard stays usable with a sensible default
+/// range that the auto-calibrator refines as the key is used.
+#[must_use]
+#[inline]
+pub const fn entry_full_from(zero: u16, observed_min: u16) -> u16 {
+    if zero.saturating_sub(observed_min) >= MIN_USEFUL_FULL_RANGE {
+        full_from_min(zero, observed_min)
+    } else {
+        zero.saturating_sub(DEFAULT_FULL_RANGE).max(VALID_RAW_MIN)
+    }
+}
+
 /// Compute a calibrated full-travel ADC value from a measured minimum and
 /// zero-travel reading.
 ///
@@ -599,3 +619,15 @@ pub const fn cycle_weight(range: u16) -> u8 {
 pub const fn full_from_min(zero: u16, observed_min: u16) -> u16 {
     observed_min.saturating_add(BOTTOM_JITTER).min(zero.saturating_sub(MIN_USEFUL_FULL_RANGE)).max(VALID_RAW_MIN)
 }
+
+/// Whether a resting (zero-travel) ADC reading is close enough to
+/// [`REF_ZERO_TRAVEL`] to indicate a working hall sensor at that position.
+///
+/// The single definition of "plausible sensor" shared by the calibration
+/// arithmetic ([`KeyEntry::apply_calib`] derives `calib_used` from it, which
+/// gates the entire travel hot path) and the first-boot progress accounting
+/// (`count_real_sensors`), so the two can never disagree on which positions
+/// count as real keys.
+#[must_use]
+#[inline]
+pub const fn zero_plausible(zero: u16) -> bool { zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE }

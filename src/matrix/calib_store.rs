@@ -79,18 +79,18 @@ pub fn serialize<const ROW: usize, const COL: usize>(
     if let Some(version_byte) = buf.get_mut(size_of::<u32>()) {
         *version_byte = VERSION;
     }
-    let mut pos = HEADER_LEN;
-    for key_col in keys {
-        for key in key_col {
-            let end = pos.saturating_add(ENTRY_LEN);
-            if let Some(dst) = buf.get_mut(pos..end) {
-                dst.copy_from_slice(&key.entry_full.to_le_bytes());
-            }
-            pos = end;
+    // Write the entries as fixed-size chunks: `as_chunks_mut` needs no
+    // per-entry offset bookkeeping, and the zip bounds both sides at once.
+    // Keys are flattened in column-major order, matching the in-memory
+    // layout, so no transposition is needed.
+    let crc_start = total_len(ROW, COL).saturating_sub(CRC_LEN);
+    if let Some(entry_bytes) = buf.get_mut(HEADER_LEN..crc_start) {
+        let (chunks, _) = entry_bytes.as_chunks_mut::<ENTRY_LEN>();
+        for (dst, key) in chunks.iter_mut().zip(keys.as_flattened()) {
+            *dst = key.entry_full.to_le_bytes();
         }
     }
     // Compute CRC over the header + all entry bytes.
-    let crc_start = pos;
     let crc_end = crc_start.saturating_add(CRC_LEN);
     let checksum = buf.get(..crc_start).map_or(0, |data| crc32_of(crc, data));
     if let Some(dst) = buf.get_mut(crc_start..crc_end) {
@@ -110,7 +110,10 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(
     out: &mut [[KeyEntry; ROW]; COL],
     crc: &mut Crc<'_>,
 ) -> bool {
-    if buf.len() < CALIB_BUF_LEN {
+    // Length check against the generic dimensions (matching `crc_end` below)
+    // rather than the crate-level CALIB_BUF_LEN, so the validation stays
+    // self-consistent for any ROW/COL instantiation.
+    if buf.len() < total_len(ROW, COL) {
         return false;
     }
     // Validate magic number.
@@ -134,15 +137,16 @@ pub fn try_deserialize<const ROW: usize, const COL: usize>(
     if computed_crc != stored_crc {
         return false;
     }
-    // Deserialize entries directly into each key's persistent calibration slot.
-    let mut pos = HEADER_LEN;
-    for key_col in out.iter_mut() {
-        for key in key_col.iter_mut() {
-            let end = pos.saturating_add(ENTRY_LEN);
-            let Some(fb) = read_array::<2>(buf, pos, end) else { return false };
-            key.entry_full = u16::from_le_bytes(fb);
-            pos = end;
-        }
+    // Deserialize entries directly into each key's persistent calibration
+    // slot. The entry region is validated in full before the first write, so
+    // a validation failure can never leave `out` partially updated.
+    let Some(entry_bytes) = buf.get(HEADER_LEN..data_end) else { return false };
+    let (chunks, remainder) = entry_bytes.as_chunks::<ENTRY_LEN>();
+    if !remainder.is_empty() || chunks.len() != ROW.saturating_mul(COL) {
+        return false;
+    }
+    for (key, &chunk) in out.as_flattened_mut().iter_mut().zip(chunks.iter()) {
+        key.entry_full = u16::from_le_bytes(chunk);
     }
     true
 }

@@ -125,6 +125,23 @@ impl ColValidKeys {
     pub const fn valid_rows(&self) -> &[u8] { if let Some(rows) = self.rows.get(..self.count) { rows } else { &[] } }
 }
 
+/// Iterate the populated sensor positions of column `col`, yielding
+/// `(row, raw)` pairs of the matrix row index and that row's reading in
+/// `readings`.
+///
+/// Wraps the [`VALID_ROWS_BY_COL`] lookup and the per-row buffer access so
+/// the scan and calibration passes share one definition of "every real key
+/// in this column with its ADC value". Columns without sensors (or an
+/// out-of-range `col`) yield nothing. Readings are returned unclamped;
+/// callers that feed the travel pipeline clamp to the LUT domain
+/// themselves, while the calibration passes want the raw value.
+#[inline]
+#[optimize(speed)]
+pub fn valid_readings<const ROW: usize>(col: usize, readings: &[u16; ROW]) -> impl Iterator<Item = (u8, u16)> {
+    let rows: &[u8] = if let Some(valid) = VALID_ROWS_BY_COL.get(col) { valid.valid_rows() } else { &[] };
+    rows.iter().filter_map(move |&row_u8| readings.get(usize::from(row_u8)).copied().map(move |raw| (row_u8, raw)))
+}
+
 /// Return the default encoder action map for each layer.
 pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAYER] { [ENCODER_VOLUME, ENCODER_VOLUME] }
 

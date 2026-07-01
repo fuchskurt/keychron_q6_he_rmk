@@ -1,6 +1,6 @@
-use crate::matrix::INPUT_DEBOUNCE;
+use crate::matrix::{INPUT_DEBOUNCE, debounced_level};
 use embassy_stm32::{exti::ExtiInput, mode::Async};
-use embassy_time::{Duration, Timer};
+use embassy_time::Duration;
 use rmk::{event::KeyboardEvent, macros::input_device};
 
 /// Matrix coordinates for a key position.
@@ -86,10 +86,7 @@ impl<'peripherals> LayerToggle<'peripherals> {
         }
 
         loop {
-            self.pin.wait_for_any_edge().await;
-            Timer::after(self.debounce).await;
-            let level = self.pin.is_high();
-
+            let level = debounced_level(&mut self.pin, self.debounce).await;
             if let Some(evt) = self.maybe_emit_for_level(level) {
                 return evt;
             }

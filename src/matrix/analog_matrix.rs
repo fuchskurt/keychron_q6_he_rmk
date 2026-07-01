@@ -33,8 +33,38 @@ use embassy_stm32::{
     mode::Async,
     pac::adc,
 };
-use rmk::core_traits::Runnable;
+use rmk::{core_traits::Runnable, embassy_futures::yield_now};
 pub use types::HallCfg;
+
+/// Run one full matrix pass: for each of the `col_count` columns, yield to
+/// the executor (doubling as the column settle delay), read all row ADCs
+/// into `buf`, advance the HC164 walking-one, and hand the readings to
+/// `on_col` together with the column index.
+///
+/// Shared by every calibration pass and the sequential suspend/resume passes
+/// in `scan`, so the column-sequencing protocol stays in one place and cannot
+/// drift between them. Two passes intentionally do not use this helper: the
+/// full-rate scan loop (`scan::active_scan`) pipelines processing into the
+/// DMA window instead of running it after the read, and the post-wake
+/// publishing pass (`scan::eval_pass`) must `await` per column, which a
+/// synchronous `FnMut` callback cannot express.
+async fn scan_pass<F, const ROW: usize>(
+    cols: &mut Hc164Cols<'_>,
+    seq: &mut ConfiguredSequence<'_, adc::Adc>,
+    buf: &mut [u16; ROW],
+    col_count: usize,
+    mut on_col: F,
+) where
+    F: FnMut(usize, &[u16; ROW]),
+{
+    cols.reset();
+    for col in 0..col_count {
+        yield_now().await;
+        seq.read(buf).await;
+        cols.advance();
+        on_col(col, buf);
+    }
+}
 
 /// Supplies the per-row ADC channels for a single sequence read.
 ///
@@ -43,14 +73,14 @@ pub use types::HallCfg;
 /// *owned* pin. The previously available owned, type-erased channel
 /// (`AnyAdcChannel`, which itself implemented `AdcChannel`) was removed
 /// upstream, so a `BorrowedAdcChannel` can no longer be stored in a struct and
-/// re-borrowed with a shorter lifetime — it borrows its pin for as long as it
+/// re-borrowed with a shorter lifetime; it borrows its pin for as long as it
 /// lives and has no public way to shorten that borrow.
 ///
 /// Implementors therefore own the concrete row pins (which do implement
 /// `AdcChannel`) and re-borrow them fresh on every call. This keeps
 /// [`AnalogHallMatrix`] generic over the board's pin set while matching the
-/// borrow-at-the-call-site contract the new API requires — no `unsafe` or
-/// lifetime transmutation needed.
+/// borrow-at-the-call-site contract the new API requires, with no `unsafe`
+/// or lifetime transmutation needed.
 pub trait RowChannels<ADC, const ROW: usize>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,

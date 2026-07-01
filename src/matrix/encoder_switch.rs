@@ -1,6 +1,6 @@
-use crate::matrix::INPUT_DEBOUNCE;
+use crate::matrix::{INPUT_DEBOUNCE, debounced_level};
 use embassy_stm32::{exti::ExtiInput, mode::Async};
-use embassy_time::{Duration, Timer};
+use embassy_time::Duration;
 use rmk::{event::KeyboardEvent, macros::input_device};
 
 /// Debounced encoder switch exposed as an input device.
@@ -28,10 +28,8 @@ impl<'peripherals> EncoderSwitch<'peripherals> {
     /// Wait for the next debounced encoder switch event.
     async fn read_keyboard_event(&mut self) -> KeyboardEvent {
         loop {
-            self.pin.wait_for_any_edge().await;
-            Timer::after(self.debounce).await;
-
-            let pressed = self.pin.is_low();
+            // The switch is active-low: pressed while the pin reads low.
+            let pressed = !debounced_level(&mut self.pin, self.debounce).await;
             if pressed != self.last_pressed {
                 self.last_pressed = pressed;
                 return KeyboardEvent::key(self.row, self.col, pressed);

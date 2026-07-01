@@ -34,11 +34,11 @@ impl<'peripherals> Hc164Cols<'peripherals> {
 
     /// Clear the register so no column is selected (all outputs low).
     ///
-    /// Used while scanning is idle (during USB suspend) so no sensor column
-    /// is left powered between trickle passes. Follow with
-    /// [`Hc164Cols::reset`] before the next pass.
+    /// Used by [`Hc164Cols::reset`] at the start of every pass and by
+    /// [`Hc164Cols::set_low_power`] when parking the register for USB
+    /// suspend, so no sensor column is left driven while scanning is idle.
     #[inline]
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.mr.set_low();
         self.mr.set_high();
     }

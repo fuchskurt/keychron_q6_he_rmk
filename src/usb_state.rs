@@ -64,16 +64,16 @@ impl Runnable for UsbStateTask {
     }
 }
 
-/// Wait until the USB activity edge equals `target`.
+/// Wait until the host is configured and awake.
 ///
-/// Resolves immediately if the retained value already matches, otherwise on
-/// the first matching transition.
-pub async fn wait_active(rx: &mut UsbReceiver, target: bool) {
-    if rx.try_get() == Some(target) {
+/// Resolves immediately if the retained value is already active, otherwise on
+/// the first activating transition.
+pub async fn wait_active(rx: &mut UsbReceiver) {
+    if rx.try_get() == Some(true) {
         return;
     }
     loop {
-        if rx.changed().await == target {
+        if rx.changed().await {
             return;
         }
     }

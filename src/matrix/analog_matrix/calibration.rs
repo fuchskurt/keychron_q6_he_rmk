@@ -7,25 +7,23 @@
 //! auto-calibration that runs during normal scanning lives in
 //! [`KeyEntry`] and is driven by [`scan`].
 
+use super::scan_pass;
 use crate::{
     backlight::processor::{BACKLIGHT_CH, BacklightCmd, CalibPhase},
     eeprom::Ft24c64,
-    layout::{MATRIX_TO_LED, VALID_ROWS_BY_COL},
+    layout::{MATRIX_TO_LED, VALID_ROWS_BY_COL, valid_readings},
     matrix::{
         analog_matrix::types::{
             CALIB_HOLD_DURATION_MS,
             CALIB_PRESS_THRESHOLD,
             CALIB_SETTLE_AFTER_ALL_DONE,
-            CALIB_ZERO_TOLERANCE,
-            DEFAULT_FULL_RANGE,
             HallCfg,
             KeyCalibState,
             KeyEntry,
-            MIN_USEFUL_FULL_RANGE,
             REF_ZERO_TRAVEL,
-            VALID_RAW_MIN,
             ZERO_TRAVEL_DEAD_ZONE,
-            full_from_min,
+            entry_full_from,
+            zero_plausible,
         },
         calib_store::{self, CALIB_BUF_LEN, EEPROM_BASE_ADDR, try_deserialize},
         hc164_cols::Hc164Cols,
@@ -34,7 +32,6 @@ use crate::{
 use core::hint::{likely, unlikely};
 use embassy_stm32::{adc::ConfiguredSequence, crc::Crc, i2c::mode::MasterMode, pac::adc};
 use embassy_time::{Duration, Instant};
-use rmk::embassy_futures::yield_now;
 
 /// Recompute [`KeyEntry::calib_used`] and the hot-path calibration fields
 /// for every key from the freshly measured zero-travel readings in
@@ -99,9 +96,10 @@ pub(super) async fn calibrate_zero_raw<const ROW: usize, const COL: usize>(
 /// plausible zero-travel reading.
 ///
 /// [`VALID_ROWS_BY_COL`] already filters to sensor-present positions; the
-/// additional [`CALIB_ZERO_TOLERANCE`] check discards any sensor whose
-/// resting ADC is too far from [`REF_ZERO_TRAVEL`] to produce reliable
-/// calibration data. The result drives both the Phase A early-exit
+/// additional [`zero_plausible`] check discards any sensor whose resting
+/// ADC is too far from [`REF_ZERO_TRAVEL`] to produce reliable calibration
+/// data, using the same predicate that later derives
+/// [`KeyEntry::calib_used`]. The result drives both the Phase A early-exit
 /// condition and the displayed progress percentage so they agree on the
 /// denominator.
 pub(super) fn count_real_sensors<const ROW: usize, const COL: usize>(zero_raw: &[[u16; COL]; ROW]) -> usize {
@@ -112,7 +110,7 @@ pub(super) fn count_real_sensors<const ROW: usize, const COL: usize>(zero_raw: &
                 .get(usize::from(row_u8))
                 .and_then(|row_slice| row_slice.get(col_idx))
                 .copied()
-                .is_some_and(|zero| zero.abs_diff(REF_ZERO_TRAVEL) <= CALIB_ZERO_TOLERANCE);
+                .is_some_and(zero_plausible);
             if in_range {
                 total = total.saturating_add(1);
             }
@@ -156,18 +154,13 @@ pub(super) async fn run_first_boot_calib<IM, const ROW: usize, const COL: usize>
     let full_raw = sample_full_raw(cols, seq, buf, cfg, &zero_raw).await;
 
     // Compute entry_full for every key from the measured zero and the
-    // minimum ADC seen during the full-travel press window. Keys that
-    // never crossed the press threshold fall back to the synthetic
-    // `zero - DEFAULT_FULL_RANGE` floor so the keyboard stays usable.
+    // minimum ADC seen during the full-travel press window; see
+    // `entry_full_from` for the never-pressed fallback policy.
     for (col, key_col) in keys.iter_mut().enumerate() {
         for (row, key) in key_col.iter_mut().enumerate() {
             let zero = zero_raw.get(row).and_then(|row_slice| row_slice.get(col)).copied().unwrap_or(REF_ZERO_TRAVEL);
             let seen_min = full_raw.get(row).and_then(|row_slice| row_slice.get(col)).copied().unwrap_or(u16::MAX);
-            key.entry_full = if zero.saturating_sub(seen_min) >= MIN_USEFUL_FULL_RANGE {
-                full_from_min(zero, seen_min)
-            } else {
-                zero.saturating_sub(DEFAULT_FULL_RANGE).max(VALID_RAW_MIN)
-            };
+            key.entry_full = entry_full_from(zero, seen_min);
         }
     }
 
@@ -217,14 +210,12 @@ pub(super) async fn run_calib_press_phase<const ROW: usize, const COL: usize>(
 
     while Instant::now() < deadline && calibrated_count < total_keys {
         scan_pass(cols, seq, buf, COL, |col, readings| {
-            // Only valid sensor positions are stored in VALID_ROWS_BY_COL;
-            // columns with no sensors produce an empty list and are skipped
-            // entirely without touching the calibration state machine,
-            // matching the hot-path iteration pattern in `scan`.
-            let Some(valid) = VALID_ROWS_BY_COL.get(col) else { return };
-            for &row_u8 in valid.valid_rows() {
+            // valid_readings yields only positions with a physical sensor;
+            // columns with no sensors iterate zero times and never touch the
+            // calibration state machine, matching the hot-path pattern in
+            // `scan`.
+            for (row_u8, raw) in valid_readings(col, readings) {
                 let key_row = usize::from(row_u8);
-                let raw = readings.get(key_row).copied().unwrap_or(0);
 
                 // Always track the deepest reading seen, regardless of
                 // whether the key has been accepted yet.
@@ -350,42 +341,11 @@ pub(super) async fn settle_min_raw<const ROW: usize, const COL: usize>(
     let deadline = Instant::now().saturating_add(duration);
     while Instant::now() < deadline {
         scan_pass(cols, seq, buf, COL, |col, readings| {
-            let Some(valid) = VALID_ROWS_BY_COL.get(col) else { return };
-            for &row_u8 in valid.valid_rows() {
-                let row = usize::from(row_u8);
-                let raw = readings.get(row).copied().unwrap_or(0);
-                min_into(min_raw, row, col, raw);
+            for (row_u8, raw) in valid_readings(col, readings) {
+                min_into(min_raw, usize::from(row_u8), col, raw);
             }
         })
         .await;
-    }
-}
-
-/// Run one full matrix pass: for each of the `col_count` columns, yield to
-/// the executor (doubling as the column settle delay), read all row ADCs
-/// into `buf`, advance the HC164 walking-one, and hand the readings to
-/// `on_col` together with the column index.
-///
-/// Shared by every calibration pass loop so the column-sequencing protocol
-/// stays in one place and cannot drift between the zero-travel, press-phase,
-/// and settle passes. The hot-path scan loop in `scan` intentionally does
-/// not use this helper; it pipelines processing into the DMA window instead
-/// of running it after the read.
-async fn scan_pass<F, const ROW: usize>(
-    cols: &mut Hc164Cols<'_>,
-    seq: &mut ConfiguredSequence<'_, adc::Adc>,
-    buf: &mut [u16; ROW],
-    col_count: usize,
-    mut on_col: F,
-) where
-    F: FnMut(usize, &[u16; ROW]),
-{
-    cols.reset();
-    for col in 0..col_count {
-        yield_now().await;
-        seq.read(buf).await;
-        cols.advance();
-        on_col(col, buf);
     }
 }
 
@@ -394,7 +354,8 @@ async fn scan_pass<F, const ROW: usize>(
 ///
 /// Out-of-bounds positions are silently skipped; `min_raw` is dimensioned to
 /// match the matrix and the calling indices come from
-/// [`crate::layout::VALID_ROWS_BY_COL`] which itself is bounded by `ROW`/`COL`,
+/// [`crate::layout::valid_readings`] (backed by
+/// [`crate::layout::VALID_ROWS_BY_COL`], which is bounded by `ROW`/`COL`),
 /// so this only fires on a structural bug.
 #[inline]
 fn min_into<const ROW: usize, const COL: usize>(min_raw: &mut [[u16; COL]; ROW], key_row: usize, col: usize, raw: u16) {
