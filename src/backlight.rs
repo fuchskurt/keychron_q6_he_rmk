@@ -7,4 +7,4 @@ pub mod processor;
 /// Display state model, colors, and frame painting.
 mod render;
 /// Backlight task: command handling, thermal and power policy.
-pub mod runner;
+pub mod task;

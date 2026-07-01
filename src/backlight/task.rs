@@ -4,7 +4,7 @@
 //! The display state model and the frame painting functions live in
 //! `render`; this module reacts to indicator commands, guided-calibration
 //! phase transitions, thermal polling, and USB power edges, and calls into
-//! `render` with a consistent [`BacklightState`].
+//! `render` with a consistent `BacklightState`.
 
 use crate::{
     backlight::{
