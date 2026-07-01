@@ -73,14 +73,14 @@ async fn scan_pass<F, const ROW: usize>(
 /// *owned* pin. The previously available owned, type-erased channel
 /// (`AnyAdcChannel`, which itself implemented `AdcChannel`) was removed
 /// upstream, so a `BorrowedAdcChannel` can no longer be stored in a struct and
-/// re-borrowed with a shorter lifetime — it borrows its pin for as long as it
+/// re-borrowed with a shorter lifetime; it borrows its pin for as long as it
 /// lives and has no public way to shorten that borrow.
 ///
 /// Implementors therefore own the concrete row pins (which do implement
 /// `AdcChannel`) and re-borrow them fresh on every call. This keeps
 /// [`AnalogHallMatrix`] generic over the board's pin set while matching the
-/// borrow-at-the-call-site contract the new API requires — no `unsafe` or
-/// lifetime transmutation needed.
+/// borrow-at-the-call-site contract the new API requires, with no `unsafe`
+/// or lifetime transmutation needed.
 pub trait RowChannels<ADC, const ROW: usize>
 where
     ADC: Instance<Regs = adc::Adc> + BasicInstance,

@@ -149,8 +149,8 @@ async fn process_column<const ROW: usize, const COL: usize>(
 /// starts a fresh pipeline rather than processing a column against stale,
 /// pre-suspend readings.
 ///
-/// Suspend is detected *cooperatively* — by polling `UsbReceiver::try_get`
-/// once per matrix pass — rather than by letting the supervisor drop this
+/// Suspend is detected *cooperatively*, by polling `UsbReceiver::try_get`
+/// once per matrix pass, rather than by letting the supervisor drop this
 /// future mid-read. Cooperative detection matters because
 /// [`ConfiguredSequence::read`] is **not** cancellation-safe with respect to
 /// the ADC: it calls `start()` and then awaits the DMA transfer, and
@@ -227,7 +227,7 @@ async fn confirmed_press<const ROW: usize, const COL: usize>(
 
 /// Event-driven scan supervisor: full-rate scan while the host is awake, park
 /// on the PC5 hardware key-wake interrupt while suspended. No USB-state
-/// polling and no periodic trickle scan — the CPU sits in WFI through suspend
+/// polling and no periodic trickle scan: the CPU sits in WFI through suspend
 /// and wakes only on the resume event or a key-wake edge.
 ///
 /// The ADC [`ConfiguredSequence`] is built fresh for each awake window and
@@ -266,13 +266,13 @@ where
     let mut buf = [0_u16; ROW];
 
     // Hold off scanning until the host first configures the device.
-    wait_active(usb, true).await;
+    wait_active(usb).await;
 
     loop {
         // Awake: clear any suspend pull-down, build a fresh ADC sequence (which
         // re-asserts analog mode on the rows), and full-rate scan until the
         // host suspends. `active_scan` returns on its own when it observes the
-        // suspend edge, always finishing the in-flight ADC read first — it must
+        // suspend edge, always finishing the in-flight ADC read first: it must
         // not be cancelled mid-transfer, or a stale sample left latched in the
         // ADC data register would shift every row by one on the next resume.
         adc_part.rows.set_active();
@@ -286,7 +286,7 @@ where
         cols.set_low_power();
         power.set_low();
         loop {
-            match select(wait_active(usb, true), wake.wait_for_falling_edge()).await {
+            match select(wait_active(usb), wake.wait_for_falling_edge()).await {
                 Either::First(()) => break, // host resumed on its own
                 Either::Second(()) => {
                     cold_path();
@@ -303,7 +303,7 @@ where
                     }
                     if confirmed_press(cols, keys, &mut seq, &mut buf, tuning.act_threshold).await {
                         // Publishing pass raises RMK's remote-wakeup request;
-                        // the host resumes and the outer wait_active(true)
+                        // the host resumes and the outer wait_active
                         // breaks us out. Leave the rail powered for it; `seq`
                         // drops at the end of this arm, stopping the ADC until
                         // the awake window rebuilds it.

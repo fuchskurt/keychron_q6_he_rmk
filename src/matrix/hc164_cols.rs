@@ -38,7 +38,7 @@ impl<'peripherals> Hc164Cols<'peripherals> {
     /// [`Hc164Cols::set_low_power`] when parking the register for USB
     /// suspend, so no sensor column is left driven while scanning is idle.
     #[inline]
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         self.mr.set_low();
         self.mr.set_high();
     }
